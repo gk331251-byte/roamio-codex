@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual Environments
+venv/
+.env
+.env.*
+
+# Logs
+*.log
+
+# Firebase / GCP
+- firestore-key.json
+- *.json
++ firestore-key.json
+*.p12
+*.pem
+
+# Editor + System
+.vscode/
+.idea/
+.DS_Store
+
+node_modules/
