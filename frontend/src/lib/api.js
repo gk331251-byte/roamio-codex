@@ -467,3 +467,4 @@ export async function banUser(userId, targetId) {
   if (!resp.ok) throw new Error('Failed to ban user');
   return resp.json();
 }
+
