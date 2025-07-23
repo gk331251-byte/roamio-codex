@@ -41,6 +41,7 @@ export async function completeQuest(userId, questId, data) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, questId, ...data })
+
   });
   if (!resp.ok) {
     throw new Error('Failed to save quest');
@@ -100,3 +101,4 @@ export async function trackVisit(userId, questId, placeIndex) {
   }
   return resp.json();
 }
+

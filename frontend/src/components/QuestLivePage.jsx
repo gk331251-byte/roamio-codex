@@ -4,6 +4,7 @@ import LiveQuestMap from "./LiveQuestMap";
 import { getAuth } from "firebase/auth";
 import { trackVisit, getUserQuests, completeQuest } from "../lib/api";
 
+
 export default function QuestLivePage() {
   const location = useLocation();
   const quest = location.state?.quest;
@@ -60,6 +61,7 @@ export default function QuestLivePage() {
 
   const currentStopIndex = visitedIndices.length;
   const allVisited = visitedIndices.length >= (quest?.places?.length || 0);
+
 
   useEffect(() => {
     if (!userLocation || !stops[currentStopIndex]) return;
@@ -125,6 +127,7 @@ export default function QuestLivePage() {
     } finally {
       setSaving(false);
     }
+
   };
 
   if (!quest) {
