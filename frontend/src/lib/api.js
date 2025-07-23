@@ -62,8 +62,10 @@ export async function uploadPostcard(userId, questId, imageUrl) {
   return resp.json();
 }
 
-export async function validatePremium(userId) {
-  const resp = await fetch(`${BASE_URL}/validate-premium/${userId}`);
+export async function validatePremium(userId, sessionId) {
+  const url = new URL(`${BASE_URL}/validate-premium/${userId}`);
+  if (sessionId) url.searchParams.set('session_id', sessionId);
+  const resp = await fetch(url.toString());
   if (!resp.ok) {
     throw new Error('Failed to validate premium');
   }
@@ -102,3 +104,131 @@ export async function trackVisit(userId, questId, placeIndex) {
   return resp.json();
 }
 
+
+export async function createGroupQuest(userId, questId, displayName) {
+  const resp = await fetch(`${BASE_URL}/create-group-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, displayName })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to create group');
+  }
+  return resp.json();
+}
+
+export async function joinGroup(userId, groupId, displayName) {
+  const resp = await fetch(`${BASE_URL}/join-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, groupId, displayName })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to join group');
+  }
+  return resp.json();
+}
+
+export async function trackStopVisit(groupId, userId, placeIndex) {
+  const resp = await fetch(`${BASE_URL}/track-stop-visit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupId, userId, placeIndex })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to track stop');
+  }
+  return resp.json();
+}
+
+export async function completeGroupQuest(groupId, userId) {
+  const resp = await fetch(`${BASE_URL}/complete-group-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupId, userId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to complete group quest');
+  }
+  return resp.json();
+}
+
+export async function leaveGroup(groupId, userId) {
+  const resp = await fetch(`${BASE_URL}/leave-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupId, userId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to leave group');
+  }
+  return resp.json();
+}
+
+export async function getActiveQuest(userId) {
+  const resp = await fetch(`${BASE_URL}/active-quest/${userId}`);
+  if (!resp.ok) {
+    return null;
+  }
+  return resp.json();
+}
+
+export async function getQuest(questId) {
+  const resp = await fetch(`${BASE_URL}/get-quest/${questId}`);
+  if (!resp.ok) {
+    throw new Error('Failed to fetch quest');
+  }
+  return resp.json();
+}
+
+export async function getCommunityQuests() {
+  const resp = await fetch(`${BASE_URL}/get-community-quests`);
+  if (!resp.ok) {
+    throw new Error('Failed to load community quests');
+  }
+  return resp.json();
+}
+
+export async function reportQuest(userId, questId, reason, city, mood) {
+  const resp = await fetch(`${BASE_URL}/report-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, reason, city, mood })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to report quest');
+  }
+  return resp.json();
+}
+
+export async function getQuestReports() {
+  const resp = await fetch(`${BASE_URL}/get-quest-reports`);
+  if (!resp.ok) {
+    throw new Error('Failed to load reports');
+  }
+  return resp.json();
+}
+
+export async function toggleQuestVisibility(questId, userId, visible) {
+  const resp = await fetch(`${BASE_URL}/toggle-quest-visibility`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questId, userId, visible })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to update visibility');
+  }
+  return resp.json();
+}
+
+export async function createCheckoutSession(userId, email) {
+  const resp = await fetch(`${BASE_URL}/create-checkout-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, email, baseUrl: window.location.origin })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to create checkout session');
+  }
+  return resp.json();
+}
