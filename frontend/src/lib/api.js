@@ -76,3 +76,16 @@ export async function getUserQuests(userId) {
   }
   return resp.json();
 }
+
+export async function getDirections(places) {
+  const resp = await fetch(`${BASE_URL}/get-directions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ places }),
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to fetch directions');
+  }
+  return resp.json();
+}
+

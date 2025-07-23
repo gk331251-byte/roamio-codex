@@ -52,7 +52,7 @@ const QuestHistory = () => {
     });
     const refresh = () => {
       if (currentUser) loadQuests(currentUser.uid, true);
-      
+
     };
     window.addEventListener('quest-saved', refresh);
     return () => {
