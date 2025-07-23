@@ -2,13 +2,16 @@ import React, { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
 import { getAuth } from "firebase/auth";
-import { trackVisit, getUserQuests, completeQuest } from "../lib/api";
+import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit } from "../lib/api";
+import { doc, onSnapshot } from "firebase/firestore";
+import { db } from "../firebase";
 
 
 export default function QuestLivePage() {
   const location = useLocation();
   const quest = location.state?.quest;
   const questId = location.state?.questId;
+  const groupId = location.state?.groupId || new URLSearchParams(location.search).get('groupId');
 
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
@@ -41,8 +44,24 @@ export default function QuestLivePage() {
     setStops([{ lat: userLocation.lat, lng: userLocation.lng }, ...questStops]);
   }, [quest, userLocation]);
 
-  // Load progress from backend
+  // Join group and listen for progress
   useEffect(() => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    joinGroup(user.uid, groupId).catch((e) => console.error('join failed', e));
+    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+      const data = snap.data();
+      if (data && data.progress && data.progress[user.uid]) {
+        setVisitedIndices(data.progress[user.uid]);
+      }
+    });
+    return () => unsub();
+  }, [groupId]);
+
+  // Load personal progress when not in group
+  useEffect(() => {
+    if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user || !questId) return;
@@ -57,7 +76,7 @@ export default function QuestLivePage() {
         console.error('Failed to load progress', err);
       }
     })();
-  }, [quest]);
+  }, [quest, groupId]);
 
   const currentStopIndex = visitedIndices.length;
   const allVisited = visitedIndices.length >= (quest?.places?.length || 0);
@@ -93,8 +112,13 @@ export default function QuestLivePage() {
 
     if (!questId) return;
     try {
-      const res = await trackVisit(user.uid, questId, visitedIndices.length);
-      setVisitedIndices(res.visitedIndices || []);
+      if (groupId) {
+        const res = await trackStopVisit(groupId, user.uid, visitedIndices.length);
+        setVisitedIndices(res.visitedStops || res.visitedIndices || []);
+      } else {
+        const res = await trackVisit(user.uid, questId, visitedIndices.length);
+        setVisitedIndices(res.visitedIndices || []);
+      }
     } catch (err) {
       console.error('Failed to track visit', err);
     }
@@ -173,14 +197,17 @@ export default function QuestLivePage() {
 
         <main className="px-10 py-5 flex flex-col max-w-4xl mx-auto w-full">
           <div className="flex flex-wrap justify-between gap-3 p-4">
-            <div className="flex flex-col gap-3 min-w-72">
-              <p className="text-2xl font-bold text-[#0e1b0e]">
-                {quest?.title || "Your Quest"}
-              </p>
-              <p className="text-sm text-[#4e974e]">
-                {quest?.questText || "Embark on your adventure"}
-              </p>
-            </div>
+          <div className="flex flex-col gap-3 min-w-72">
+            <p className="text-2xl font-bold text-[#0e1b0e]">
+              {quest?.title || "Your Quest"}
+            </p>
+            <p className="text-sm text-[#4e974e]">
+              {quest?.questText || "Embark on your adventure"}
+            </p>
+            {groupId && (
+              <p className="text-xs text-blue-700 break-all">Invite Link: {`${window.location.origin}/live?groupId=${groupId}`}</p>
+            )}
+          </div>
             <button
               onClick={() => window.location.assign('/home')}
               className="h-8 px-4 rounded-full bg-[#e7f3e7] text-sm text-[#0e1b0e]"
