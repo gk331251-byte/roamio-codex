@@ -45,6 +45,7 @@ const QuestDetails = () => {
   }, [questData?.locationList]);
 
 
+
   const handleComplete = async () => {
     try {
       const auth = getAuth();
