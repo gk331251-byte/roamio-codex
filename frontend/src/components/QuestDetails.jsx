@@ -1,6 +1,6 @@
 import React from "react";
 import { useParams } from "react-router-dom";
-import { motion } from "framer-motion";
+import { motion as Motion } from "framer-motion";
 import { doc, getDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { db } from "../firebase";
@@ -29,18 +29,6 @@ const QuestDetails = () => {
     fetchQuest();
   }, [city, mood]);
 
-  const getImagePrompt = (city, difficulty) => {
-    switch (difficulty) {
-      case "Easy":
-        return `Vintage postcard art of ${city}, relaxing sunny afternoon, bright pastel colors`;
-      case "Hard":
-        return `Moody, stylized postcard from ${city}, distant skyline and rugged terrain, 1930s palette`;
-      case "Extreme":
-        return `Gritty adventure postcard from ${city}, survivalist tone, wild terrain, high contrast`;
-      default:
-        return `Vintage postcard of ${city} adventure route, mix of urban and nature, travel journal style`;
-    }
-  };
 
   const handleComplete = async () => {
     try {
@@ -84,6 +72,8 @@ const QuestDetails = () => {
       await uploadPostcard(user.uid, questId, imageUrl);
 
       setCompleted(true);
+      window.dispatchEvent(new Event('quest-saved'));
+
       console.log("✅ Quest completed and postcard uploaded.");
     } catch (err) {
       console.error("🔥 Error completing quest:", err);
@@ -113,7 +103,7 @@ const QuestDetails = () => {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-10 text-center">
-      <motion.div
+      <Motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
@@ -146,7 +136,7 @@ const QuestDetails = () => {
             This quest is now in your profile.
           </div>
         )}
-      </motion.div>
+      </Motion.div>
     </div>
   );
   
