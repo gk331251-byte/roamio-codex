@@ -1168,6 +1168,7 @@ async def create_custom_quest(payload: dict = Body(...)):
     status = payload.get("status", "draft")
     public = payload.get("public", False)
 
+
     quest_doc = {
         "title": payload.get("title") or "Custom Quest",
         "moodTags": payload.get("mood_tags", []),
@@ -1184,6 +1185,7 @@ async def create_custom_quest(payload: dict = Body(...)):
         quest_doc["publishedAt"] = datetime.utcnow().isoformat()
 
     body = {"fields": _encode_fields(quest_doc)}
+
 
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
@@ -1251,4 +1253,5 @@ async def publish_custom_quest(payload: dict = Body(...)):
             resp.raise_for_status()
 
     return {"status": "published"}
+
 

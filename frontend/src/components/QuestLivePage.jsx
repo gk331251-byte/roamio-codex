@@ -16,7 +16,6 @@ export default function QuestLivePage() {
   const questId = location.state?.questId;
   const groupId = location.state?.groupId || new URLSearchParams(location.search).get('groupId');
   const initialLimit = location.state?.timeLimit ? Number(location.state.timeLimit) : 90;
-
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
   const timeLimit = initialLimit;
@@ -192,9 +191,9 @@ export default function QuestLivePage() {
     if (!userLocation || !stops.length) return;
     const remaining = stops.slice(currentStopIndex);
     if (!remaining.length) return;
-
     const fetchRoute = async () => {
       setEtaError("");
+
       const origin = `${userLocation.lat},${userLocation.lng}`;
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       const destination = `${remaining[remaining.length - 1].lat},${remaining[remaining.length - 1].lng}`;
@@ -284,6 +283,187 @@ export default function QuestLivePage() {
       setSaving(false);
     }
 
+  };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
   };
 
   const handleReport = async () => {
