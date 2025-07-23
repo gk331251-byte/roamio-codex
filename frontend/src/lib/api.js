@@ -349,3 +349,19 @@ export async function linkQuestToGroup(group_id, quest_id, upcoming = false) {
   }
   return resp.json();
 }
+export async function auditQuestCache() {
+  const resp = await fetch(`${BASE_URL}/audit-quest-cache`);
+  if (!resp.ok) throw new Error('Failed to audit');
+  return resp.json();
+}
+
+export async function rebuildQuestCache(payload) {
+  const resp = await fetch(`${BASE_URL}/rebuild-quest-cache`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error('Failed to rebuild cache');
+  return resp.json();
+}
+

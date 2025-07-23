@@ -20,6 +20,8 @@ import CommunityFeed from "./components/CommunityFeed";
 import AdminDashboard from "./components/AdminDashboard";
 import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
+import TagEditor from "./components/TagEditor";
+
 
 
 function App() {
@@ -67,6 +69,7 @@ function App() {
         <Route path="/quest-plus" element={<QuestPlusPage />} />
         <Route path="/custom" element={<CustomQuestBuilder />} />
         <Route path="/q/:questId" element={<PublicQuestPage />} />
+        <Route path="/tag-editor/:questId" element={<TagEditor />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>
