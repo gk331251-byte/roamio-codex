@@ -173,7 +173,76 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
 
 
 
+def get_user_preferred_tags(user_id: str) -> list[str]:
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        if isinstance(doc.get("preferredTags"), list):
+            return doc.get("preferredTags")
+    return []
 
+
+CHAIN_KEYWORDS = [
+    "starbucks",
+    "mcdonald",
+    "chipotle",
+    "subway",
+    "dunkin",
+    "walmart",
+    "target",
+]
+
+
+def compute_place_tags(place: dict, details: dict | None = None) -> list[str]:
+    """Assign tags using simple heuristic rules."""
+    tags = set()
+    for t in place.get("types", []):
+        tags.add(t.replace("_", "-"))
+    name = place.get("name", "").lower()
+    if any(k in name for k in ["brew", "bar", "tap"]):
+        tags.add("bar")
+    if any(k in name for k in ["occult", "witch", "dark"]):
+        tags.update(["occult", "weird"])
+    rating = place.get("rating")
+    if isinstance(rating, (int, float)) and rating >= 4.5:
+        tags.add("local-fave")
+    if details:
+        periods = details.get("result", {}).get("opening_hours", {}).get("periods", [])
+        for p in periods:
+            close = p.get("close", {})
+            time = close.get("time")
+            if time and int(time[:2]) >= 22:
+                tags.add("open-late")
+                break
+    return list(tags)
+
+
+def is_chain(name: str) -> bool:
+    lower = name.lower()
+    return any(k in lower for k in CHAIN_KEYWORDS)
+
+# === Narrative template map for tag-based generation ===
+TEMPLATE_MAP = {
+    ("weird", "occult"): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
+    ("romantic", "bookstore", "quiet"): "Take your time drifting through this soft and charming city trail of [places] in [city].",
+    ("cheap eats", "bar", "open-late"): "Feast through the night with this budget-friendly adventure across [places] in [city].",
+}
+
+def choose_template(tags: list[str]) -> str | None:
+    for key, tmpl in TEMPLATE_MAP.items():
+        if all(t in tags for t in key):
+            return tmpl
+    return None
+
+def fill_template(template: str, city: str, mood: str, places: list[dict]) -> str:
+    text = template.replace("[city]", city).replace("[mood]", mood)
+    text = text.replace("[places]", ", ".join(p["name"] for p in places))
+    if places:
+        text = text.replace("[firstStop]", places[0]["name"])
+        text = text.replace("[lastStop]", places[-1]["name"])
+    return text
 
 # Set up Secret Manager
 
@@ -181,8 +250,6 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
 
 
 # Load Google Maps API 
-
-
 
 app = FastAPI()
 
@@ -284,7 +351,6 @@ async def generate_quest(
             })
         except Exception as e:
             print("Skipping place", e)
-
     candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
     selected = []
@@ -356,7 +422,6 @@ async def generate_quest(
         }
         for leg in legs
     ]
-
     tag_set = set()
     for p in ordered:
         tag_set.update(p.get("tags", []))
@@ -1575,7 +1640,6 @@ async def link_quest_to_group(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
 
-
 @app.get("/audit-quest-cache")
 async def audit_quest_cache():
     """Return quests with overly long or malformed text."""
@@ -1740,7 +1804,6 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
     save_quest_to_firestore(hash_key, quest_obj)
     return {"quest": quest_obj, "hash": hash_key}
 
-
 @app.get("/search-quests")
 async def search_quests(query: str = Query(...), user_id: str | None = None):
     """Search public and user quests by simple keyword matching."""
@@ -1888,5 +1951,4 @@ async def remix_quest(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"quest": quest, "userQuestId": quest_id}
-
 
