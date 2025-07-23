@@ -277,6 +277,38 @@ async def complete_quest(payload: dict = Body(...)):
 
     if not all([user_id, quest_id, quest_data]):
         return {"error": "userId, questId and questData required"}
+      
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+
+    # === Save quest completion ===
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "completedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # === Update lastActive ===
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "Quest saved!"}
+
 
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
@@ -447,6 +479,7 @@ async def get_user_quests(userId: str = Query(...)):
         results.append(obj)
     return {"quests": results}
 
+
 @app.get("/get-quest/{quest_id}")
 async def get_quest(quest_id: str):
     """Fetch a quest document via Firestore REST."""
@@ -515,3 +548,32 @@ async def reroll_quest(payload: dict = Body(...)):
 async def validate_premium(user_id: str):
     """Mock premium validation."""
     return {"premium": True}
+
+
+@app.post("/get-directions")
+async def get_directions(payload: dict = Body(...)):
+    """Return mocked directions data for a list of places."""
+    places = payload.get("places", [])
+    if not isinstance(places, list) or len(places) < 2:
+        return {"error": "At least two places required"}
+
+    # Pretend to compute directions. Real API calls are disabled.
+    await asyncio.sleep(0)
+
+    return {
+        "polyline": "abc123mockedpolyline",
+        "legs": [
+            {
+                "duration": {"text": "10 mins"},
+                "start_address": places[0].get("name", "Start"),
+                "end_address": places[1].get("name", "Stop 1"),
+            },
+            {
+                "duration": {"text": "12 mins"},
+                "start_address": places[1].get("name", "Stop 1"),
+                "end_address": places[2].get("name", "Stop 2") if len(places) > 2 else places[1].get("name", "Stop 2"),
+            },
+        ],
+        "totalTime": "22 mins",
+    }
+

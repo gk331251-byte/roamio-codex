@@ -4,7 +4,7 @@ import { motion as Motion } from "framer-motion";
 import { doc, getDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { db } from "../firebase";
-import { completeQuest, uploadPostcard } from "../lib/api";
+import { completeQuest, uploadPostcard, getDirections } from "../lib/api";
 import RouteMap from "./RouteMap";
 
 
@@ -14,6 +14,7 @@ const QuestDetails = () => {
   const [saving, setSaving] = React.useState(false);
   const [completed, setCompleted] = React.useState(false);
   const [error, setError] = React.useState(null);
+  const [route, setRoute] = React.useState(null);
 
   React.useEffect(() => {
     const fetchQuest = async () => {
@@ -28,6 +29,21 @@ const QuestDetails = () => {
 
     fetchQuest();
   }, [city, mood]);
+
+  React.useEffect(() => {
+    const fetchDirections = async () => {
+      try {
+        const data = await getDirections(questData.locationList);
+        setRoute(data);
+      } catch (err) {
+        console.error("Failed to fetch directions", err);
+      }
+    };
+    if (questData?.locationList) {
+      fetchDirections();
+    }
+  }, [questData?.locationList]);
+
 
 
   const handleComplete = async () => {
@@ -82,14 +98,6 @@ const QuestDetails = () => {
     }
   };
   
-  {questData.locationList && (
-    <div className="mt-6">
-      <h2 className="text-xl font-semibold mb-2">Your Route</h2>
-      <RouteMap places={questData.locationList} />
-    </div>
-  )}
-
-  console.log("📍 questData.locationList:", questData?.locationList);
 
   if (error) {
     return <div className="p-8 text-red-600">{error}</div>;
@@ -114,7 +122,19 @@ const QuestDetails = () => {
         {questData.locationList && (
           <div className="mt-6">
             <h2 className="text-xl font-semibold mb-2">Your Route</h2>
-            <RouteMap places={questData.locationList} />
+            <RouteMap places={questData.locationList} route={route} />
+            {route && (
+              <div className="text-sm text-left mt-2">
+                <p className="font-semibold">Total time: {route.totalTime}</p>
+                <ul className="list-disc list-inside">
+                  {route.legs.map((leg, idx) => (
+                    <li key={idx}>
+                      {leg.start_address} → {leg.end_address} ({leg.duration.text})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
   
