@@ -8,6 +8,8 @@ import googlemaps
 import openai
 import certifi
 from google.cloud import firestore_v1, storage
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
 
 
 from dotenv import load_dotenv
@@ -33,6 +35,13 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 db = firestore_v1.Client(
     client_options={"api_endpoint": "https://firestore.googleapis.com"}
 )
+
+# Session for REST-based Firestore calls
+creds = service_account.Credentials.from_service_account_file(
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "firestore-key.json"),
+    scopes=["https://www.googleapis.com/auth/datastore"],
+)
+rest_session = AuthorizedSession(creds)
 
 
 def generate_hash_key(city, mood):
@@ -278,6 +287,13 @@ async def generate_postcard(request: Request):
 
 @app.get("/test-write")
 def test_write():
-    doc_ref = db.collection("test").document("sample")
-    doc_ref.set({"message": "Hello from FastAPI!"})
-    return {"status": "Document written!"}
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
+    )
+    body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
+    resp = rest_session.patch(url, json=body)
+    if resp.status_code == 200:
+        return {"status": "Document written!"}
+    print("Firestore REST error", resp.text)
+    resp.raise_for_status()
