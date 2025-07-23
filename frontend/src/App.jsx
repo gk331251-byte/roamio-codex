@@ -11,6 +11,7 @@ import QuestDetails from "./components/QuestDetails";
 import QuestHistory from "./components/QuestHistory";
 import Profile from "./components/Profile";
 import Header from "./components/Header";
+import Footer from "./components/Footer";
 import QuestRoute from "./components/QuestRoute";
 import QuestLivePage from "./components/QuestLivePage";
 import QuestPlusPage from "./components/QuestPlusPage";
@@ -24,6 +25,9 @@ import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 import TagEditor from "./components/TagEditor";
 import Explore from "./components/Explore";
+import Terms from "./pages/Terms";
+import Privacy from "./pages/Privacy";
+import CookieConsent from "react-cookie-consent";
 
 
 function App() {
@@ -75,9 +79,22 @@ function App() {
         <Route path="/custom" element={<CustomQuestBuilder />} />
         <Route path="/q/:questId" element={<PublicQuestPage />} />
         <Route path="/tag-editor/:questId" element={<TagEditor />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>
+      <Footer />
+      <CookieConsent
+        location="bottom"
+        buttonText="I Agree"
+        cookieName="roamioConsent"
+        style={{ background: "#2B373B" }}
+        buttonStyle={{ color: "#4e974e", fontSize: "13px" }}
+      >
+        Roamio uses location and cookies to personalize quests. By using this app, you agree to our{' '}
+        <a href="/privacy" style={{ color: '#4e974e', textDecoration: 'underline' }}>Privacy Policy</a>.
+      </CookieConsent>
     </>
   );
 }

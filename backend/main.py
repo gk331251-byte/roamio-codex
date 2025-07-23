@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Query, Body, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import googlemaps
 import openai
@@ -287,6 +288,14 @@ async def generate_quest(
 
     preferred = get_user_preferred_tags(user_id) if user_id else []
 
+    usage_count = 0
+    user_is_premium = False
+    if user_id:
+        usage_count = await get_daily_usage(user_id)
+        user_is_premium = await check_premium(user_id)
+        if not user_is_premium and usage_count >= 3:
+            return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
+
     try:
         geocode = gmaps.geocode(city)
         city_location = geocode[0]["geometry"]["location"]
@@ -448,6 +457,8 @@ async def generate_quest(
     }
 
     save_quest_to_firestore(hash_key, quest_obj)
+    if user_id:
+        await increment_daily_usage(user_id)
     return {"quest": quest_obj}
 
 
@@ -498,6 +509,49 @@ def _from_value(val):
 
 def _decode_document(doc: dict) -> dict:
     return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
+
+
+async def check_premium(user_id: str) -> bool:
+    """Return True if the user has premium status."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+        return fields.get("premium") is True
+    return False
+
+
+async def get_daily_usage(user_id: str) -> int:
+    """Retrieve today's quest generation count for the user."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        return int(doc.get("count", 0))
+    return 0
+
+
+async def increment_daily_usage(user_id: str) -> int:
+    """Increment and return today's quest generation count."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    count = 0
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        count = int(doc.get("count", 0))
+    count += 1
+    body = {"fields": _encode_fields({"count": count})}
+    await asyncio.to_thread(rest_session.patch, url, json=body)
+    return count
 
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
@@ -1378,58 +1432,68 @@ async def create_custom_quest(payload: dict = Body(...)):
     """Store a manually crafted quest."""
     user_id = payload.get("user_id")
     places = payload.get("places", [])
+    print(f"🛠️ Received custom quest request from {user_id}")
+    print(f"📦 Payload: {payload}")
     if not user_id or len(places) < 2:
         return {"error": "user_id and at least 2 places required"}
 
-    project_id = creds.project_id
-    quest_id = hashlib.sha1(
-        f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
-    ).hexdigest()[:12]
+    is_premium = await check_premium(user_id)
+    if not is_premium:
+        return JSONResponse(status_code=403, content={"error": "Premium required"})
 
-    status = payload.get("status", "draft")
-    public = payload.get("public", False)
+    try:
+        project_id = creds.project_id
+        quest_id = hashlib.sha1(
+            f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
+        ).hexdigest()[:12]
 
-    quest_doc = {
-        "title": payload.get("title") or "Custom Quest",
-        "moodTags": payload.get("mood_tags", []),
-        "places": places,
-        "timeLimit": payload.get("time_limit", 60),
-        "customPrompt": payload.get("custom_prompt") or "",
-        "createdBy": user_id,
-        "createdAt": datetime.utcnow().isoformat(),
-        "type": "custom",
-        "status": status,
-        "public": public,
-        "likesCount": 0,
-        "viewsCount": 0,
-        "replaysCount": 0,
-    }
-    if status == "published" or public:
-        quest_doc["publishedAt"] = datetime.utcnow().isoformat()
+        status = payload.get("status", "draft")
+        public = payload.get("public", False)
 
-    body = {"fields": _encode_fields(quest_doc)}
+        quest_doc = {
+            "title": payload.get("title") or "Custom Quest",
+            "moodTags": payload.get("mood_tags", []),
+            "places": places,
+            "timeLimit": payload.get("time_limit", 60),
+            "customPrompt": payload.get("custom_prompt") or "",
+            "createdBy": user_id,
+            "createdAt": datetime.utcnow().isoformat(),
+            "type": "custom",
+            "status": status,
+            "public": public,
+            "likesCount": 0,
+            "viewsCount": 0,
+            "replaysCount": 0,
+        }
+        if status == "published" or public:
+            quest_doc["publishedAt"] = datetime.utcnow().isoformat()
 
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-    )
-    resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+        body = {"fields": _encode_fields(quest_doc)}
 
-    global_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
-    await asyncio.to_thread(rest_session.patch, global_url, json=body)
-
-    group_id = payload.get("group_id")
-    if group_id:
-        g_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
+        user_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
         )
-        await asyncio.to_thread(rest_session.patch, g_url, json=body)
+        resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            resp.raise_for_status()
 
-    return {"questId": quest_id, "quest": quest_doc}
+        global_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+        )
+        await asyncio.to_thread(rest_session.patch, global_url, json=body)
+
+        group_id = payload.get("group_id")
+        if group_id:
+            g_url = (
+                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
+            )
+            await asyncio.to_thread(rest_session.patch, g_url, json=body)
+
+        return {"questId": quest_id, "quest": quest_doc}
+    except Exception as e:
+        print("create_custom_quest error", e)
+        return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
 
 
 @app.get("/get-custom-quest/{quest_id}")
@@ -2104,3 +2168,178 @@ async def community_trending():
         data["id"] = doc["name"].split("/")[-1]
         results.append(data)
     return {"communities": results}
+
+async def _verify_admin(user_id: str) -> bool:
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        data = _decode_document(resp.json())
+        return data.get("isAdmin") is True
+    return False
+
+
+@app.get("/admin/dashboard")
+async def admin_dashboard(userId: str = Query(...)):
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+
+    project_id = creds.project_id
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    # quests today
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "quests", "allDescendants": True}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "generatedAt"},
+                    "op": "GREATER_THAN_OR_EQUAL",
+                    "value": {"stringValue": today},
+                }
+            },
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    quests_today = sum(1 for x in resp.json() if x.get("document"))
+
+    # completions last 7 days and active users
+    seven_days = (datetime.utcnow() - timedelta(days=6)).strftime("%Y-%m-%d")
+    comp_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "quests", "allDescendants": True}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "completedAt"},
+                    "op": "GREATER_THAN_OR_EQUAL",
+                    "value": {"stringValue": seven_days},
+                }
+            },
+        }
+    }
+    comp_resp = await asyncio.to_thread(rest_session.post, url, json=comp_query)
+    daily = {}
+    users = {}
+    for item in comp_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        day = data.get("completedAt", "")[:10]
+        daily[day] = daily.get(day, 0) + 1
+        parts = doc["name"].split("/")
+        if "user_quests" in parts:
+            uid = parts[parts.index("user_quests") + 1]
+            users[uid] = users.get(uid, 0) + 1
+
+    # total users
+    users_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users:runQuery"
+    all_users = await asyncio.to_thread(rest_session.post, users_url, json={"structuredQuery": {"from": [{"collectionId": "users"}]}})
+    total_users = sum(1 for i in all_users.json() if i.get("document"))
+
+    # top cities
+    quests_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests:runQuery"
+    q_resp = await asyncio.to_thread(rest_session.post, quests_url, json={"structuredQuery": {"from": [{"collectionId": "quests"}]}})
+    cities = {}
+    moods = {}
+    diff = {}
+    for item in q_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        city = data.get("city", "unknown")
+        mood = data.get("mood")
+        difficulty = data.get("difficulty")
+        if city:
+            cities[city] = cities.get(city, 0) + 1
+        if mood:
+            for m in str(mood).split(","):
+                moods[m] = moods.get(m, 0) + 1
+        if difficulty:
+            diff[difficulty] = diff.get(difficulty, 0) + 1
+
+    top_cities = sorted(cities.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_moods = sorted(moods.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    reports_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/reports:runQuery"
+    rep_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "reports"}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "resolved"},
+                    "op": "EQUAL",
+                    "value": {"booleanValue": False},
+                }
+            },
+        }
+    }
+    rep_resp = await asyncio.to_thread(rest_session.post, reports_url, json=rep_query)
+    reports = []
+    for item in rep_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        data["id"] = doc["name"].split("/")[-1]
+        reports.append(data)
+
+    stats = {
+        "questsToday": quests_today,
+        "dailyCompletions": daily,
+        "topCities": top_cities,
+        "activeUsers": sorted(users.items(), key=lambda x: x[1], reverse=True)[:5],
+        "totalUsers": total_users,
+        "topMoods": top_moods,
+        "difficultyBreakdown": diff,
+        "totalReports": len(reports),
+    }
+
+    return {"stats": stats, "reports": reports}
+
+
+@app.post("/admin/resolve-report")
+async def admin_resolve_report(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    report_id = payload.get("reportId")
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not report_id:
+        return {"error": "reportId required"}
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/reports/{report_id}"
+    patch = {"fields": _encode_fields({"resolved": True})}
+    await asyncio.to_thread(rest_session.patch, url, json=patch)
+    return {"status": "resolved"}
+
+
+@app.post("/admin/delete-quest")
+async def admin_delete_quest(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    qtype = payload.get("type", "standard")
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not quest_id:
+        return {"error": "questId required"}
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/{'custom_quests' if qtype=='custom' else 'quests'}/{quest_id}"
+    await asyncio.to_thread(rest_session.delete, url)
+    return {"status": "deleted"}
+
+
+@app.post("/admin/ban-user")
+async def admin_ban_user(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    target_id = payload.get("targetId")
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not target_id:
+        return {"error": "targetId required"}
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{target_id}"
+    patch = {"fields": _encode_fields({"banned": True})}
+    await asyncio.to_thread(rest_session.patch, url, json=patch)
+    return {"status": "banned"}
