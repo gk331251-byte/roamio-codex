@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { generateQuest, createGroupQuest, getActiveQuest, getQuest } from "../lib/api.js";
+import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup } from "../lib/api.js";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
+
 
 const _toQuestObj = (doc) => {
   if (!doc || !doc.fields) return doc;
@@ -55,9 +58,20 @@ const QuestHome = () => {
     (async () => {
       try {
         const data = await getActiveQuest(user.uid);
-        if (data && data.questId) {
-          const questDoc = await getQuest(data.questId);
-          setResumeData({ quest: _toQuestObj(questDoc), groupId: data.groupId, questId: data.questId });
+        if (data && data.questId && data.status !== 'completed') {
+          const questDoc = await getQuest(data.questId).catch(() => null);
+          let groupOk = true;
+          if (data.groupId) {
+            const snap = await getDoc(doc(db, 'groups', data.groupId));
+            groupOk = snap.exists() && !snap.data().completed;
+          }
+          if (questDoc && groupOk) {
+            setResumeData({ quest: _toQuestObj(questDoc), groupId: data.groupId, questId: data.questId, status: data.status });
+          } else {
+            if (data.groupId) await leaveGroup(data.groupId, user.uid);
+            setResumeData(null);
+          }
+
         } else {
           setResumeData(null);
         }
@@ -109,7 +123,8 @@ const QuestHome = () => {
     if (!questResult) return;
     const questId = `${city}_${mood.join('-')}`;
     try {
-      const { groupId } = await createGroupQuest(user.uid, questId);
+      const { groupId } = await createGroupQuest(user.uid, questId, user.displayName);
+
       navigate('/live', { state: { quest: questResult.quest, questId, groupId } });
     } catch (err) {
       console.error('Failed to create group', err);
@@ -219,10 +234,19 @@ const QuestHome = () => {
 
               <button
                 onClick={handleStartQuest}
-                className="mt-4 w-full bg-[#14b714] text-white py-2 rounded-lg font-bold hover:bg-[#0fa50f] transition"
+                disabled={!!resumeData}
+                className={`mt-4 w-full py-2 rounded-lg font-bold transition text-white ${
+                  resumeData ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#14b714] hover:bg-[#0fa50f]'
+                }`}
+
               >
                 Start Quest
               </button>
+              {resumeData && (
+                <p className="text-center text-sm text-red-600 mt-1">
+                  You have a quest in progress.
+                </p>
+              )}
 
             </div>
           )}
