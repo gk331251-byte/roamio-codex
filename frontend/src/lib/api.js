@@ -389,3 +389,45 @@ export async function rebuildQuestCache(payload) {
   return resp.json();
 }
 
+
+export async function createCommunity(data) {
+  const resp = await fetch(`${BASE_URL}/create-community`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!resp.ok) throw new Error('Failed to create community');
+  return resp.json();
+}
+
+export async function joinCommunity(userId, communityId) {
+  const resp = await fetch(`${BASE_URL}/join-community`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, communityId })
+  });
+  if (!resp.ok) throw new Error('Failed to join');
+  return resp.json();
+}
+
+export async function publishToCommunity(communityId, questId) {
+  const resp = await fetch(`${BASE_URL}/publish-to-community`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ communityId, questId })
+  });
+  if (!resp.ok) throw new Error('Failed to publish');
+  return resp.json();
+}
+
+export async function getCommunity(id) {
+  const resp = await fetch(`${BASE_URL}/community/${id}`);
+  if (!resp.ok) throw new Error('Failed to load community');
+  return resp.json();
+}
+
+export async function getTrendingCommunities() {
+  const resp = await fetch(`${BASE_URL}/community-trending`);
+  if (!resp.ok) throw new Error('Failed to load communities');
+  return resp.json();
+}
