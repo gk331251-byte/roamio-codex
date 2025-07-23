@@ -1,11 +1,22 @@
 import React, { useState } from 'react';
+import { getAuth } from 'firebase/auth';
+import { createCheckoutSession } from '../lib/api';
 
 const QuestPlusPage = () => {
   const [loading, setLoading] = useState(false);
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in');
     setLoading(true);
-    window.location.href = 'https://buy.stripe.com/test_4gw4jA8AcdFr0Te8ww';
+    try {
+      const data = await createCheckoutSession(user.uid, user.email);
+      window.location.href = data.url;
+    } catch (err) {
+      console.error('Checkout failed', err);
+      setLoading(false);
+    }
   };
 
   return (
