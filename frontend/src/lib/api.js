@@ -431,3 +431,40 @@ export async function getTrendingCommunities() {
   if (!resp.ok) throw new Error('Failed to load communities');
   return resp.json();
 }
+
+export async function getAdminDashboard(userId) {
+  const resp = await fetch(`${BASE_URL}/admin/dashboard?userId=${userId}`);
+  if (!resp.ok) throw new Error('Failed to load dashboard');
+  return resp.json();
+}
+
+export async function resolveReport(userId, reportId) {
+  const resp = await fetch(`${BASE_URL}/admin/resolve-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, reportId })
+  });
+  if (!resp.ok) throw new Error('Failed to resolve');
+  return resp.json();
+}
+
+export async function deleteQuestAdmin(userId, questId, type) {
+  const resp = await fetch(`${BASE_URL}/admin/delete-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, type })
+  });
+  if (!resp.ok) throw new Error('Failed to delete');
+  return resp.json();
+}
+
+export async function banUser(userId, targetId) {
+  const resp = await fetch(`${BASE_URL}/admin/ban-user`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, targetId })
+  });
+  if (!resp.ok) throw new Error('Failed to ban user');
+  return resp.json();
+}
+

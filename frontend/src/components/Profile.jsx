@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
+import { deleteUser } from 'firebase/auth';
+import { deleteDoc, doc, collection, getDocs } from 'firebase/firestore';
 import { validatePremium, getUserQuests } from '../lib/api';
 import PostcardGallery from './PostcardGallery';
 
@@ -41,6 +43,24 @@ const Profile = () => {
     return () => unsub();
   }, []);
 
+  const handleDeleteAccount = async () => {
+    if (!window.confirm('Delete account permanently?')) return;
+    const userObj = auth.currentUser;
+    if (!userObj) return;
+    try {
+      // delete user document
+      await deleteDoc(doc(db, 'users', userObj.uid));
+      const qSnap = await getDocs(collection(db, 'user_quests', userObj.uid, 'quests'));
+      const batchDeletes = qSnap.docs.map((d) => deleteDoc(d.ref));
+      await Promise.all(batchDeletes);
+      await deleteUser(userObj);
+      window.location.href = '/';
+    } catch (err) {
+      console.error('account delete failed', err);
+      alert('Failed to delete account');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#f8fcf8] px-6 py-10 text-[#0e1b0e] font-sans">
       <div className="mb-6 flex items-center gap-2">
@@ -62,6 +82,14 @@ const Profile = () => {
           <a href="/quest-plus" className="text-blue-600 underline">Upgrade to Quest+</a>
         </div>
       )}
+      <div className="mt-8">
+        <button
+          onClick={handleDeleteAccount}
+          className="bg-red-600 text-white px-4 py-2 rounded"
+        >
+          Delete My Account
+        </button>
+      </div>
     </div>
   );
 };

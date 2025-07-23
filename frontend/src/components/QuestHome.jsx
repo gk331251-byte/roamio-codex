@@ -115,11 +115,6 @@ const QuestHome = () => {
     setError("");
     setQuestResult(null);
 
-    if (!premium) {
-      navigate('/quest-plus');
-      return;
-    }
-
     if (!user) {
       setError("You must be signed in to generate a quest.");
       return;
@@ -134,10 +129,15 @@ const QuestHome = () => {
     try {
       const token = await user.getIdToken();
       const result = await generateQuest(city, mood, Number(timeLimit), token, user.uid);
+      if (result.error) {
+        console.error('❌ API error:', result);
+        setError(result.error || 'Something went wrong generating your quest.');
+        return;
+      }
       setQuestResult(result);
     } catch (err) {
-      console.error(err);
-      setError(err.message || "Failed to generate quest.");
+      console.error('❌ API error:', err);
+      setError('Something went wrong generating your quest.');
     } finally {
       setLoading(false);
     }
