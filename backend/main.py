@@ -2169,7 +2169,6 @@ async def community_trending():
         results.append(data)
     return {"communities": results}
 
-
 async def _verify_admin(user_id: str) -> bool:
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
