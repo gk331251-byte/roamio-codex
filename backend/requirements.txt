@@ -46,3 +46,5 @@ typing_extensions==4.14.1
 urllib3==2.5.0
 uvicorn==0.35.0
 yarl==1.20.1
+# Added for AuthorizedSession usage in Firestore REST calls
+google-cloud-storage==2.16.0

@@ -1,16 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import GoogleMapReact from "google-map-react";
 
 function RouteMap({ places, GOOGLE_MAPS_API_KEY }) {
-  const [routeData, setRouteData] = useState(null);
 
   useEffect(() => {
     const fetchRoute = async () => {
       try {
         const coords = places.map(place => ({ lat: place.coordinates.lat, lng: place.coordinates.lng }));
         const response = await fetch(`http://127.0.0.1:8000/route?places=${encodeURIComponent(JSON.stringify(coords))}`);
-        const data = await response.json();
-        setRouteData(data.route);
+        await response.json();
       } catch (error) {
         console.error("Error fetching route:", error);
       }

@@ -4,10 +4,13 @@ import os
 import requests
 import hashlib
 from datetime import datetime
+import asyncio
 import googlemaps
 import openai
 import certifi
 from google.cloud import firestore_v1, storage
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
 
 
 from dotenv import load_dotenv
@@ -25,14 +28,30 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
-openai.api_key = os.getenv("OPENAI_API_KEY")
+gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY");
+try:
+    gmaps = googlemaps.Client(key=gmaps_key)
+except Exception as e:
+    print("Google Maps disabled:", e);
+    gmaps = None
+openai_key = os.getenv("OPENAI_API_KEY");
+if openai_key and openai_key.startswith("sk-"):
+    openai.api_key = openai_key
+else:
+    openai.api_key = None
 
 # === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
 
 db = firestore_v1.Client(
     client_options={"api_endpoint": "https://firestore.googleapis.com"}
 )
+
+# Session for REST-based Firestore calls
+creds = service_account.Credentials.from_service_account_file(
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "firestore-key.json"),
+    scopes=["https://www.googleapis.com/auth/datastore"],
+)
+rest_session = AuthorizedSession(creds)
 
 
 def generate_hash_key(city, mood):
@@ -203,13 +222,93 @@ async def generate_quest(
 
 
 
+def _to_value(val):
+    if val is None:
+        return {"nullValue": None}
+    if isinstance(val, bool):
+        return {"booleanValue": val}
+    if isinstance(val, int):
+        return {"integerValue": str(val)}
+    if isinstance(val, float):
+        return {"doubleValue": val}
+    if isinstance(val, str):
+        return {"stringValue": val}
+    if isinstance(val, list):
+        return {"arrayValue": {"values": [_to_value(v) for v in val]}}
+    if isinstance(val, dict):
+        return {"mapValue": {"fields": {k: _to_value(v) for k, v in val.items()}}}
+    return {"stringValue": str(val)}
+
+def _encode_fields(data: dict):
+    return {k: _to_value(v) for k, v in data.items()}
+
+def _from_value(val):
+    if "nullValue" in val:
+        return None
+    if "booleanValue" in val:
+        return val["booleanValue"]
+    if "integerValue" in val:
+        return int(val["integerValue"])
+    if "doubleValue" in val:
+        return float(val["doubleValue"])
+    if "stringValue" in val:
+        return val["stringValue"]
+    if "arrayValue" in val:
+        return [
+            _from_value(v) for v in val.get("arrayValue", {}).get("values", [])
+        ]
+    if "mapValue" in val:
+        return {
+            k: _from_value(v)
+            for k, v in val.get("mapValue", {}).get("fields", {}).items()
+        }
+    return val
+
+def _decode_document(doc: dict) -> dict:
+    return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
+
+
 @app.post("/quest-complete")
-def complete_quest(user_id: str = Body(...), quest_id: str = Body(...)):
-    user_quest_ref = db.collection("user_quests").document(user_id).collection("completed").document(quest_id)
-    user_quest_ref.set({"completed": True, "timestamp": firestore.SERVER_TIMESTAMP})
-    quest_ref = db.collection("quests").document(quest_id)
-    quest_ref.update({"usageCount": firestore.Increment(1)})
-    return {"status": "Quest marked as completed"}
+async def complete_quest(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    quest_data = payload.get("questData")
+
+    print("/quest-complete payload:", payload)
+
+    if not all([user_id, quest_id, quest_data]):
+        return {"error": "userId, questId and questData required"}
+
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+
+    # === Save quest completion ===
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "completedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # === Update lastActive ===
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "Quest saved!"}
 
 @app.get("/places")
 def get_places(city: str = Query(...)):
@@ -278,6 +377,192 @@ async def generate_postcard(request: Request):
 
 @app.get("/test-write")
 def test_write():
-    doc_ref = db.collection("test").document("sample")
-    doc_ref.set({"message": "Hello from FastAPI!"})
-    return {"status": "Document written!"}
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
+    )
+    body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
+    resp = rest_session.patch(url, json=body)
+    if resp.status_code == 200:
+        return {"status": "Document written!"}
+    print("Firestore REST error", resp.text)
+    resp.raise_for_status()
+
+@app.get("/get-user-quests")
+async def get_user_quests(userId: str = Query(...)):
+    """Return quests for a user sorted by completedAt desc."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{userId}:runQuery"
+    )
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "quests"}],
+            "orderBy": [
+                {
+                    "field": {"fieldPath": "completedAt"},
+                    "direction": "DESCENDING",
+                }
+            ],
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    results = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        obj["id"] = doc["name"].split("/")[-1]
+        results.append(obj)
+    return {"quests": results}
+
+
+@app.get("/get-quest/{quest_id}")
+async def get_quest(quest_id: str):
+    """Fetch a quest document via Firestore REST."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
+@app.post("/track-visit")
+async def track_visit(payload: dict = Body(...)):
+    """Update visited quest indices and award XP."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    place_index = payload.get("placeIndex")
+
+    if user_id is None or quest_id is None or place_index is None:
+        return {"error": "userId, questId and placeIndex required"}
+
+    project_id = creds.project_id
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+
+    # Fetch existing quest document
+    resp = await asyncio.to_thread(rest_session.get, quest_url)
+    existing_fields = {}
+    if resp.status_code == 200:
+        existing_fields = _decode_document(resp.json())
+
+    visited = existing_fields.get("visitedIndices", [])
+    new_visit = place_index not in visited
+    if new_visit:
+        visited.append(place_index)
+        visited.sort()
+    existing_fields["visitedIndices"] = visited
+
+    # Update quest document
+    body = {"fields": _encode_fields(existing_fields)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # ----- XP & Badges -----
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, user_url)
+    user_data = {}
+    if resp.status_code == 200:
+        user_data = _decode_document(resp.json())
+
+    xp = user_data.get("xp", 0)
+    stats = user_data.get("stats", {})
+    badges = user_data.get("badges", {})
+
+    if new_visit:
+        xp += 10
+        stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
+        stats["totalXP"] = stats.get("totalXP", 0) + 10
+
+    if len(visited) == 10:
+        badges["adventurer"] = True
+    if stats.get("totalQuestsCompleted", 0) >= 5:
+        badges["explorer"] = True
+
+    user_body = {"fields": _encode_fields({"xp": xp, "stats": stats, "badges": badges})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "ok", "visitedIndices": visited, "xp": xp, "badges": badges}
+
+
+@app.post("/upload-postcard")
+async def upload_postcard(payload: dict = Body(...)):
+    """Attach postcard image info to quest."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    image_url = payload.get("imageUrl")
+    if not all([user_id, quest_id, image_url]):
+        return {"error": "userId, questId, and imageUrl required"}
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    body = {"fields": _encode_fields({"postcardUrl": image_url})}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "postcard uploaded"}
+
+
+@app.post("/reroll-quest")
+async def reroll_quest(payload: dict = Body(...)):
+    """Regenerate a quest for the same parameters."""
+    city = payload.get("city")
+    moods = payload.get("moods", [])
+    time_limit = payload.get("time_limit", 60)
+    token = payload.get("token", "")
+    # Reuse generate_quest logic
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
+
+
+@app.get("/validate-premium/{user_id}")
+async def validate_premium(user_id: str):
+    """Mock premium validation."""
+    return {"premium": True}
+
+
+@app.post("/get-directions")
+async def get_directions(payload: dict = Body(...)):
+    """Return mocked directions data for a list of places."""
+    places = payload.get("places", [])
+    if not isinstance(places, list) or len(places) < 2:
+        return {"error": "At least two places required"}
+
+    # Pretend to compute directions. Real API calls are disabled.
+    await asyncio.sleep(0)
+
+    return {
+        "polyline": "abc123mockedpolyline",
+        "legs": [
+            {
+                "duration": {"text": "10 mins"},
+                "start_address": places[0].get("name", "Start"),
+                "end_address": places[1].get("name", "Stop 1"),
+            },
+            {
+                "duration": {"text": "12 mins"},
+                "start_address": places[1].get("name", "Stop 1"),
+                "end_address": places[2].get("name", "Stop 2") if len(places) > 2 else places[1].get("name", "Stop 2"),
+            },
+        ],
+        "totalTime": "22 mins",
+    }
