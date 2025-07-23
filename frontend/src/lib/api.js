@@ -102,3 +102,55 @@ export async function trackVisit(userId, questId, placeIndex) {
   return resp.json();
 }
 
+
+export async function createGroupQuest(userId, questId) {
+  const resp = await fetch(`${BASE_URL}/create-group-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to create group');
+  }
+  return resp.json();
+}
+
+export async function joinGroup(userId, groupId) {
+  const resp = await fetch(`${BASE_URL}/join-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, groupId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to join group');
+  }
+  return resp.json();
+}
+
+export async function trackStopVisit(groupId, userId, placeIndex) {
+  const resp = await fetch(`${BASE_URL}/track-stop-visit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupId, userId, placeIndex })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to track stop');
+  }
+  return resp.json();
+}
+
+export async function getActiveQuest(userId) {
+  const resp = await fetch(`${BASE_URL}/active-quest/${userId}`);
+  if (!resp.ok) {
+    return null;
+  }
+  return resp.json();
+}
+
+export async function getQuest(questId) {
+  const resp = await fetch(`${BASE_URL}/get-quest/${questId}`);
+  if (!resp.ok) {
+    throw new Error('Failed to fetch quest');
+  }
+  return resp.json();
+}

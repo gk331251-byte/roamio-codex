@@ -699,3 +699,127 @@ async def get_directions(payload: dict = Body(...)):
         "totalTime": "22 mins",
     }
 
+
+@app.post("/create-group-quest")
+async def create_group_quest(payload: dict = Body(...)):
+    """Create a shared group quest and set user active state."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    if not user_id or not quest_id:
+        return {"error": "userId and questId required"}
+
+    group_id = hashlib.sha1(f"{user_id}-{quest_id}-{datetime.utcnow()}".encode()).hexdigest()[:8]
+    project_id = creds.project_id
+
+    group_doc = {
+        "questId": quest_id,
+        "members": [user_id],
+        "progress": {user_id: []},
+        "createdAt": datetime.utcnow().isoformat(),
+    }
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    body = {"fields": _encode_fields(group_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, group_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    active_doc = {
+        "groupId": group_id,
+        "questId": quest_id,
+        "visitedStops": [],
+        "startedAt": datetime.utcnow().isoformat(),
+    }
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_body = {"fields": _encode_fields(active_doc)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"groupId": group_id}
+
+
+@app.post("/join-group")
+async def join_group(payload: dict = Body(...)):
+    """Add a user to an existing group quest."""
+    user_id = payload.get("userId")
+    group_id = payload.get("groupId")
+    if not user_id or not group_id:
+        return {"error": "userId and groupId required"}
+
+    project_id = creds.project_id
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    resp = await asyncio.to_thread(rest_session.get, group_url)
+    if resp.status_code != 200:
+        return {"error": "Group not found"}
+    fields = _decode_document(resp.json())
+
+    members = fields.get("members", [])
+    if user_id not in members:
+        members.append(user_id)
+    progress = fields.get("progress", {})
+    if user_id not in progress:
+        progress[user_id] = []
+
+    fields.update({"members": members, "progress": progress})
+    body = {"fields": _encode_fields(fields)}
+    await asyncio.to_thread(rest_session.patch, group_url, json=body)
+
+    active_doc = {
+        "groupId": group_id,
+        "questId": fields.get("questId"),
+        "visitedStops": progress[user_id],
+        "startedAt": datetime.utcnow().isoformat(),
+    }
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_body = {"fields": _encode_fields(active_doc)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"status": "joined", "questId": fields.get("questId")}
+
+
+@app.post("/track-stop-visit")
+async def track_stop_visit(payload: dict = Body(...)):
+    """Track a stop visit for a group quest."""
+    group_id = payload.get("groupId")
+    user_id = payload.get("userId")
+    place_index = payload.get("placeIndex")
+    if group_id is None or user_id is None or place_index is None:
+        return {"error": "groupId, userId and placeIndex required"}
+
+    project_id = creds.project_id
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    resp = await asyncio.to_thread(rest_session.get, group_url)
+    if resp.status_code != 200:
+        return {"error": "Group not found"}
+    fields = _decode_document(resp.json())
+
+    progress = fields.get("progress", {})
+    user_progress = progress.get(user_id, [])
+    if place_index not in user_progress:
+        user_progress.append(place_index)
+        user_progress.sort()
+        progress[user_id] = user_progress
+        fields["progress"] = progress
+        body = {"fields": _encode_fields(fields)}
+        await asyncio.to_thread(rest_session.patch, group_url, json=body)
+
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_resp = await asyncio.to_thread(rest_session.get, active_url)
+    active_fields = {}
+    if active_resp.status_code == 200:
+        active_fields = _decode_document(active_resp.json())
+    active_fields.update({"groupId": group_id, "questId": fields.get("questId"), "visitedStops": user_progress})
+    active_body = {"fields": _encode_fields(active_fields)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"visitedStops": user_progress}
+
+
+@app.get("/active-quest/{user_id}")
+async def get_active_quest(user_id: str):
+    """Return the current active quest doc for the user."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    return _decode_document(resp.json())
