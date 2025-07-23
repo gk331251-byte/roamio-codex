@@ -244,4 +244,3 @@ export async function updateActiveQuest(userId, data) {
   }
   return resp.json();
 }
-
