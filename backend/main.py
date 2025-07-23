@@ -4,6 +4,7 @@ import os
 import requests
 import hashlib
 from datetime import datetime
+import asyncio
 import googlemaps
 import openai
 import certifi
@@ -212,13 +213,65 @@ async def generate_quest(
 
 
 
+def _to_value(val):
+    if val is None:
+        return {"nullValue": None}
+    if isinstance(val, bool):
+        return {"booleanValue": val}
+    if isinstance(val, int):
+        return {"integerValue": str(val)}
+    if isinstance(val, float):
+        return {"doubleValue": val}
+    if isinstance(val, str):
+        return {"stringValue": val}
+    if isinstance(val, list):
+        return {"arrayValue": {"values": [_to_value(v) for v in val]}}
+    if isinstance(val, dict):
+        return {"mapValue": {"fields": {k: _to_value(v) for k, v in val.items()}}}
+    return {"stringValue": str(val)}
+
+def _encode_fields(data: dict):
+    return {k: _to_value(v) for k, v in data.items()}
+
+
 @app.post("/quest-complete")
-def complete_quest(user_id: str = Body(...), quest_id: str = Body(...)):
-    user_quest_ref = db.collection("user_quests").document(user_id).collection("completed").document(quest_id)
-    user_quest_ref.set({"completed": True, "timestamp": firestore.SERVER_TIMESTAMP})
-    quest_ref = db.collection("quests").document(quest_id)
-    quest_ref.update({"usageCount": firestore.Increment(1)})
-    return {"status": "Quest marked as completed"}
+async def complete_quest(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    quest_data = payload.get("questData")
+    if not all([user_id, quest_id, quest_data]):
+        return {"error": "userId, questId and questData required"}
+
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+
+    # Write quest record under user_quests/{userId}/{questId}
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "generatedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # Update user's lastActive timestamp
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "Quest saved!"}
 
 @app.get("/places")
 def get_places(city: str = Query(...)):
