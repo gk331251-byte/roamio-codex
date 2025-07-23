@@ -3,13 +3,33 @@ import React, { useEffect, useState } from 'react';
 import { motion as Motion } from 'framer-motion';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebase';
-import { getUserQuests } from '../lib/api';
+import { getUserQuests, replayQuest, remixQuest } from '../lib/api';
 
 const QuestHistory = () => {
   const [quests, setQuests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [highlight, setHighlight] = useState(null);
+  const handleReplay = async (q) => {
+    const user = auth.currentUser;
+    if (!user) return;
+    try {
+      await replayQuest(q.questId || q.id, user.uid);
+    } catch (e) {
+      console.error('replay failed', e);
+    }
+  };
+
+  const handleRemix = async (q) => {
+    const user = auth.currentUser;
+    if (!user) return;
+    try {
+      const data = q.questData || q;
+      await remixQuest(data.city || '', data.mood || '', data.tags || [], user.uid);
+    } catch (e) {
+      console.error('remix failed', e);
+    }
+  };
 
   const loadQuests = async (uid, highlightNew = false) => {
     setLoading(true);
@@ -104,12 +124,23 @@ const QuestHistory = () => {
                     Mood: {quest.questData?.difficulty || quest.difficulty || 'easy'} | Stops: {quest.questData?.places?.length || 0}
                   </p>
                 </div>
-                <button className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium">
-                  <svg className="w-4 h-4" viewBox="0 0 256 256" fill="currentColor">
-                    <path d="M224 128a96 96 0 01-94.7 96H128a95.4 95.4 0 01-65.9-26.2 8 8 0 0111-11.6A80 80 0 1071.4 71.4L44.6 96H72a8 8 0 010 16H24a8 8 0 01-8-8V56a8 8 0 0116 0v29.8L60.2 60A96 96 0 01224 128z" />
-                  </svg>
-                  Replay
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleReplay(quest)}
+                    className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 256 256" fill="currentColor">
+                      <path d="M224 128a96 96 0 01-94.7 96H128a95.4 95.4 0 01-65.9-26.2 8 8 0 0111-11.6A80 80 0 1071.4 71.4L44.6 96H72a8 8 0 010 16H24a8 8 0 01-8-8V56a8 8 0 0116 0v29.8L60.2 60A96 96 0 01224 128z" />
+                    </svg>
+                    Replay
+                  </button>
+                  <button
+                    onClick={() => handleRemix(quest)}
+                    className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium"
+                  >
+                    Remix
+                  </button>
+                </div>
               </div>
               <div className="flex-1 bg-cover bg-center aspect-video rounded-xl" style={{ backgroundImage: `url(${quest.postcardUrl || quest.imageUrl || 'https://placehold.co/600x300'})` }} />
             </Motion.div>

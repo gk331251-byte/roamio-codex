@@ -302,14 +302,37 @@ export async function viewQuest(userId, questId) {
   return resp.json();
 }
 
-export async function replayQuest(questId) {
+export async function replayQuest(questId, userId) {
   const resp = await fetch(`${BASE_URL}/replay-quest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ quest_id: questId })
+    body: JSON.stringify({ quest_id: questId, user_id: userId })
   });
   if (!resp.ok) {
     throw new Error('Failed to replay quest');
+  }
+  return resp.json();
+}
+
+export async function remixQuest(location, mood, tags, userId) {
+  const resp = await fetch(`${BASE_URL}/remix-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location, mood, tagList: tags, user_id: userId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to remix quest');
+  }
+  return resp.json();
+}
+
+export async function searchQuests(query, userId) {
+  const url = new URL(`${BASE_URL}/search-quests`);
+  url.searchParams.set('query', query);
+  if (userId) url.searchParams.set('user_id', userId);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) {
+    throw new Error('Failed to search');
   }
   return resp.json();
 }
@@ -349,6 +372,7 @@ export async function linkQuestToGroup(group_id, quest_id, upcoming = false) {
   }
   return resp.json();
 }
+
 export async function auditQuestCache() {
   const resp = await fetch(`${BASE_URL}/audit-quest-cache`);
   if (!resp.ok) throw new Error('Failed to audit');

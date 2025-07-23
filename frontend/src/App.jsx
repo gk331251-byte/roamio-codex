@@ -21,7 +21,7 @@ import AdminDashboard from "./components/AdminDashboard";
 import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 import TagEditor from "./components/TagEditor";
-
+import Explore from "./components/Explore";
 
 
 function App() {
@@ -65,6 +65,7 @@ function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
         <Route path="/community" element={<CommunityFeed />} />
+        <Route path="/explore" element={<Explore />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/quest-plus" element={<QuestPlusPage />} />
         <Route path="/custom" element={<CustomQuestBuilder />} />

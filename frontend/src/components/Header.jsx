@@ -28,6 +28,7 @@ const Header = () => {
       </Link>
       <nav className="flex gap-4">
         <Link to="/home" className={linkClass("/home")}>Home</Link>
+        <Link to="/explore" className={linkClass("/explore")}>Explore</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
         <Link to="/community" className={linkClass("/community")}>Community</Link>
         {user && (

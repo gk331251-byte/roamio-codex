@@ -70,7 +70,7 @@ export default function PublicQuestPage() {
       };
       const res = await createCustomQuest(payload);
       const group = await createGroupQuest(user.uid, res.questId, user.displayName);
-      await replayQuest(questId).catch(() => {});
+      await replayQuest(questId, user.uid).catch(() => {});
       navigate('/live', { state: { quest, questId: res.questId, groupId: group.groupId } });
     } catch (err) {
       console.error('start failed', err);
@@ -89,7 +89,7 @@ export default function PublicQuestPage() {
         custom_prompt: quest.customPrompt,
         status: 'draft',
       });
-      await replayQuest(questId).catch(() => {});
+      await replayQuest(questId, user.uid).catch(() => {});
       setCopied(true);
     } catch (err) {
       console.error('copy failed', err);
