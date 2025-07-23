@@ -1194,3 +1194,4 @@ async def create_custom_quest(payload: dict = Body(...)):
 
     return {"questId": quest_id, "quest": quest_doc}
 
+
