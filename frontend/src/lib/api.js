@@ -34,3 +34,29 @@ export async function generateQuest(city, mood, timeLimit, token) {
 
   return await response.json();
 }
+
+export async function completeQuest(userId, questId, questData) {
+  const url = `${BASE_URL}/quest-complete`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, questData })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to save quest');
+  }
+  return resp.json();
+}
+
+export async function uploadPostcard(userId, questId, imageUrl) {
+  const url = `${BASE_URL}/upload-postcard`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, imageUrl })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to upload postcard');
+  }
+  return resp.json();
+}

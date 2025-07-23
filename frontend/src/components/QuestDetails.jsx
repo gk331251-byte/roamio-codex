@@ -1,10 +1,10 @@
 import React from "react";
 import { useParams } from "react-router-dom";
 import { motion } from "framer-motion";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
-import dayjs from "dayjs";
 import { db } from "../firebase";
+import { completeQuest, uploadPostcard } from "../lib/api";
 import RouteMap from "./RouteMap";
 
 
@@ -51,11 +51,18 @@ const QuestDetails = () => {
       setSaving(true);
   
       const difficulty = questData.difficulty || "Medium";
-      const prompt = getImagePrompt(city, difficulty);
       const questId = `${city}_${mood}`;
-      const userQuestRef = doc(db, "user_quests", user.uid, "quests", questId);
-  
-      // Step 1: Call backend to generate postcard image
+      const questDataPayload = {
+        title: questData.title,
+        places: questData.locationList || [],
+        questText: questData.questText,
+        difficulty,
+      };
+
+      // Save quest completion via backend
+      await completeQuest(user.uid, questId, questDataPayload);
+
+      // Generate postcard (skipped if backend keys invalid)
       const response = await fetch("https://your-backend.com/generate-postcard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -69,26 +76,15 @@ const QuestDetails = () => {
           locationList: questData.locationList || [],
         }),
       });
-  
+
       const result = await response.json();
       const imageUrl = result.imageUrl || "/assets/postcard-placeholder.png";
-  
-      // Step 2: Save quest to Firestore
-      await setDoc(userQuestRef, {
-        city,
-        mood,
-        title: questData.title,
-        questText: questData.questText,
-        locationList: questData.locationList || [],
-        difficulty,
-        imagePrompt: prompt,
-        imageUrl,
-        completed: true,
-        completedAt: new Date().toISOString(),
-      });
-  
+
+      // Attach postcard URL via backend
+      await uploadPostcard(user.uid, questId, imageUrl);
+
       setCompleted(true);
-      console.log("✅ Quest completed and saved to Firestore with image.");
+      console.log("✅ Quest completed and postcard uploaded.");
     } catch (err) {
       console.error("🔥 Error completing quest:", err);
       setError("Failed to complete quest.");

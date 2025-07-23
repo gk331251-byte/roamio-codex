@@ -262,6 +262,7 @@ async def complete_quest(payload: dict = Body(...)):
         "userId": user_id,
         "questId": quest_id,
         "questData": quest_data,
+        "completedAt": timestamp,
         "generatedAt": timestamp,
         "completedAt": timestamp
     }
@@ -364,6 +365,8 @@ def test_write():
         return {"status": "Document written!"}
     print("Firestore REST error", resp.text)
     resp.raise_for_status()
+
+
 @app.get("/get-user-quests/{user_id}")
 async def get_user_quests(user_id: str):
     """Fetch completed quests for a user via Firestore REST."""
