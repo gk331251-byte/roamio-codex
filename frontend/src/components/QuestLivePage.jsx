@@ -15,9 +15,12 @@ export default function QuestLivePage() {
   const quest = location.state?.quest;
   const questId = location.state?.questId;
   const groupId = location.state?.groupId || new URLSearchParams(location.search).get('groupId');
+  const initialLimit = location.state?.timeLimit ? Number(location.state.timeLimit) : 90;
+
 
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
+  const timeLimit = initialLimit;
   const [visitedIndices, setVisitedIndices] = useState([]);
   const [groupData, setGroupData] = useState(null);
   const [activityMsg, setActivityMsg] = useState("");
@@ -49,19 +52,18 @@ export default function QuestLivePage() {
   useEffect(() => {
     if (!quest) return;
     const questStops = quest.places.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name }));
-
     setStops(questStops);
   }, [quest]);
 
-  // Optimize order using current location as origin
+  // Optimize order and trim stops using current location
+
   useEffect(() => {
     if (!quest || !userLocation || !quest.places?.length) return;
     const fetchOptimized = async () => {
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       const coords = quest.places.map((p) => `${p.lat},${p.lng}`);
-      if (coords.length < 2) {
-        return;
-      }
+      if (coords.length < 2) return;
+
       const origin = `${userLocation.lat},${userLocation.lng}`;
       const destination = coords[coords.length - 1];
       const waypointStr = coords.slice(0, -1).join('|');
@@ -71,23 +73,45 @@ export default function QuestLivePage() {
         );
         const data = await res.json();
         const order = data?.routes?.[0]?.waypoint_order;
+        let ordered = quest.places;
         if (Array.isArray(order) && order.length === coords.length - 1) {
-          const ordered = order.map((i) => quest.places[i]);
+          ordered = order.map((i) => quest.places[i]);
           ordered.push(quest.places[quest.places.length - 1]);
-          setStops(
-            ordered.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name }))
+        }
 
-          );
-          try {
-            const auth = getAuth();
-            const user = auth.currentUser;
-            if (user) {
-              await updateActiveQuest(user.uid, { optimizedOrder: order });
-            }
-          } catch (err) {
-            console.error('failed to store optimized order', err);
+        const legs = data?.routes?.[0]?.legs || [];
+        const limitSec = timeLimit * 60;
+        let total = 0;
+        let keep = legs.length;
+        for (let i = 0; i < legs.length; i++) {
+          total += legs[i]?.duration?.value || 0;
+          if (total > limitSec) {
+            keep = i;
+            break;
           }
         }
+        if (keep === 0) {
+          keep = 1;
+          alert('Time limit too short for full quest; using first stop only.');
+        }
+        const trimmed = ordered.slice(0, keep);
+        setStops(trimmed.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name })));
+
+        try {
+          const auth = getAuth();
+          const user = auth.currentUser;
+          if (user) {
+            await updateActiveQuest(user.uid, {
+              optimizedOrder: order,
+              trimmedPlaces: trimmed,
+              usedTimeLimit: timeLimit,
+            });
+          }
+        } catch (err) {
+          console.error('failed to store optimized order', err);
+        }
+
+
         const poly = data?.routes?.[0]?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
@@ -98,41 +122,10 @@ export default function QuestLivePage() {
       }
     };
     fetchOptimized();
-  }, [quest, userLocation]);
+  }, [quest, userLocation, timeLimit]);
 
   // Join group and listen for progress
-  useEffect(() => {
-    if (groupId) return;
-    const auth = getAuth();
-    const user = auth.currentUser;
-    if (!user || !groupId) return;
-    joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
-    let prev = null;
-    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
-      const data = snap.data();
-      if (!data) return;
-      setGroupData(data);
-      if (data.progress && data.progress[user.uid]) {
-        setVisitedIndices(data.progress[user.uid]);
-      }
-      if (prev && data.progress) {
-        Object.keys(data.progress).forEach((uid) => {
-          if (uid === user.uid) return;
-          const before = (prev.progress?.[uid] || []).length;
-          const after = (data.progress[uid] || []).length;
-          if (after > before) {
-            const member = data.members?.find((m) => m.userId === uid);
-            setActivityMsg(`${member?.displayName || uid} visited stop ${after}`);
-            setTimeout(() => setActivityMsg(''), 3000);
-          }
-        });
-      }
-      prev = data;
-    });
-    return () => unsub();
-  }, [groupId]);
 
-  // Load personal progress when not in group
   useEffect(() => {
     if (groupId) return;
     const auth = getAuth();
@@ -181,10 +174,11 @@ export default function QuestLivePage() {
         console.error('Failed to load progress', err);
       }
     })();
-  }, [quest, groupId]);
+  }, [quest, groupId, questId]);
 
   const currentStopIndex = visitedIndices.length;
-  const allVisited = visitedIndices.length >= (quest?.places?.length || 0);
+  const allVisited = visitedIndices.length >= stops.length;
+
   const questComplete = allVisited || groupData?.completed;
 
   useEffect(() => {
@@ -392,6 +386,32 @@ export default function QuestLivePage() {
     }
   };
 
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   if (!quest) {
     return <div className="p-6 text-center text-red-600">Quest data missing.</div>;
   }
@@ -463,7 +483,8 @@ export default function QuestLivePage() {
                   </button>
                 </div>
                 {groupData && (
-                  <GroupMemberList members={groupData.members || []} progress={groupData.progress || {}} total={quest?.places?.length || 0} />
+                  <GroupMemberList members={groupData.members || []} progress={groupData.progress || {}} total={stops.length} />
+
                 )}
               </div>
             )}
@@ -492,13 +513,14 @@ export default function QuestLivePage() {
             <div className="flex justify-between items-center">
               <p className="text-base font-medium text-[#0e1b0e]">Progress</p>
               <p className="text-sm text-[#0e1b0e]">
-                {visitedIndices.length}/{quest?.places?.length}
+                {visitedIndices.length}/{stops.length}
               </p>
             </div>
           <div className="w-full bg-[#d0e7d0] rounded">
             <div
               className="h-2 rounded bg-[#14b714]"
-              style={{ width: `${(visitedIndices.length / (quest?.places?.length || 1)) * 100}%` }}
+              style={{ width: `${(visitedIndices.length / (stops.length || 1)) * 100}%` }}
+
             />
           </div>
         </div>

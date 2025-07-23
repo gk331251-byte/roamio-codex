@@ -76,7 +76,18 @@ const QuestHome = () => {
             groupOk = snap.exists() && !snap.data().completed;
           }
           if (questDoc && groupOk) {
-            setResumeData({ quest: _toQuestObj(questDoc), groupId: data.groupId, questId: data.questId, status: data.status });
+            const questObj = _toQuestObj(questDoc);
+            if (Array.isArray(data.trimmedPlaces)) {
+              questObj.places = data.trimmedPlaces;
+            }
+            setResumeData({
+              quest: questObj,
+              groupId: data.groupId,
+              questId: data.questId,
+              status: data.status,
+              usedTimeLimit: data.usedTimeLimit,
+            });
+
           } else {
             if (data.groupId) await leaveGroup(data.groupId, user.uid);
             setResumeData(null);
@@ -141,8 +152,15 @@ const QuestHome = () => {
     if (!questResult) return;
     const questId = `${city}_${mood.join('-')}`;
     try {
-      const { groupId } = await createGroupQuest(user.uid, questId, user.displayName);
-      navigate('/live', { state: { quest: questResult.quest, questId, groupId } });
+      const { groupId } = await createGroupQuest(
+        user.uid,
+        questId,
+        user.displayName
+      );
+      navigate('/live', {
+        state: { quest: questResult.quest, questId, groupId, timeLimit },
+      });
+
     } catch (err) {
       console.error('Failed to create group', err);
       setError('Failed to start group quest');
@@ -166,7 +184,8 @@ const QuestHome = () => {
         <div className="mb-6 text-center">
           <button
             onClick={() =>
-              navigate('/live', { state: { quest: resumeData.quest, questId: resumeData.questId, groupId: resumeData.groupId } })
+              navigate('/live', { state: { quest: resumeData.quest, questId: resumeData.questId, groupId: resumeData.groupId, timeLimit: resumeData.usedTimeLimit } })
+
             }
             className="bg-blue-600 text-white px-4 py-2 rounded-lg"
           >
