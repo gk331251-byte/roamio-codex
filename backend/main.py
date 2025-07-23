@@ -239,18 +239,21 @@ async def complete_quest(payload: dict = Body(...)):
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     quest_data = payload.get("questData")
+    print("/quest-complete payload:", payload)
+
     if not all([user_id, quest_id, quest_data]):
         return {"error": "userId, questId and questData required"}
 
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
 
-    # Write quest record under user_quests/{userId}/{questId}
+    # === Save quest completion ===
     quest_doc = {
         "userId": user_id,
         "questId": quest_id,
         "questData": quest_data,
         "generatedAt": timestamp,
+        "completedAt": timestamp
     }
     quest_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
@@ -261,7 +264,8 @@ async def complete_quest(payload: dict = Body(...)):
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
 
-    # Update user's lastActive timestamp
+    # === Update lastActive ===
+
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     )
