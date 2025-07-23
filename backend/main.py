@@ -19,7 +19,7 @@ load_dotenv()
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # === Load API keys from env (Codex-compatible) ===
-
+#
 gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
