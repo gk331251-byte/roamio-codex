@@ -1133,7 +1133,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"premium": premium}
-
+  
 
 @app.post("/update-active-quest")
 async def update_active_quest(payload: dict = Body(...)):
