@@ -60,3 +60,11 @@ export async function uploadPostcard(userId, questId, imageUrl) {
   }
   return resp.json();
 }
+
+export async function validatePremium(userId) {
+  const resp = await fetch(`${BASE_URL}/validate-premium/${userId}`);
+  if (!resp.ok) {
+    throw new Error('Failed to validate premium');
+  }
+  return resp.json();
+}
