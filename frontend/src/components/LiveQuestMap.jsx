@@ -63,10 +63,12 @@ export default function LiveQuestMap({
   }, [userLocation]);
 
   useEffect(() => {
+
     if (!mapRef.current || !stops.length) return;
     const target = stops[visitedIndex] || stops[stops.length - 1];
     mapRef.current.panTo(target);
   }, [visitedIndex, stops]);
+
 
   const center = userLocation || stops[0];
 
