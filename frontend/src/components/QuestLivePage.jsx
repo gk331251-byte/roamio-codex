@@ -4,6 +4,7 @@ import LiveQuestMap from "./LiveQuestMap";
 import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
 import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup } from "../lib/api";
+
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -77,6 +78,7 @@ export default function QuestLivePage() {
         });
       }
       prev = data;
+
     });
     return () => unsub();
   }, [groupId]);
@@ -292,6 +294,7 @@ export default function QuestLivePage() {
                 Back to Home
               </button>
             </div>
+
           </div>
 
           <div className="p-4">

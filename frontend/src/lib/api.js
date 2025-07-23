@@ -108,6 +108,7 @@ export async function createGroupQuest(userId, questId, displayName) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, questId, displayName })
+
   });
   if (!resp.ok) {
     throw new Error('Failed to create group');
@@ -120,6 +121,7 @@ export async function joinGroup(userId, groupId, displayName) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, groupId, displayName })
+
   });
   if (!resp.ok) {
     throw new Error('Failed to join group');
@@ -162,6 +164,7 @@ export async function leaveGroup(groupId, userId) {
   }
   return resp.json();
 }
+
 
 export async function getActiveQuest(userId) {
   const resp = await fetch(`${BASE_URL}/active-quest/${userId}`);
