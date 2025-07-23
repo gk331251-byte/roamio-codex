@@ -13,9 +13,19 @@ const Login = () => {
   };
 
   return (
-    <button onClick={handleLogin} className="bg-green-600 text-white px-4 py-2 rounded-lg">
-      Sign In with Google
-    </button>
+    <div className="space-y-2 text-center">
+      <button
+        onClick={handleLogin}
+        className="bg-green-600 text-white px-4 py-2 rounded-lg"
+      >
+        Sign In with Google
+      </button>
+      <p className="text-xs text-gray-500 mt-2">
+        By signing in, you agree to our{' '}
+        <a href="/terms" className="underline">Terms</a> and{' '}
+        <a href="/privacy" className="underline">Privacy Policy</a>.
+      </p>
+    </div>
   );
 };
 
