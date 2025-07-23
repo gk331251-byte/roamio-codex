@@ -17,6 +17,8 @@ import QuestPlusPage from "./components/QuestPlusPage";
 import PaymentSuccess from "./components/PaymentSuccess";
 import PaymentFailed from "./components/PaymentFailed";
 import CommunityFeed from "./components/CommunityFeed";
+import CommunityPage from "./components/CommunityPage";
+import CreateCommunity from "./components/CreateCommunity";
 import AdminDashboard from "./components/AdminDashboard";
 import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
@@ -65,6 +67,8 @@ function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
         <Route path="/community" element={<CommunityFeed />} />
+        <Route path="/community/new" element={<CreateCommunity />} />
+        <Route path="/community/:id" element={<CommunityPage />} />
         <Route path="/explore" element={<Explore />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/quest-plus" element={<QuestPlusPage />} />
