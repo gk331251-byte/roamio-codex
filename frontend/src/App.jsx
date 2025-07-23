@@ -22,7 +22,6 @@ import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 
 
-
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -68,7 +67,6 @@ function App() {
         <Route path="/quest-plus" element={<QuestPlusPage />} />
         <Route path="/custom" element={<CustomQuestBuilder />} />
         <Route path="/q/:questId" element={<PublicQuestPage />} />
-
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>

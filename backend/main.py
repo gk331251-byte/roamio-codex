@@ -1168,7 +1168,6 @@ async def create_custom_quest(payload: dict = Body(...)):
     status = payload.get("status", "draft")
     public = payload.get("public", False)
 
-
     quest_doc = {
         "title": payload.get("title") or "Custom Quest",
         "moodTags": payload.get("mood_tags", []),
@@ -1180,12 +1179,15 @@ async def create_custom_quest(payload: dict = Body(...)):
         "type": "custom",
         "status": status,
         "public": public,
+        "likesCount": 0,
+        "viewsCount": 0,
+        "replaysCount": 0,
+
     }
     if status == "published" or public:
         quest_doc["publishedAt"] = datetime.utcnow().isoformat()
 
     body = {"fields": _encode_fields(quest_doc)}
-
 
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
@@ -1254,4 +1256,167 @@ async def publish_custom_quest(payload: dict = Body(...)):
 
     return {"status": "published"}
 
+
+@app.post("/like-quest")
+async def like_quest(payload: dict = Body(...)):
+    """Record a quest like and increment counter."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    like_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{quest_id}/{user_id}"
+    )
+    body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
+    resp = await asyncio.to_thread(rest_session.patch, like_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    qresp = await asyncio.to_thread(rest_session.get, quest_url)
+    if qresp.status_code == 200:
+        data = _decode_document(qresp.json())
+        count = data.get("likesCount", 0) + 1
+        patch = {"fields": _encode_fields({"likesCount": count})}
+        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    return {"status": "liked"}
+
+
+@app.post("/view-quest")
+async def view_quest(payload: dict = Body(...)):
+    """Record a unique quest view."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    view_doc = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{quest_id}/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, view_doc)
+    if resp.status_code == 404:
+        body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
+        await asyncio.to_thread(rest_session.patch, view_doc, json=body)
+
+        quest_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+        )
+        qresp = await asyncio.to_thread(rest_session.get, quest_url)
+        if qresp.status_code == 200:
+            data = _decode_document(qresp.json())
+            count = data.get("viewsCount", 0) + 1
+            patch = {"fields": _encode_fields({"viewsCount": count})}
+            await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    return {"status": "viewed"}
+
+
+@app.post("/replay-quest")
+async def replay_quest(payload: dict = Body(...)):
+    """Increment replay counter for a quest."""
+    quest_id = payload.get("quest_id")
+    if not quest_id:
+        return {"error": "quest_id required"}
+
+    project_id = creds.project_id
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    qresp = await asyncio.to_thread(rest_session.get, quest_url)
+    if qresp.status_code == 200:
+        data = _decode_document(qresp.json())
+        count = data.get("replaysCount", 0) + 1
+        patch = {"fields": _encode_fields({"replaysCount": count})}
+        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    return {"status": "replayed"}
+
+
+@app.post("/create-community-group")
+async def create_community_group(payload: dict = Body(...)):
+    """Create a new community group."""
+    name = payload.get("name")
+    creator = payload.get("creator")
+    if not name or not creator:
+        return {"error": "name and creator required"}
+
+    project_id = creds.project_id
+    group_id = hashlib.sha1(f"{name}-{datetime.utcnow()}".encode()).hexdigest()[:10]
+    doc = {
+        "name": name,
+        "creator": creator,
+        "description": payload.get("description", ""),
+        "tags": payload.get("tags", []),
+        "imageUrl": payload.get("imageUrl", ""),
+        "members": [creator],
+        "linked_quests": [],
+        "createdAt": datetime.utcnow().isoformat(),
+    }
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
+    )
+    body = {"fields": _encode_fields(doc)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"groupId": group_id}
+
+
+@app.post("/join-community-group")
+async def join_community_group(payload: dict = Body(...)):
+    group_id = payload.get("group_id")
+    user_id = payload.get("user_id")
+    if not group_id or not user_id:
+        return {"error": "group_id and user_id required"}
+
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "group not found"}
+    data = _decode_document(resp.json())
+    members = data.get("members", [])
+    if user_id not in members:
+        members.append(user_id)
+        data["members"] = members
+        body = {"fields": _encode_fields(data)}
+        await asyncio.to_thread(rest_session.patch, url, json=body)
+    return {"status": "joined"}
+
+
+@app.post("/link-quest-to-group")
+async def link_quest_to_group(payload: dict = Body(...)):
+    group_id = payload.get("group_id")
+    quest_id = payload.get("quest_id")
+    upcoming = payload.get("upcoming", False)
+    if not group_id or not quest_id:
+        return {"error": "group_id and quest_id required"}
+
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "group not found"}
+    data = _decode_document(resp.json())
+    linked = data.get("linked_quests", [])
+    if quest_id not in linked:
+        linked.append(quest_id)
+    if upcoming:
+        data["upcoming_quest"] = quest_id
+    data["linked_quests"] = linked
+    body = {"fields": _encode_fields(data)}
+    await asyncio.to_thread(rest_session.patch, url, json=body)
+    return {"status": "linked"}
 
