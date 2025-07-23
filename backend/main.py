@@ -1,26 +1,34 @@
 from fastapi import FastAPI, Query, Body, Request
-import os 
+from fastapi.middleware.cors import CORSMiddleware
+import os
 import requests
-from google.cloud import firestore
-from google.cloud import secretmanager
+import hashlib
+from datetime import datetime
 import googlemaps
 import openai
-from fastapi.middleware.cors import CORSMiddleware
-import hashlib
+import certifi
 from google.cloud import firestore
-from datetime import datetime
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, Body
 from emotion_utils import generate_filtered_quest_payload
+
+# === Load .env variables (if running locally) ===
 load_dotenv()
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+# === Set up trusted certs for HTTPS (esp. in Codex) ===
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
+# === Load API keys from env (Codex-compatible) ===
+gmaps_api_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = openai_api_key
+gmaps = googlemaps.Client(key=gmaps_api_key)
 
-
-#
-# Firestore setup
-db = firestore.Client()
+# === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
+db = firestore.Client(
+    client_options={"api_endpoint": "https://firestore.googleapis.com"},
+    transport="rest"
+)
 
 def generate_hash_key(city, mood):
     key_str = f"{city.strip().lower()}_{mood.strip().lower()}"
