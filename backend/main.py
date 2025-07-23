@@ -149,7 +149,6 @@ def is_chain(name: str) -> bool:
     lower = name.lower()
     return any(k in lower for k in CHAIN_KEYWORDS)
 
-
 # === Narrative template map for tag-based generation ===
 TEMPLATE_MAP = {
     ("weird", "occult"): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
@@ -171,18 +170,12 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
         text = text.replace("[lastStop]", places[-1]["name"])
     return text
 
-
-
-
-
 # Set up Secret Manager
 
 # Set up Firestore
 
 
 # Load Google Maps API 
-
-
 
 app = FastAPI()
 
@@ -284,7 +277,6 @@ async def generate_quest(
             })
         except Exception as e:
             print("Skipping place", e)
-
     candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
     selected = []
@@ -356,12 +348,12 @@ async def generate_quest(
         }
         for leg in legs
     ]
-
     tag_set = set()
     for p in ordered:
         tag_set.update(p.get("tags", []))
 
     gen_method = "gpt" if openai.api_key else "template"
+
 
     quest_obj = {
         "questText": quest_text,
@@ -1575,7 +1567,7 @@ async def link_quest_to_group(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
 
-
+  
 @app.get("/audit-quest-cache")
 async def audit_quest_cache():
     """Return quests with overly long or malformed text."""
