@@ -1,6 +1,21 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { generateQuest } from "../lib/api.js";
+import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium } from "../lib/api.js";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
+
+const _toQuestObj = (doc) => {
+  if (!doc || !doc.fields) return doc;
+  return Object.keys(doc.fields).reduce((acc, k) => {
+    const v = doc.fields[k];
+    if (v.stringValue !== undefined) acc[k] = v.stringValue;
+    else if (v.integerValue !== undefined) acc[k] = parseInt(v.integerValue, 10);
+    else if (v.doubleValue !== undefined) acc[k] = v.doubleValue;
+    else if (v.arrayValue) acc[k] = (v.arrayValue.values || []).map(_toQuestObj);
+    else if (v.mapValue) acc[k] = _toQuestObj({ fields: v.mapValue.fields || {} });
+    return acc;
+  }, {});
+};
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import PlaceItem from "./PlaceItem";
 import RouteMap from "./RouteMap";
@@ -26,15 +41,64 @@ const QuestHome = () => {
   const [error, setError] = useState("");
   const [questResult, setQuestResult] = useState(null);
   const [user, setUser] = useState(null);
+  const [premium, setPremium] = useState(false);
+  const [resumeData, setResumeData] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
+      if (firebaseUser) {
+        try {
+          const res = await validatePremium(firebaseUser.uid);
+          setPremium(!!res.premium);
+        } catch (err) {
+          console.error('premium check failed', err);
+        }
+      } else {
+        setPremium(false);
+      }
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const data = await getActiveQuest(user.uid);
+        if (data && data.questId && data.status !== 'completed') {
+          const questDoc = await getQuest(data.questId).catch(() => null);
+          let groupOk = true;
+          if (data.groupId) {
+            const snap = await getDoc(doc(db, 'groups', data.groupId));
+            groupOk = snap.exists() && !snap.data().completed;
+          }
+          if (questDoc && groupOk) {
+            const questObj = _toQuestObj(questDoc);
+            if (Array.isArray(data.trimmedPlaces)) {
+              questObj.places = data.trimmedPlaces;
+            }
+            setResumeData({
+              quest: questObj,
+              groupId: data.groupId,
+              questId: data.questId,
+              status: data.status,
+              usedTimeLimit: data.usedTimeLimit,
+            });
+          } else {
+            if (data.groupId) await leaveGroup(data.groupId, user.uid);
+            setResumeData(null);
+          }
+        } else {
+          setResumeData(null);
+        }
+      } catch (err) {
+        console.error('Failed to load active quest', err);
+      }
+    })();
+  }, [user]);
 
   const handleLogin = async () => {
     const auth = getAuth();
@@ -50,6 +114,11 @@ const QuestHome = () => {
   const handleGenerate = async () => {
     setError("");
     setQuestResult(null);
+
+    if (!premium) {
+      navigate('/quest-plus');
+      return;
+    }
 
     if (!user) {
       setError("You must be signed in to generate a quest.");
@@ -74,6 +143,28 @@ const QuestHome = () => {
     }
   };
 
+  const handleStartQuest = async () => {
+    if (!premium) {
+      navigate('/quest-plus');
+      return;
+    }
+    if (!questResult) return;
+    const questId = `${city}_${mood.join('-')}`;
+    try {
+      const { groupId } = await createGroupQuest(
+        user.uid,
+        questId,
+        user.displayName
+      );
+      navigate('/live', {
+        state: { quest: questResult.quest, questId, groupId, timeLimit },
+      });
+    } catch (err) {
+      console.error('Failed to create group', err);
+      setError('Failed to start group quest');
+    }
+  };
+
   const toggleMood = (selectedMood) => {
     if (mood.includes(selectedMood)) {
       setMood(mood.filter((m) => m !== selectedMood));
@@ -87,6 +178,18 @@ const QuestHome = () => {
   return (
     <div className="min-h-screen bg-[#f8fcf8] px-6 py-8 text-[#0e1b0e] font-sans">
       <h1 className="text-[32px] font-bold mb-6 text-center">Create a New Quest</h1>
+      {resumeData && (
+        <div className="mb-6 text-center">
+          <button
+            onClick={() =>
+              navigate('/live', { state: { quest: resumeData.quest, questId: resumeData.questId, groupId: resumeData.groupId, timeLimit: resumeData.usedTimeLimit } })
+            }
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg"
+          >
+            Resume Quest
+          </button>
+        </div>
+      )}
 
       {!user ? (
         <div className="text-center space-y-4">
@@ -163,18 +266,25 @@ const QuestHome = () => {
               />
 
               <button
-                onClick={() =>
-                  navigate('/live', {
-                    state: {
-                      quest: questResult.quest,
-                      questId: `${city}_${mood.join('-')}`,
-                    },
-                  })
-                }
-                className="mt-4 w-full bg-[#14b714] text-white py-2 rounded-lg font-bold hover:bg-[#0fa50f] transition"
+                onClick={handleStartQuest}
+                disabled={!!resumeData}
+                className={`mt-4 w-full py-2 rounded-lg font-bold transition text-white ${
+                  resumeData ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#14b714] hover:bg-[#0fa50f]'
+                }`}
               >
                 Start Quest
               </button>
+              {!premium && (
+                <p className="text-center text-xs mt-1">
+                  Quest+ required to start quests.{' '}
+                  <a href="/quest-plus" className="text-blue-600 underline">Upgrade</a>
+                </p>
+              )}
+              {resumeData && (
+                <p className="text-center text-sm text-red-600 mt-1">
+                  You have a quest in progress.
+                </p>
+              )}
 
             </div>
           )}
