@@ -9,37 +9,37 @@ const StopMarker = ({ visited, current }) => (
   </div>
 );
 
-export default function LiveQuestMap({ stops = [], visitedIndex = 0, userLocation }) {
+export default function LiveQuestMap({
+  stops = [],
+  visitedIndex = 0,
+  userLocation,
+  polylinePoints = [],
+}) {
   const mapRef = useRef(null);
   const mapsRef = useRef(null);
+  const polyRef = useRef(null);
 
-  const drawRoute = () => {
-    if (!mapRef.current || !mapsRef.current || stops.length < 2) return;
-
-    const directionsService = new mapsRef.current.DirectionsService();
-    const directionsRenderer = new mapsRef.current.DirectionsRenderer({ suppressMarkers: true });
-    directionsRenderer.setMap(mapRef.current);
-
-    directionsService.route(
-      {
-        origin: stops[0],
-        destination: stops[stops.length - 1],
-        waypoints: stops.slice(1, -1).map((s) => ({ location: s })),
-        travelMode: mapsRef.current.TravelMode.WALKING,
-      },
-      (result, status) => {
-        if (status === "OK") {
-          directionsRenderer.setDirections(result);
-        } else {
-          console.error("Directions request failed due to " + status);
-        }
-      }
-    );
+  const drawPolyline = () => {
+    if (!mapRef.current || !mapsRef.current) return;
+    if (polyRef.current) {
+      polyRef.current.setMap(null);
+      polyRef.current = null;
+    }
+    if (!polylinePoints.length) return;
+    const path = polylinePoints.map((p) => new mapsRef.current.LatLng(p.lat, p.lng));
+    polyRef.current = new mapsRef.current.Polyline({
+      path,
+      geodesic: true,
+      strokeColor: "#019863",
+      strokeOpacity: 0.9,
+      strokeWeight: 5,
+    });
+    polyRef.current.setMap(mapRef.current);
   };
 
   useEffect(() => {
-    drawRoute();
-  }, [stops]);
+    drawPolyline();
+  }, [polylinePoints]);
 
   const center = userLocation || stops[0];
 
@@ -53,7 +53,7 @@ export default function LiveQuestMap({ stops = [], visitedIndex = 0, userLocatio
         onGoogleApiLoaded={({ map, maps }) => {
           mapRef.current = map;
           mapsRef.current = maps;
-          drawRoute();
+          drawPolyline();
         }}
       >
         {userLocation && <UserMarker lat={userLocation.lat} lng={userLocation.lng} />}
