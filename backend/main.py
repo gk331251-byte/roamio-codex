@@ -900,7 +900,7 @@ async def complete_group_quest(payload: dict = Body(...)):
 
     return {"status": "completed"}
 
-
+  
 @app.get("/active-quest/{user_id}")
 async def get_active_quest(user_id: str):
     """Return the current active quest doc for the user."""
@@ -1015,3 +1015,4 @@ async def get_community_quests():
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
+
