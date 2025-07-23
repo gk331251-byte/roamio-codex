@@ -35,12 +35,13 @@ export async function generateQuest(city, mood, timeLimit, token) {
   return await response.json();
 }
 
-export async function completeQuest(userId, questId, questData) {
+export async function completeQuest(userId, questId, data) {
   const url = `${BASE_URL}/quest-complete`;
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId, questId, questData })
+    body: JSON.stringify({ userId, questId, ...data })
+
   });
   if (!resp.ok) {
     throw new Error('Failed to save quest');

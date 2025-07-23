@@ -269,11 +269,75 @@ def _decode_document(doc: dict) -> dict:
 
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
+    """Finalize a quest and award XP."""
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
-    quest_data = payload.get("questData")
+    if not user_id or not quest_id:
+        return {"error": "userId and questId required"}
 
-    print("/quest-complete payload:", payload)
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+
+    # Quest fields
+    quest_doc = {
+        "title": payload.get("title"),
+        "city": payload.get("city"),
+        "mood": payload.get("mood"),
+        "difficulty": payload.get("difficulty"),
+        "questText": payload.get("questText"),
+        "locationList": payload.get("locationList", []),
+        "imagePrompt": payload.get("imagePrompt"),
+        "imageUrl": payload.get("imageUrl"),
+        "visitedIndices": payload.get("visitedIndices", []),
+        "completed": True,
+        "completedAt": timestamp,
+    }
+
+    # Save quest under user_quests/{userId}/quests/{questId}
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # Fetch current user doc
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, user_url)
+    user_data = {}
+    if resp.status_code == 200:
+        user_data = _decode_document(resp.json())
+
+    xp = user_data.get("xp", 0) + 50
+    stats = user_data.get("stats", {})
+    badges = user_data.get("badges", {})
+    stats["totalQuestsCompleted"] = stats.get("totalQuestsCompleted", 0) + 1
+    stats["totalXP"] = stats.get("totalXP", 0) + 50
+
+    if stats.get("totalQuestsCompleted", 0) >= 5:
+        badges["explorer"] = True
+
+    user_body = {
+        "fields": _encode_fields(
+            {
+                "xp": xp,
+                "stats": stats,
+                "badges": badges,
+                "lastActive": timestamp,
+            }
+        )
+    }
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "completed", "newXP": xp, "badges": badges}
+
 
     if not all([user_id, quest_id, quest_data]):
         return {"error": "userId, questId and questData required"}
@@ -558,7 +622,6 @@ async def track_visit(payload: dict = Body(...)):
         resp.raise_for_status()
 
     return {"status": "ok", "visitedIndices": visited, "xp": xp, "badges": badges}
-
 
 
 @app.post("/upload-postcard")
