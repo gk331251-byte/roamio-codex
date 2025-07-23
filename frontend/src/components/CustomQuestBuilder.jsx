@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getAuth } from 'firebase/auth';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { createCustomQuest, createGroupQuest, validatePremium, publishCustomQuest } from '../lib/api';
 
 const moodOptions = [
@@ -32,16 +32,26 @@ export default function CustomQuestBuilder() {
     { name: '', placeId: '', lat: null, lng: null, duration: 10 },
   ]);
   const [publishLink, setPublishLink] = useState('');
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
     const auth = getAuth();
-    const u = auth.currentUser;
-    setUser(u);
-    if (!u) return;
-    validatePremium(u.uid)
-      .then((r) => setPremium(!!r.premium))
-      .catch(() => setPremium(false));
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        try {
+          const r = await validatePremium(u.uid);
+          setPremium(!!r.premium);
+        } catch (err) {
+          console.error('premium check failed', err);
+          setPremium(false);
+        }
+      } else {
+        setPremium(false);
+      }
+    });
+    return () => unsub();
   }, []);
 
   useEffect(() => {
@@ -87,6 +97,7 @@ export default function CustomQuestBuilder() {
     if (!premium) return navigate('/quest-plus');
     if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
+      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
       const res = await createCustomQuest({
         user_id: user.uid,
         title,
@@ -106,14 +117,15 @@ export default function CustomQuestBuilder() {
       const group = await createGroupQuest(user.uid, questId, user.displayName);
       navigate('/live', { state: { quest, questId, groupId: group.groupId, timeLimit } });
     } catch (err) {
-      console.error('custom quest failed', err);
-      alert('Failed to start custom quest');
+      console.error('❌ API error:', err);
+      setError('Something went wrong starting custom quest.');
     }
   };
 
   const handleSaveDraft = async () => {
     if (!user) return alert('Login required');
     try {
+      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
       await createCustomQuest({
         user_id: user.uid,
         title,
@@ -131,7 +143,8 @@ export default function CustomQuestBuilder() {
       });
       alert('Draft saved!');
     } catch (err) {
-      console.error('save draft failed', err);
+      console.error('❌ API error:', err);
+      setError('Failed to save draft');
     }
   };
 
@@ -139,6 +152,7 @@ export default function CustomQuestBuilder() {
     if (!user) return alert('Login required');
     if (!premium) return navigate('/quest-plus');
     try {
+      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
       const res = await createCustomQuest({
         user_id: user.uid,
         title,
@@ -157,8 +171,8 @@ export default function CustomQuestBuilder() {
       await publishCustomQuest(user.uid, res.questId);
       setPublishLink(`${window.location.origin}/q/${res.questId}`);
     } catch (err) {
-      console.error('publish failed', err);
-      alert('Failed to publish quest');
+      console.error('❌ API error:', err);
+      setError('Failed to publish quest');
     }
   };
 
@@ -302,6 +316,7 @@ export default function CustomQuestBuilder() {
             </a>
           </p>
         )}
+        {error && <p className="text-red-600 text-sm text-center">{error}</p>}
       </div>
     </div>
   );

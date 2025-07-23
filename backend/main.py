@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Query, Body, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
@@ -287,6 +288,14 @@ async def generate_quest(
 
     preferred = get_user_preferred_tags(user_id) if user_id else []
 
+    usage_count = 0
+    user_is_premium = False
+    if user_id:
+        usage_count = await get_daily_usage(user_id)
+        user_is_premium = await check_premium(user_id)
+        if not user_is_premium and usage_count >= 3:
+            return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
+
     try:
         geocode = gmaps.geocode(city)
         city_location = geocode[0]["geometry"]["location"]
@@ -448,6 +457,8 @@ async def generate_quest(
     }
 
     save_quest_to_firestore(hash_key, quest_obj)
+    if user_id:
+        await increment_daily_usage(user_id)
     return {"quest": quest_obj}
 
 
@@ -498,6 +509,49 @@ def _from_value(val):
 
 def _decode_document(doc: dict) -> dict:
     return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
+
+
+async def check_premium(user_id: str) -> bool:
+    """Return True if the user has premium status."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+        return fields.get("premium") is True
+    return False
+
+
+async def get_daily_usage(user_id: str) -> int:
+    """Retrieve today's quest generation count for the user."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        return int(doc.get("count", 0))
+    return 0
+
+
+async def increment_daily_usage(user_id: str) -> int:
+    """Increment and return today's quest generation count."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    count = 0
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        count = int(doc.get("count", 0))
+    count += 1
+    body = {"fields": _encode_fields({"count": count})}
+    await asyncio.to_thread(rest_session.patch, url, json=body)
+    return count
 
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
@@ -1378,58 +1432,68 @@ async def create_custom_quest(payload: dict = Body(...)):
     """Store a manually crafted quest."""
     user_id = payload.get("user_id")
     places = payload.get("places", [])
+    print(f"🛠️ Received custom quest request from {user_id}")
+    print(f"📦 Payload: {payload}")
     if not user_id or len(places) < 2:
         return {"error": "user_id and at least 2 places required"}
 
-    project_id = creds.project_id
-    quest_id = hashlib.sha1(
-        f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
-    ).hexdigest()[:12]
+    is_premium = await check_premium(user_id)
+    if not is_premium:
+        return JSONResponse(status_code=403, content={"error": "Premium required"})
 
-    status = payload.get("status", "draft")
-    public = payload.get("public", False)
+    try:
+        project_id = creds.project_id
+        quest_id = hashlib.sha1(
+            f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
+        ).hexdigest()[:12]
 
-    quest_doc = {
-        "title": payload.get("title") or "Custom Quest",
-        "moodTags": payload.get("mood_tags", []),
-        "places": places,
-        "timeLimit": payload.get("time_limit", 60),
-        "customPrompt": payload.get("custom_prompt") or "",
-        "createdBy": user_id,
-        "createdAt": datetime.utcnow().isoformat(),
-        "type": "custom",
-        "status": status,
-        "public": public,
-        "likesCount": 0,
-        "viewsCount": 0,
-        "replaysCount": 0,
-    }
-    if status == "published" or public:
-        quest_doc["publishedAt"] = datetime.utcnow().isoformat()
+        status = payload.get("status", "draft")
+        public = payload.get("public", False)
 
-    body = {"fields": _encode_fields(quest_doc)}
+        quest_doc = {
+            "title": payload.get("title") or "Custom Quest",
+            "moodTags": payload.get("mood_tags", []),
+            "places": places,
+            "timeLimit": payload.get("time_limit", 60),
+            "customPrompt": payload.get("custom_prompt") or "",
+            "createdBy": user_id,
+            "createdAt": datetime.utcnow().isoformat(),
+            "type": "custom",
+            "status": status,
+            "public": public,
+            "likesCount": 0,
+            "viewsCount": 0,
+            "replaysCount": 0,
+        }
+        if status == "published" or public:
+            quest_doc["publishedAt"] = datetime.utcnow().isoformat()
 
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-    )
-    resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+        body = {"fields": _encode_fields(quest_doc)}
 
-    global_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
-    await asyncio.to_thread(rest_session.patch, global_url, json=body)
-
-    group_id = payload.get("group_id")
-    if group_id:
-        g_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
+        user_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
         )
-        await asyncio.to_thread(rest_session.patch, g_url, json=body)
+        resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            resp.raise_for_status()
 
-    return {"questId": quest_id, "quest": quest_doc}
+        global_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+        )
+        await asyncio.to_thread(rest_session.patch, global_url, json=body)
+
+        group_id = payload.get("group_id")
+        if group_id:
+            g_url = (
+                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
+            )
+            await asyncio.to_thread(rest_session.patch, g_url, json=body)
+
+        return {"questId": quest_id, "quest": quest_doc}
+    except Exception as e:
+        print("create_custom_quest error", e)
+        return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
 
 
 @app.get("/get-custom-quest/{quest_id}")
