@@ -262,7 +262,8 @@ async def complete_quest(payload: dict = Body(...)):
         "userId": user_id,
         "questId": quest_id,
         "questData": quest_data,
-        "completedAt": timestamp,
+        "generatedAt": timestamp,
+        "completedAt": timestamp
     }
     quest_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
@@ -284,6 +285,7 @@ async def complete_quest(payload: dict = Body(...)):
         resp.raise_for_status()
 
     return {"status": "Quest saved!"}
+
 
 @app.get("/places")
 def get_places(city: str = Query(...)):
@@ -362,7 +364,6 @@ def test_write():
         return {"status": "Document written!"}
     print("Firestore REST error", resp.text)
     resp.raise_for_status()
-
 @app.get("/get-user-quests/{user_id}")
 async def get_user_quests(user_id: str):
     """Fetch completed quests for a user via Firestore REST."""
