@@ -18,7 +18,7 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv("GOOGLE_APPLICATION_CRE
 
 
 
-
+#
 # Firestore setup
 db = firestore.Client()
 
