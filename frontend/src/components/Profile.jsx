@@ -54,7 +54,14 @@ const Profile = () => {
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
         {stats.longest > 0 && <p>Longest quest: {stats.longest} stops</p>}
       </div>
-      <PostcardGallery />
+      {premium ? (
+        <PostcardGallery />
+      ) : (
+        <div className="text-center space-y-2">
+          <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
+          <a href="/quest-plus" className="text-blue-600 underline">Upgrade to Quest+</a>
+        </div>
+      )}
     </div>
   );
 };

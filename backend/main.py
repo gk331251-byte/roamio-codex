@@ -54,8 +54,9 @@ creds = service_account.Credentials.from_service_account_file(
 rest_session = AuthorizedSession(creds)
 
 
-def generate_hash_key(city, mood):
-    key_str = f"{city.strip().lower()}_{mood.strip().lower()}"
+def generate_hash_key(*parts: str) -> str:
+    """Generate a deterministic cache key from string parts."""
+    key_str = "_".join(p.strip().lower() for p in parts if p)
     return hashlib.sha256(key_str.encode()).hexdigest()
 
 def get_cached_quest(hash_key):
@@ -76,6 +77,77 @@ def save_quest_to_firestore(hash_key, quest_obj):
     if response.status_code != 200:
         print("Firestore REST Error:", response.text)
         response.raise_for_status()
+
+
+def get_cached_place(place_id: str) -> dict | None:
+    """Retrieve a cached place with tags."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        return _decode_document(resp.json())
+    return None
+
+
+def save_place_to_cache(place_id: str, data: dict):
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
+    body = {"fields": _encode_fields(data)}
+    resp = rest_session.patch(url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+
+def get_user_preferred_tags(user_id: str) -> list[str]:
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        if isinstance(doc.get("preferredTags"), list):
+            return doc.get("preferredTags")
+    return []
+
+
+CHAIN_KEYWORDS = [
+    "starbucks",
+    "mcdonald",
+    "chipotle",
+    "subway",
+    "dunkin",
+    "walmart",
+    "target",
+]
+
+
+def compute_place_tags(place: dict, details: dict | None = None) -> list[str]:
+    """Assign tags using simple heuristic rules."""
+    tags = set()
+    for t in place.get("types", []):
+        tags.add(t.replace("_", "-"))
+    name = place.get("name", "").lower()
+    if any(k in name for k in ["brew", "bar", "tap"]):
+        tags.add("bar")
+    if any(k in name for k in ["occult", "witch", "dark"]):
+        tags.update(["occult", "weird"])
+    rating = place.get("rating")
+    if isinstance(rating, (int, float)) and rating >= 4.5:
+        tags.add("local-fave")
+    if details:
+        periods = details.get("result", {}).get("opening_hours", {}).get("periods", [])
+        for p in periods:
+            close = p.get("close", {})
+            time = close.get("time")
+            if time and int(time[:2]) >= 22:
+                tags.add("open-late")
+                break
+    return list(tags)
+
+
+def is_chain(name: str) -> bool:
+    lower = name.lower()
+    return any(k in lower for k in CHAIN_KEYWORDS)
 
 
 
@@ -115,18 +187,16 @@ def read_root():
 @app.post("/generate-quest")
 async def generate_quest(
     city: str = Body(...),
-    moods: list[str] = Body(...),  # Now directly accepts a list
+    moods: list[str] = Body(...),
     time_limit: int = Body(...),
     token: str = Body(...),
+    user_id: str | None = Body(None),
 ):
+    """Generate a quest using tag-based filtering and optional GPT text."""
     if not city or not moods:
         return {"error": "City and mood list are required."}
 
-    hash_key = generate_hash_key(city, "_".join(moods))
-    cached = get_cached_quest(hash_key)
-    if cached:
-        print("Using cached quest")
-        return {"quest": cached}
+    preferred = get_user_preferred_tags(user_id) if user_id else []
 
     try:
         geocode = gmaps.geocode(city)
@@ -135,40 +205,82 @@ async def generate_quest(
         print(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
 
+    loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
+    tag_combo = "-".join(sorted(preferred)) if preferred else "none"
+    hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
+    cached = get_cached_quest(hash_key)
+    if cached:
+        print("Using cached quest")
+        return {"quest": cached}
+
     try:
         response = gmaps.places_nearby(
             location=(city_location["lat"], city_location["lng"]),
-            radius=5000,
-            type="tourist_attraction"
+            radius=2000,
+            type="tourist_attraction",
         )
-        places_results = response.get("results", [])[:15]
+        places_results = response.get("results", [])
     except Exception as e:
         print(f"Places API error: {e}")
         return {"error": "Failed to fetch places"}
 
-    all_places = []
+    candidates = []
     for place in places_results:
         try:
-            loc = place["geometry"]["location"]
             name = place.get("name")
-            lat = float(loc["lat"])
-            lng = float(loc["lng"])
-            type_ = place.get("types", ["Unknown"])[0]
-            if name and lat and lng:
-                all_places.append({"name": name, "type": type_, "lat": lat, "lng": lng})
+            if not name or is_chain(name):
+                continue
+            pid = place.get("place_id")
+            cached_place = get_cached_place(pid) if pid else None
+            details = None
+            if not cached_place and pid:
+                try:
+                    details = gmaps.place(pid)
+                except Exception:
+                    details = None
+            tags = (
+                cached_place.get("tags") if cached_place else compute_place_tags(place, details)
+            )
+            if not cached_place and pid:
+                save_place_to_cache(pid, {"tags": tags, "name": name})
+            if preferred:
+                overlap = len(set(tags) & set(preferred))
+            else:
+                overlap = 1
+            if overlap <= 0:
+                continue
+            loc = place["geometry"]["location"]
+            typ = place.get("types", ["Unknown"])[0]
+            candidates.append({
+                "name": name,
+                "type": typ,
+                "lat": float(loc["lat"]),
+                "lng": float(loc["lng"]),
+                "tags": tags,
+                "score": overlap,
+                "rating": place.get("rating", 0),
+            })
         except Exception as e:
-            print(f"Skipping place: {e}")
+            print("Skipping place", e)
 
-    quest_data = generate_filtered_quest_payload(all_places, moods, time_limit)
-    filtered_places = quest_data["filtered_places"]
-    difficulty = quest_data["difficulty"]
+    candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
-    if len(filtered_places) < 2:
-        return {"error": "Filtered results too low. Try different moods."}
+    selected = []
+    seen_types = set()
+    for c in candidates:
+        if c["type"] in seen_types:
+            continue
+        selected.append(c)
+        seen_types.add(c["type"])
+        if len(selected) >= 5:
+            break
 
-    origin = f"{filtered_places[0]['lat']},{filtered_places[0]['lng']}"
-    destination = f"{filtered_places[-1]['lat']},{filtered_places[-1]['lng']}"
-    waypoints = [f"{p['lat']},{p['lng']}" for p in filtered_places[1:-1]]
+    if len(selected) < 3:
+        return {"error": "Not enough matching places"}
+
+    origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+    destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
+    waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
 
     try:
         directions = gmaps.directions(
@@ -176,10 +288,10 @@ async def generate_quest(
             destination,
             waypoints=waypoints,
             optimize_waypoints=True,
-            mode="walking"
+            mode="walking",
         )
     except Exception as e:
-        print(f"Directions error: {e}")
+        print("Directions error", e)
         raise HTTPException(status_code=500, detail="Failed to retrieve directions")
 
     route = directions[0]
@@ -187,45 +299,55 @@ async def generate_quest(
     legs = route.get("legs", [])
     polyline = route.get("overview_polyline", {}).get("points", "")
 
-    ordered_places = [filtered_places[0]] + [filtered_places[i+1] for i in waypoint_order] + [filtered_places[-1]]
+    ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
+    place_names = ", ".join([p["name"] for p in ordered])
 
-    places_summary = ", ".join([p["name"] for p in ordered_places])
-    prompt = f"""Write a short and fun quest (3–5 sentences max) for exploring {city}. Style: {', '.join(moods)}. Include 3–5 specific local places from this list: {places_summary}. Format as a single paragraph. No titles, no list items. Avoid repetition. Be playful."""
-
-    try:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a quest designer for a real-world RPG."},
-                {"role": "user", "content": prompt}
-            ]
+    if openai.api_key:
+        prompt = (
+            f"Write a short playful quest including these places: {place_names}. "
+            f"Keep it under 300 tokens. Style: {', '.join(moods)}"
         )
-        quest_text = completion.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"OpenAI error: {e}")
-        return {"error": "Failed to generate quest text."}
+        try:
+            completion = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            quest_text = completion.choices[0].message.content.strip()
+        except Exception as e:
+            print("OpenAI error", e)
+            quest_text = (
+                f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
+                f"and ends at {ordered[-1]['name']}!"
+            )
+    else:
+        quest_text = (
+            f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
+            f"and ends at {ordered[-1]['name']}!"
+        )
 
-    route_legs = []
-    for leg in legs:
-        route_legs.append({
+    route_legs = [
+        {
             "start": leg["start_address"],
             "end": leg["end_address"],
             "distance": leg["distance"]["text"],
-            "duration": leg["duration"]["text"]
-        })
+            "duration": leg["duration"]["text"],
+        }
+        for leg in legs
+    ]
 
     quest_obj = {
         "questText": quest_text,
-        "places": ordered_places,
-        "difficulty": difficulty,
+        "places": ordered,
+        "difficulty": "Easy",
         "route": {
             "legs": route_legs,
             "polyline": polyline,
             "total_distance": route["legs"][-1]["distance"]["text"],
-            "total_duration": route["legs"][-1]["duration"]["text"]
+            "total_duration": route["legs"][-1]["duration"]["text"],
         },
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
+
     save_quest_to_firestore(hash_key, quest_obj)
     return {"quest": quest_obj}
 
@@ -346,6 +468,28 @@ async def complete_quest(payload: dict = Body(...)):
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
+
+    if payload.get("public"):
+        feed_id = f"{quest_id}_{user_id}"
+        feed_doc = {
+            "city": payload.get("city"),
+            "mood": payload.get("mood"),
+            "displayName": payload.get("displayName"),
+            "imageUrl": payload.get("imageUrl"),
+            "questText": payload.get("questText"),
+            "completedAt": timestamp,
+            "userId": user_id,
+            "questId": quest_id,
+            "title": payload.get("title"),
+        }
+        feed_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{feed_id}"
+        )
+        feed_body = {"fields": _encode_fields(feed_doc)}
+        fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
+        if fr.status_code != 200:
+            print("Firestore REST error", fr.text)
+            fr.raise_for_status()
 
     return {"status": "completed", "newXP": xp, "badges": badges}
 
@@ -549,6 +693,8 @@ async def get_user_quests(userId: str = Query(...)):
         if not doc:
             continue
         obj = _decode_document(doc)
+        if obj.get("visible") is False:
+            continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
@@ -666,12 +812,6 @@ async def reroll_quest(payload: dict = Body(...)):
     return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
 
 
-@app.get("/validate-premium/{user_id}")
-async def validate_premium(user_id: str):
-    """Mock premium validation."""
-    return {"premium": True}
-
-
 @app.post("/get-directions")
 async def get_directions(payload: dict = Body(...)):
     """Return mocked directions data for a list of places."""
@@ -698,4 +838,707 @@ async def get_directions(payload: dict = Body(...)):
         ],
         "totalTime": "22 mins",
     }
+
+
+@app.post("/create-group-quest")
+async def create_group_quest(payload: dict = Body(...)):
+    """Create a shared group quest and set user active state."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    display_name = payload.get("displayName")
+    if not user_id or not quest_id:
+        return {"error": "userId and questId required"}
+
+    project_id = creds.project_id
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_resp = await asyncio.to_thread(rest_session.get, active_url)
+    if active_resp.status_code == 200:
+        active_fields = _decode_document(active_resp.json())
+        if active_fields.get("status") != "completed":
+            return {"error": "active quest already"}
+
+    group_id = hashlib.sha1(f"{user_id}-{quest_id}-{datetime.utcnow()}".encode()).hexdigest()[:8]
+
+    member_entry = {"userId": user_id, "displayName": display_name or user_id}
+    group_doc = {
+        "questId": quest_id,
+        "members": [member_entry],
+        "progress": {user_id: []},
+        "invitedBy": user_id,
+        "completed": False,
+        "createdAt": datetime.utcnow().isoformat(),
+    }
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    body = {"fields": _encode_fields(group_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, group_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    active_doc = {
+        "groupId": group_id,
+        "questId": quest_id,
+        "status": "active",
+        "visitedStops": [],
+        "startedAt": datetime.utcnow().isoformat(),
+    }
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_body = {"fields": _encode_fields(active_doc)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"groupId": group_id}
+
+
+@app.post("/join-group")
+async def join_group(payload: dict = Body(...)):
+    """Add a user to an existing group quest."""
+    user_id = payload.get("userId")
+    group_id = payload.get("groupId")
+    display_name = payload.get("displayName")
+    if not user_id or not group_id:
+        return {"error": "userId and groupId required"}
+
+    project_id = creds.project_id
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_resp = await asyncio.to_thread(rest_session.get, active_url)
+    if active_resp.status_code == 200:
+        active_fields = _decode_document(active_resp.json())
+        if active_fields.get("status") != "completed" and active_fields.get("groupId") not in (None, group_id):
+            return {"error": "active quest already"}
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    resp = await asyncio.to_thread(rest_session.get, group_url)
+    if resp.status_code != 200:
+        return {"error": "Group not found"}
+    fields = _decode_document(resp.json())
+    if fields.get("completed"):
+        return {"error": "Group completed"}
+
+    members = fields.get("members", [])
+    if not any(m.get("userId") == user_id for m in members):
+        members.append({"userId": user_id, "displayName": display_name or user_id})
+    progress = fields.get("progress", {})
+    if user_id not in progress:
+        progress[user_id] = []
+
+    fields.update({"members": members, "progress": progress})
+    body = {"fields": _encode_fields(fields)}
+    await asyncio.to_thread(rest_session.patch, group_url, json=body)
+
+    active_doc = {
+        "groupId": group_id,
+        "questId": fields.get("questId"),
+        "status": "active",
+        "visitedStops": progress[user_id],
+        "startedAt": datetime.utcnow().isoformat(),
+    }
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_body = {"fields": _encode_fields(active_doc)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"status": "joined", "questId": fields.get("questId")}
+
+
+@app.post("/track-stop-visit")
+async def track_stop_visit(payload: dict = Body(...)):
+    """Track a stop visit for a group quest."""
+    group_id = payload.get("groupId")
+    user_id = payload.get("userId")
+    place_index = payload.get("placeIndex")
+    if group_id is None or user_id is None or place_index is None:
+        return {"error": "groupId, userId and placeIndex required"}
+
+    project_id = creds.project_id
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    resp = await asyncio.to_thread(rest_session.get, group_url)
+    if resp.status_code != 200:
+        return {"error": "Group not found"}
+    fields = _decode_document(resp.json())
+    if fields.get("completed"):
+        return {"error": "Group completed"}
+    if not any(m.get("userId") == user_id for m in fields.get("members", [])):
+        return {"error": "Not a group member"}
+
+    progress = fields.get("progress", {})
+    user_progress = progress.get(user_id, [])
+    if place_index not in user_progress:
+        user_progress.append(place_index)
+        user_progress.sort()
+        progress[user_id] = user_progress
+        fields["progress"] = progress
+        body = {"fields": _encode_fields(fields)}
+        await asyncio.to_thread(rest_session.patch, group_url, json=body)
+
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_resp = await asyncio.to_thread(rest_session.get, active_url)
+    active_fields = {}
+    if active_resp.status_code == 200:
+        active_fields = _decode_document(active_resp.json())
+    active_fields.update({
+        "groupId": group_id,
+        "questId": fields.get("questId"),
+        "status": "active",
+        "visitedStops": user_progress,
+    })
+    active_body = {"fields": _encode_fields(active_fields)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"visitedStops": user_progress}
+
+
+@app.post("/complete-group-quest")
+async def complete_group_quest(payload: dict = Body(...)):
+    """Mark a group quest as completed by a user."""
+    group_id = payload.get("groupId")
+    user_id = payload.get("userId")
+    if not group_id or not user_id:
+        return {"error": "groupId and userId required"}
+
+    project_id = creds.project_id
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    resp = await asyncio.to_thread(rest_session.get, group_url)
+    if resp.status_code != 200:
+        return {"error": "Group not found"}
+    fields = _decode_document(resp.json())
+    if fields.get("completed"):
+        return {"error": "Group already completed"}
+    if not any(m.get("userId") == user_id for m in fields.get("members", [])):
+        return {"error": "Not a group member"}
+    fields["completed"] = True
+    body = {"fields": _encode_fields(fields)}
+    await asyncio.to_thread(rest_session.patch, group_url, json=body)
+
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_fields = {
+        "groupId": group_id,
+        "questId": fields.get("questId"),
+        "status": "completed",
+    }
+    active_body = {"fields": _encode_fields(active_fields)}
+    await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
+
+    return {"status": "completed"}
+
+
+@app.get("/active-quest/{user_id}")
+async def get_active_quest(user_id: str):
+    """Return the current active quest doc for the user."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    active = _decode_document(resp.json())
+
+    quest_ok = True
+    if active.get("questId"):
+        qurl = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{active['questId']}"
+        qresp = await asyncio.to_thread(rest_session.get, qurl)
+        quest_ok = qresp.status_code == 200
+
+    group_ok = True
+    if active.get("groupId"):
+        gurl = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{active['groupId']}"
+        gresp = await asyncio.to_thread(rest_session.get, gurl)
+        if gresp.status_code != 200:
+            group_ok = False
+        else:
+            gdata = _decode_document(gresp.json())
+            group_ok = not gdata.get("completed")
+
+    if not quest_ok or not group_ok:
+        await asyncio.to_thread(rest_session.delete, url)
+        return {}
+
+    return active
+
+
+@app.post("/leave-group")
+async def leave_group(payload: dict = Body(...)):
+    """Remove a user from a group and clear their active quest."""
+    user_id = payload.get("userId")
+    group_id = payload.get("groupId")
+    if not user_id or not group_id:
+        return {"error": "userId and groupId required"}
+
+    project_id = creds.project_id
+    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    resp = await asyncio.to_thread(rest_session.get, group_url)
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+        members = [m for m in fields.get("members", []) if m.get("userId") != user_id]
+        progress = fields.get("progress", {})
+        progress.pop(user_id, None)
+        fields.update({"members": members, "progress": progress})
+        body = {"fields": _encode_fields(fields)}
+        await asyncio.to_thread(rest_session.patch, group_url, json=body)
+
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    await asyncio.to_thread(rest_session.delete, active_url)
+    return {"status": "left"}
+
+
+@app.post("/report-quest")
+async def report_quest(payload: dict = Body(...)):
+    """Receive a quest report and store in Firestore."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    reason = payload.get("reason")
+    if not user_id or not quest_id or not reason:
+        return {"error": "userId, questId and reason required"}
+
+    project_id = creds.project_id
+    doc_id = f"{quest_id}_{user_id}"
+    report = {
+        "userId": user_id,
+        "questId": quest_id,
+        "reason": reason,
+        "city": payload.get("city"),
+        "mood": payload.get("mood"),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_reports/{doc_id}"
+    body = {"fields": _encode_fields(report)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "reported"}
+
+
+@app.get("/get-quest-reports")
+async def get_quest_reports():
+    """Return recent quest reports for admin review."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_reports:runQuery"
+    )
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "quest_reports"}],
+            "orderBy": [{"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}],
+            "limit": 20,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    results = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        obj["id"] = doc["name"].split("/")[-1]
+        results.append(obj)
+    return {"reports": results}
+
+
+@app.post("/toggle-quest-visibility")
+async def toggle_quest_visibility(payload: dict = Body(...)):
+    """Hide or show a community quest."""
+    quest_id = payload.get("questId")
+    user_id = payload.get("userId")
+    visible = payload.get("visible", True)
+    if not quest_id or not user_id:
+        return {"error": "questId and userId required"}
+
+    project_id = creds.project_id
+    doc_id = f"{quest_id}_{user_id}"
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{doc_id}"
+    body = {"fields": _encode_fields({"visible": visible})}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "updated"}
+
+
+@app.get("/get-community-quests")
+async def get_community_quests():
+    """Return recently completed public quests."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests:runQuery"
+    )
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "community_quests"}],
+            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "limit": 20,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    results = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        if obj.get("visible") is False:
+            continue
+        obj["id"] = doc["name"].split("/")[-1]
+        results.append(obj)
+    return {"quests": results}
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(payload: dict = Body(...)):
+    """Return a Stripe Checkout URL or mock URL."""
+    user_id = payload.get("userId")
+    email = payload.get("email")
+    if not user_id or not email:
+        return {"error": "userId and email required"}
+
+    base_url = payload.get("baseUrl", "https://example.com")
+    success = f"{base_url}/payment-success?userId={user_id}&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel = f"{base_url}/payment-failed"
+    stripe_key = os.getenv("STRIPE_SECRET_KEY")
+    if stripe_key:
+        try:
+            import stripe
+            stripe.api_key = stripe_key
+            session = await asyncio.to_thread(
+                stripe.checkout.Session.create,
+                payment_method_types=["card"],
+                mode="payment",
+                line_items=[{"price": os.getenv("STRIPE_PRICE_ID", "price_123"), "quantity": 1}],
+                customer_email=email,
+                success_url=success,
+                cancel_url=cancel,
+            )
+            return {"url": session.url}
+        except Exception as e:
+            print("Stripe error", e)
+            return {"error": "stripe failed"}
+    # Fallback mock URL
+    return {"url": success.replace("{CHECKOUT_SESSION_ID}", "mock")}
+
+
+@app.get("/validate-premium/{user_id}")
+async def validate_premium(user_id: str, session_id: str | None = Query(None)):
+    """Check premium flag and optionally verify checkout session."""
+    project_id = creds.project_id
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, user_url)
+    fields = {}
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+    premium = fields.get("premium") is True
+
+    if not premium and session_id:
+        stripe_key = os.getenv("STRIPE_SECRET_KEY")
+        if stripe_key and session_id != "mock":
+            try:
+                import stripe
+                stripe.api_key = stripe_key
+                sess = await asyncio.to_thread(stripe.checkout.Session.retrieve, session_id)
+                premium = sess.get("payment_status") == "paid"
+            except Exception as e:
+                print("Stripe verify error", e)
+                premium = False
+        elif session_id == "mock":
+            premium = True
+        if premium:
+            fields["premium"] = True
+            body = {"fields": _encode_fields(fields)}
+            await asyncio.to_thread(rest_session.patch, user_url, json=body)
+
+    return {"premium": premium}
+
+
+@app.post("/update-active-quest")
+async def update_active_quest(payload: dict = Body(...)):
+    """Patch the user's active quest document with extra data."""
+    user_id = payload.get("userId")
+    data = payload.get("data")
+    if not user_id or not isinstance(data, dict):
+        return {"error": "userId and data required"}
+
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    fields = {}
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+    fields.update(data)
+    body = {"fields": _encode_fields(fields)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "updated"}
+
+
+@app.post("/create-custom-quest")
+async def create_custom_quest(payload: dict = Body(...)):
+    """Store a manually crafted quest."""
+    user_id = payload.get("user_id")
+    places = payload.get("places", [])
+    if not user_id or len(places) < 2:
+        return {"error": "user_id and at least 2 places required"}
+
+    project_id = creds.project_id
+    quest_id = hashlib.sha1(
+        f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
+    ).hexdigest()[:12]
+
+    status = payload.get("status", "draft")
+    public = payload.get("public", False)
+
+    quest_doc = {
+        "title": payload.get("title") or "Custom Quest",
+        "moodTags": payload.get("mood_tags", []),
+        "places": places,
+        "timeLimit": payload.get("time_limit", 60),
+        "customPrompt": payload.get("custom_prompt") or "",
+        "createdBy": user_id,
+        "createdAt": datetime.utcnow().isoformat(),
+        "type": "custom",
+        "status": status,
+        "public": public,
+        "likesCount": 0,
+        "viewsCount": 0,
+        "replaysCount": 0,
+    }
+    if status == "published" or public:
+        quest_doc["publishedAt"] = datetime.utcnow().isoformat()
+
+    body = {"fields": _encode_fields(quest_doc)}
+
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    global_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    await asyncio.to_thread(rest_session.patch, global_url, json=body)
+
+    group_id = payload.get("group_id")
+    if group_id:
+        g_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
+        )
+        await asyncio.to_thread(rest_session.patch, g_url, json=body)
+
+    return {"questId": quest_id, "quest": quest_doc}
+
+
+@app.get("/get-custom-quest/{quest_id}")
+async def get_custom_quest(quest_id: str):
+    """Fetch a custom quest by ID."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
+@app.post("/publish-custom-quest")
+async def publish_custom_quest(payload: dict = Body(...)):
+    """Mark a custom quest as public and published."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    patch_fields = {
+        "status": "published",
+        "public": True,
+        "publishedAt": datetime.utcnow().isoformat(),
+    }
+    body = {"fields": _encode_fields(patch_fields)}
+
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    global_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    for url in (user_url, global_url):
+        resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            resp.raise_for_status()
+
+    return {"status": "published"}
+
+
+@app.post("/like-quest")
+async def like_quest(payload: dict = Body(...)):
+    """Record a quest like and increment counter."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    like_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{quest_id}/{user_id}"
+    )
+    body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
+    resp = await asyncio.to_thread(rest_session.patch, like_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    qresp = await asyncio.to_thread(rest_session.get, quest_url)
+    if qresp.status_code == 200:
+        data = _decode_document(qresp.json())
+        count = data.get("likesCount", 0) + 1
+        patch = {"fields": _encode_fields({"likesCount": count})}
+        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    return {"status": "liked"}
+
+
+@app.post("/view-quest")
+async def view_quest(payload: dict = Body(...)):
+    """Record a unique quest view."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    view_doc = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{quest_id}/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, view_doc)
+    if resp.status_code == 404:
+        body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
+        await asyncio.to_thread(rest_session.patch, view_doc, json=body)
+
+        quest_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+        )
+        qresp = await asyncio.to_thread(rest_session.get, quest_url)
+        if qresp.status_code == 200:
+            data = _decode_document(qresp.json())
+            count = data.get("viewsCount", 0) + 1
+            patch = {"fields": _encode_fields({"viewsCount": count})}
+            await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    return {"status": "viewed"}
+
+
+@app.post("/replay-quest")
+async def replay_quest(payload: dict = Body(...)):
+    """Increment replay counter for a quest."""
+    quest_id = payload.get("quest_id")
+    if not quest_id:
+        return {"error": "quest_id required"}
+
+    project_id = creds.project_id
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    qresp = await asyncio.to_thread(rest_session.get, quest_url)
+    if qresp.status_code == 200:
+        data = _decode_document(qresp.json())
+        count = data.get("replaysCount", 0) + 1
+        patch = {"fields": _encode_fields({"replaysCount": count})}
+        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    return {"status": "replayed"}
+
+
+@app.post("/create-community-group")
+async def create_community_group(payload: dict = Body(...)):
+    """Create a new community group."""
+    name = payload.get("name")
+    creator = payload.get("creator")
+    if not name or not creator:
+        return {"error": "name and creator required"}
+
+    project_id = creds.project_id
+    group_id = hashlib.sha1(f"{name}-{datetime.utcnow()}".encode()).hexdigest()[:10]
+    doc = {
+        "name": name,
+        "creator": creator,
+        "description": payload.get("description", ""),
+        "tags": payload.get("tags", []),
+        "imageUrl": payload.get("imageUrl", ""),
+        "members": [creator],
+        "linked_quests": [],
+        "createdAt": datetime.utcnow().isoformat(),
+    }
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
+    )
+    body = {"fields": _encode_fields(doc)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"groupId": group_id}
+
+
+@app.post("/join-community-group")
+async def join_community_group(payload: dict = Body(...)):
+    group_id = payload.get("group_id")
+    user_id = payload.get("user_id")
+    if not group_id or not user_id:
+        return {"error": "group_id and user_id required"}
+
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "group not found"}
+    data = _decode_document(resp.json())
+    members = data.get("members", [])
+    if user_id not in members:
+        members.append(user_id)
+        data["members"] = members
+        body = {"fields": _encode_fields(data)}
+        await asyncio.to_thread(rest_session.patch, url, json=body)
+    return {"status": "joined"}
+
+
+@app.post("/link-quest-to-group")
+async def link_quest_to_group(payload: dict = Body(...)):
+    group_id = payload.get("group_id")
+    quest_id = payload.get("quest_id")
+    upcoming = payload.get("upcoming", False)
+    if not group_id or not quest_id:
+        return {"error": "group_id and quest_id required"}
+
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "group not found"}
+    data = _decode_document(resp.json())
+    linked = data.get("linked_quests", [])
+    if quest_id not in linked:
+        linked.append(quest_id)
+    if upcoming:
+        data["upcoming_quest"] = quest_id
+    data["linked_quests"] = linked
+    body = {"fields": _encode_fields(data)}
+    await asyncio.to_thread(rest_session.patch, url, json=body)
+    return {"status": "linked"}
+
 
