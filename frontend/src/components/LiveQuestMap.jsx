@@ -20,6 +20,7 @@ const StopMarker = ({ visited, current, final, name }) => {
   );
 };
 
+
 export default function LiveQuestMap({
   stops = [],
   visitedIndex = 0,
@@ -67,6 +68,7 @@ export default function LiveQuestMap({
     const target = stops[visitedIndex] || stops[stops.length - 1];
     mapRef.current.panTo(target);
   }, [visitedIndex, stops]);
+
 
   const center = userLocation || stops[0];
 

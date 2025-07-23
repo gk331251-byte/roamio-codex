@@ -49,6 +49,7 @@ export default function QuestLivePage() {
   useEffect(() => {
     if (!quest) return;
     const questStops = quest.places.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name }));
+
     setStops(questStops);
   }, [quest]);
 
@@ -75,6 +76,7 @@ export default function QuestLivePage() {
           ordered.push(quest.places[quest.places.length - 1]);
           setStops(
             ordered.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name }))
+
           );
           try {
             const auth = getAuth();
@@ -100,6 +102,39 @@ export default function QuestLivePage() {
 
   // Join group and listen for progress
   useEffect(() => {
+    if (groupId) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
+    let prev = null;
+    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+      const data = snap.data();
+      if (!data) return;
+      setGroupData(data);
+      if (data.progress && data.progress[user.uid]) {
+        setVisitedIndices(data.progress[user.uid]);
+      }
+      if (prev && data.progress) {
+        Object.keys(data.progress).forEach((uid) => {
+          if (uid === user.uid) return;
+          const before = (prev.progress?.[uid] || []).length;
+          const after = (data.progress[uid] || []).length;
+          if (after > before) {
+            const member = data.members?.find((m) => m.userId === uid);
+            setActivityMsg(`${member?.displayName || uid} visited stop ${after}`);
+            setTimeout(() => setActivityMsg(''), 3000);
+          }
+        });
+      }
+      prev = data;
+    });
+    return () => unsub();
+  }, [groupId]);
+
+  // Load personal progress when not in group
+  useEffect(() => {
+    if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user || !groupId) return;
@@ -253,6 +288,83 @@ export default function QuestLivePage() {
     }
 
   };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
 
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
@@ -361,6 +473,7 @@ export default function QuestLivePage() {
                 <button
                   onClick={handleLeave}
                   className="h-10 px-4 rounded-full bg-red-500 text-sm text-white"
+
                 >
                   Leave Group
                 </button>
@@ -368,6 +481,7 @@ export default function QuestLivePage() {
               <button
                 onClick={() => window.location.assign('/home')}
                 className="h-10 px-4 rounded-full bg-[#e7f3e7] text-sm text-[#0e1b0e]"
+
               >
                 Back to Home
               </button>
