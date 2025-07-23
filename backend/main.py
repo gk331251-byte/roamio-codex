@@ -28,9 +28,9 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY");
+gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY") or "AIzaSyAnKnr4-l4zDeWqLhR5_6xIltr_aXRH6lQ"
 try:
-    gmaps = googlemaps.Client(key=gmaps_key)
+    gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
 except Exception as e:
     print("Google Maps disabled:", e);
     gmaps = None
@@ -59,15 +59,24 @@ def generate_hash_key(city, mood):
     return hashlib.sha256(key_str.encode()).hexdigest()
 
 def get_cached_quest(hash_key):
-    doc_ref = db.collection("quests").document(hash_key)
-    doc = doc_ref.get()
-    if doc.exists:
-        return doc.to_dict()
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        return _decode_document(resp.json())
     return None
 
 def save_quest_to_firestore(hash_key, quest_obj):
-    doc_ref = db.collection("quests").document(hash_key)
-    doc_ref.set(quest_obj)
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
+    body = {
+        "fields": _encode_fields(quest_obj)
+    }
+    response = rest_session.patch(url, json=body)
+    if response.status_code != 200:
+        print("Firestore REST Error:", response.text)
+        response.raise_for_status()
+
 
 
 
@@ -91,11 +100,13 @@ allowed_origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # or ["*"] for dev only
+    allow_origins=allowed_origins,  # <-- FIXED
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 @app.get("/")
 def read_root():
