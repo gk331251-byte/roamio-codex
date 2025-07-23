@@ -1,10 +1,10 @@
 import React from "react";
 import { useParams } from "react-router-dom";
-import { motion } from "framer-motion";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { motion as Motion } from "framer-motion";
+import { doc, getDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
-import dayjs from "dayjs";
 import { db } from "../firebase";
+import { completeQuest, uploadPostcard, getDirections } from "../lib/api";
 import RouteMap from "./RouteMap";
 
 
@@ -14,6 +14,7 @@ const QuestDetails = () => {
   const [saving, setSaving] = React.useState(false);
   const [completed, setCompleted] = React.useState(false);
   const [error, setError] = React.useState(null);
+  const [route, setRoute] = React.useState(null);
 
   React.useEffect(() => {
     const fetchQuest = async () => {
@@ -29,18 +30,20 @@ const QuestDetails = () => {
     fetchQuest();
   }, [city, mood]);
 
-  const getImagePrompt = (city, difficulty) => {
-    switch (difficulty) {
-      case "Easy":
-        return `Vintage postcard art of ${city}, relaxing sunny afternoon, bright pastel colors`;
-      case "Hard":
-        return `Moody, stylized postcard from ${city}, distant skyline and rugged terrain, 1930s palette`;
-      case "Extreme":
-        return `Gritty adventure postcard from ${city}, survivalist tone, wild terrain, high contrast`;
-      default:
-        return `Vintage postcard of ${city} adventure route, mix of urban and nature, travel journal style`;
+  React.useEffect(() => {
+    const fetchDirections = async () => {
+      try {
+        const data = await getDirections(questData.locationList);
+        setRoute(data);
+      } catch (err) {
+        console.error("Failed to fetch directions", err);
+      }
+    };
+    if (questData?.locationList) {
+      fetchDirections();
     }
-  };
+  }, [questData?.locationList]);
+
 
   const handleComplete = async () => {
     try {
@@ -51,11 +54,18 @@ const QuestDetails = () => {
       setSaving(true);
   
       const difficulty = questData.difficulty || "Medium";
-      const prompt = getImagePrompt(city, difficulty);
       const questId = `${city}_${mood}`;
-      const userQuestRef = doc(db, "user_quests", user.uid, "quests", questId);
-  
-      // Step 1: Call backend to generate postcard image
+      const questDataPayload = {
+        title: questData.title,
+        places: questData.locationList || [],
+        questText: questData.questText,
+        difficulty,
+      };
+
+      // Save quest completion via backend
+      await completeQuest(user.uid, questId, questDataPayload);
+
+      // Generate postcard (skipped if backend keys invalid)
       const response = await fetch("https://your-backend.com/generate-postcard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -69,26 +79,16 @@ const QuestDetails = () => {
           locationList: questData.locationList || [],
         }),
       });
-  
+
       const result = await response.json();
       const imageUrl = result.imageUrl || "/assets/postcard-placeholder.png";
-  
-      // Step 2: Save quest to Firestore
-      await setDoc(userQuestRef, {
-        city,
-        mood,
-        title: questData.title,
-        questText: questData.questText,
-        locationList: questData.locationList || [],
-        difficulty,
-        imagePrompt: prompt,
-        imageUrl,
-        completed: true,
-        completedAt: new Date().toISOString(),
-      });
-  
+
+      // Attach postcard URL via backend
+      await uploadPostcard(user.uid, questId, imageUrl);
+
       setCompleted(true);
-      console.log("✅ Quest completed and saved to Firestore with image.");
+      window.dispatchEvent(new Event('quest-saved'));
+      console.log("✅ Quest completed and postcard uploaded.");
     } catch (err) {
       console.error("🔥 Error completing quest:", err);
       setError("Failed to complete quest.");
@@ -97,14 +97,6 @@ const QuestDetails = () => {
     }
   };
   
-  {questData.locationList && (
-    <div className="mt-6">
-      <h2 className="text-xl font-semibold mb-2">Your Route</h2>
-      <RouteMap places={questData.locationList} />
-    </div>
-  )}
-
-  console.log("📍 questData.locationList:", questData?.locationList);
 
   if (error) {
     return <div className="p-8 text-red-600">{error}</div>;
@@ -117,7 +109,7 @@ const QuestDetails = () => {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-10 text-center">
-      <motion.div
+      <Motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
@@ -129,7 +121,19 @@ const QuestDetails = () => {
         {questData.locationList && (
           <div className="mt-6">
             <h2 className="text-xl font-semibold mb-2">Your Route</h2>
-            <RouteMap places={questData.locationList} />
+            <RouteMap places={questData.locationList} route={route} />
+            {route && (
+              <div className="text-sm text-left mt-2">
+                <p className="font-semibold">Total time: {route.totalTime}</p>
+                <ul className="list-disc list-inside">
+                  {route.legs.map((leg, idx) => (
+                    <li key={idx}>
+                      {leg.start_address} → {leg.end_address} ({leg.duration.text})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
   
@@ -150,7 +154,7 @@ const QuestDetails = () => {
             This quest is now in your profile.
           </div>
         )}
-      </motion.div>
+      </Motion.div>
     </div>
   );
   
