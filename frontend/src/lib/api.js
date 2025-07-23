@@ -389,3 +389,81 @@ export async function rebuildQuestCache(payload) {
   return resp.json();
 }
 
+
+export async function createCommunity(data) {
+  const resp = await fetch(`${BASE_URL}/create-community`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!resp.ok) throw new Error('Failed to create community');
+  return resp.json();
+}
+
+export async function joinCommunity(userId, communityId) {
+  const resp = await fetch(`${BASE_URL}/join-community`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, communityId })
+  });
+  if (!resp.ok) throw new Error('Failed to join');
+  return resp.json();
+}
+
+export async function publishToCommunity(communityId, questId) {
+  const resp = await fetch(`${BASE_URL}/publish-to-community`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ communityId, questId })
+  });
+  if (!resp.ok) throw new Error('Failed to publish');
+  return resp.json();
+}
+
+export async function getCommunity(id) {
+  const resp = await fetch(`${BASE_URL}/community/${id}`);
+  if (!resp.ok) throw new Error('Failed to load community');
+  return resp.json();
+}
+
+export async function getTrendingCommunities() {
+  const resp = await fetch(`${BASE_URL}/community-trending`);
+  if (!resp.ok) throw new Error('Failed to load communities');
+  return resp.json();
+}
+
+export async function getAdminDashboard(userId) {
+  const resp = await fetch(`${BASE_URL}/admin/dashboard?userId=${userId}`);
+  if (!resp.ok) throw new Error('Failed to load dashboard');
+  return resp.json();
+}
+
+export async function resolveReport(userId, reportId) {
+  const resp = await fetch(`${BASE_URL}/admin/resolve-report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, reportId })
+  });
+  if (!resp.ok) throw new Error('Failed to resolve');
+  return resp.json();
+}
+
+export async function deleteQuestAdmin(userId, questId, type) {
+  const resp = await fetch(`${BASE_URL}/admin/delete-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, type })
+  });
+  if (!resp.ok) throw new Error('Failed to delete');
+  return resp.json();
+}
+
+export async function banUser(userId, targetId) {
+  const resp = await fetch(`${BASE_URL}/admin/ban-user`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, targetId })
+  });
+  if (!resp.ok) throw new Error('Failed to ban user');
+  return resp.json();
+}
