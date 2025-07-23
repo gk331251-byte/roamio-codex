@@ -1,27 +1,63 @@
 // src/components/QuestHistory.jsx
-import React from 'react';
-import { motion } from 'framer-motion';
-
-const mockQuests = [
-  {
-    title: 'Golden Gate Park Exploration',
-    city: 'San Francisco, CA',
-    mood: 'Adventurous',
-    time: '2 hours',
-    imageUrl: 'https://via.placeholder.com/600x300?text=Golden+Gate+Quest',
-    completed: true,
-  },
-  {
-    title: 'Hidden Bookstore Tour',
-    city: 'Portland, OR',
-    mood: 'Chill',
-    time: '1.5 hours',
-    imageUrl: 'https://via.placeholder.com/600x300?text=Bookstore+Quest',
-    completed: true,
-  },
-];
+import React, { useEffect, useState } from 'react';
+import { motion as Motion } from 'framer-motion';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebase';
+import { getUserQuests } from '../lib/api';
 
 const QuestHistory = () => {
+  const [quests, setQuests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadQuests = async (uid) => {
+    try {
+      const data = await getUserQuests(uid);
+      setQuests(data.quests || []);
+    } catch (err) {
+      console.error('Failed to load quests', err);
+      setError('Failed to load quests');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let currentUser = null;
+    const unsub = onAuthStateChanged(auth, (u) => {
+      currentUser = u;
+      if (u) {
+        loadQuests(u.uid);
+      } else {
+        setQuests([]);
+        setLoading(false);
+      }
+    });
+    const refresh = () => {
+      if (currentUser) loadQuests(currentUser.uid);
+    };
+    window.addEventListener('quest-saved', refresh);
+    return () => {
+      unsub();
+      window.removeEventListener('quest-saved', refresh);
+    };
+  }, []);
+
+  if (loading) {
+    return <div className="p-6">Loading quests...</div>;
+  }
+  if (error) {
+    return <div className="p-6 text-red-600">{error}</div>;
+  }
+
+  if (quests.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>No quests found.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#f8fcf8] text-[#0e1b0e] font-sans">
       <section className="px-6 py-8">
@@ -29,9 +65,9 @@ const QuestHistory = () => {
         <p className="text-[#4e974e] text-sm mb-6">Relive your past adventures and discover new paths.</p>
 
         <div className="space-y-6">
-          {mockQuests.map((quest, index) => (
-            <motion.div
-              key={index}
+          {quests.map((quest, index) => (
+            <Motion.div
+              key={quest.id || index}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: index * 0.1 }}
@@ -39,9 +75,9 @@ const QuestHistory = () => {
             >
               <div className="flex-[2] flex flex-col justify-between gap-2">
                 <div>
-                  <h2 className="font-bold text-lg">{quest.title}</h2>
+                  <h2 className="font-bold text-lg">{quest.questData?.title || quest.title || 'Quest'}</h2>
                   <p className="text-sm text-[#4e974e]">
-                    City: {quest.city} | Mood: {quest.mood} | Time: {quest.time}
+                    Mood: {quest.questData?.difficulty || quest.difficulty || 'easy'} | Stops: {quest.questData?.places?.length || 0}
                   </p>
                 </div>
                 <button className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium">
@@ -51,8 +87,8 @@ const QuestHistory = () => {
                   Replay
                 </button>
               </div>
-              <div className="flex-1 bg-cover bg-center aspect-video rounded-xl" style={{ backgroundImage: `url(${quest.imageUrl})` }} />
-            </motion.div>
+              <div className="flex-1 bg-cover bg-center aspect-video rounded-xl" style={{ backgroundImage: `url(${quest.postcardUrl || quest.imageUrl || 'https://placehold.co/600x300'})` }} />
+            </Motion.div>
           ))}
         </div>
       </section>
