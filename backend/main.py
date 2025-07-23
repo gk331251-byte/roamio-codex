@@ -28,7 +28,7 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY") or "AIzaSyAnKnr4-l4zDeWqLhR5_6xIltr_aXRH6lQ"
+gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY")
 try:
     gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
 except Exception as e:
@@ -97,6 +97,80 @@ def save_place_to_cache(place_id: str, data: dict):
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
+
+
+def get_user_preferred_tags(user_id: str) -> list[str]:
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        if isinstance(doc.get("preferredTags"), list):
+            return doc.get("preferredTags")
+    return []
+
+
+CHAIN_KEYWORDS = [
+    "starbucks",
+    "mcdonald",
+    "chipotle",
+    "subway",
+    "dunkin",
+    "walmart",
+    "target",
+]
+
+
+def compute_place_tags(place: dict, details: dict | None = None) -> list[str]:
+    """Assign tags using simple heuristic rules."""
+    tags = set()
+    for t in place.get("types", []):
+        tags.add(t.replace("_", "-"))
+    name = place.get("name", "").lower()
+    if any(k in name for k in ["brew", "bar", "tap"]):
+        tags.add("bar")
+    if any(k in name for k in ["occult", "witch", "dark"]):
+        tags.update(["occult", "weird"])
+    rating = place.get("rating")
+    if isinstance(rating, (int, float)) and rating >= 4.5:
+        tags.add("local-fave")
+    if details:
+        periods = details.get("result", {}).get("opening_hours", {}).get("periods", [])
+        for p in periods:
+            close = p.get("close", {})
+            time = close.get("time")
+            if time and int(time[:2]) >= 22:
+                tags.add("open-late")
+                break
+    return list(tags)
+
+
+def is_chain(name: str) -> bool:
+    lower = name.lower()
+    return any(k in lower for k in CHAIN_KEYWORDS)
+
+
+# === Narrative template map for tag-based generation ===
+TEMPLATE_MAP = {
+    ("weird", "occult"): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
+    ("romantic", "bookstore", "quiet"): "Take your time drifting through this soft and charming city trail of [places] in [city].",
+    ("cheap eats", "bar", "open-late"): "Feast through the night with this budget-friendly adventure across [places] in [city].",
+}
+
+def choose_template(tags: list[str]) -> str | None:
+    for key, tmpl in TEMPLATE_MAP.items():
+        if all(t in tags for t in key):
+            return tmpl
+    return None
+
+def fill_template(template: str, city: str, mood: str, places: list[dict]) -> str:
+    text = template.replace("[city]", city).replace("[mood]", mood)
+    text = text.replace("[places]", ", ".join(p["name"] for p in places))
+    if places:
+        text = text.replace("[firstStop]", places[0]["name"])
+        text = text.replace("[lastStop]", places[-1]["name"])
+    return text
+
 
 
 def get_user_preferred_tags(user_id: str) -> list[str]:
@@ -353,7 +427,6 @@ async def generate_quest(
         tag_set.update(p.get("tags", []))
 
     gen_method = "gpt" if openai.api_key else "template"
-
 
     quest_obj = {
         "questText": quest_text,
@@ -1567,7 +1640,6 @@ async def link_quest_to_group(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
 
-  
 @app.get("/audit-quest-cache")
 async def audit_quest_cache():
     """Return quests with overly long or malformed text."""
@@ -1732,4 +1804,151 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
     save_quest_to_firestore(hash_key, quest_obj)
     return {"quest": quest_obj, "hash": hash_key}
 
+@app.get("/search-quests")
+async def search_quests(query: str = Query(...), user_id: str | None = None):
+    """Search public and user quests by simple keyword matching."""
+    tokens = [t.lower() for t in query.split() if t]
+    project_id = creds.project_id
+    results = {"public": [], "custom": [], "user": []}
+
+    def _matches(obj: dict) -> bool:
+        hay = " ".join([
+            str(obj.get("city", "")),
+            str(obj.get("mood", "")),
+            " ".join(obj.get("tags", [])),
+            str(obj.get("title", "")),
+        ]).lower()
+        return any(tok in hay for tok in tokens)
+
+    # community quests
+    cq_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests:runQuery"
+    )
+    cq_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "community_quests"}],
+            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "limit": 20,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, cq_url, json=cq_query)
+    if resp.status_code == 200:
+        for item in resp.json():
+            doc = item.get("document")
+            if not doc:
+                continue
+            data = _decode_document(doc)
+            if _matches(data) and not data.get("flagged"):
+                data["id"] = doc["name"].split("/")[-1]
+                results["public"].append(data)
+
+    # custom quests (published)
+    cust_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests:runQuery"
+    )
+    cust_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "custom_quests"}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "public"},
+                    "op": "EQUAL",
+                    "value": {"booleanValue": True},
+                }
+            },
+            "limit": 20,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, cust_url, json=cust_query)
+    if resp.status_code == 200:
+        for item in resp.json():
+            doc = item.get("document")
+            if not doc:
+                continue
+            data = _decode_document(doc)
+            if _matches(data):
+                data["id"] = doc["name"].split("/")[-1]
+                results["custom"].append(data)
+
+    # user quests
+    if user_id:
+        uq_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
+        )
+        uq_query = {"structuredQuery": {"from": [{"collectionId": "quests"}], "limit": 20}}
+        resp = await asyncio.to_thread(rest_session.post, uq_url, json=uq_query)
+        if resp.status_code == 200:
+            for item in resp.json():
+                doc = item.get("document")
+                if not doc:
+                    continue
+                data = _decode_document(doc)
+                if _matches(data):
+                    data["id"] = doc["name"].split("/")[-1]
+                    results["user"].append(data)
+
+    return results
+
+
+@app.post("/replay-quest")
+async def replay_quest(payload: dict = Body(...)):
+    """Save a quest copy to the user and increment replay count."""
+    quest_id = payload.get("quest_id")
+    user_id = payload.get("user_id")
+    if not quest_id or not user_id:
+        return {"error": "quest_id and user_id required"}
+
+    project_id = creds.project_id
+    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    resp = await asyncio.to_thread(rest_session.get, quest_url)
+    if resp.status_code != 200:
+        quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
+        resp = await asyncio.to_thread(rest_session.get, quest_url)
+        if resp.status_code != 200:
+            return {"error": "quest not found"}
+    quest_data = _decode_document(resp.json())
+
+    if "replaysCount" in quest_data:
+        count = quest_data.get("replaysCount", 0) + 1
+        patch = {"fields": _encode_fields({"replaysCount": count})}
+        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+
+    new_id = hashlib.sha1(f"{user_id}-{datetime.utcnow()}-{quest_id}".encode()).hexdigest()[:12]
+    user_doc = {
+        "questIdRef": quest_id,
+        "generatedAt": datetime.utcnow().isoformat(),
+        "questData": quest_data,
+    }
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{new_id}"
+    body = {"fields": _encode_fields(user_doc)}
+    await asyncio.to_thread(rest_session.patch, user_url, json=body)
+
+    return {"quest": quest_data, "userQuestId": new_id}
+
+
+@app.post("/remix-quest")
+async def remix_quest(payload: dict = Body(...)):
+    """Generate a new quest from existing tags and save to user quests."""
+    location = payload.get("location")
+    mood = payload.get("mood")
+    tags = payload.get("tagList", [])
+    user_id = payload.get("user_id")
+    if not location or not mood or not user_id:
+        return {"error": "location, mood, and user_id required"}
+
+    rebuilt = await rebuild_quest_cache({"city": location, "mood": mood, "tagOverride": tags})
+    quest = rebuilt.get("quest")
+    quest_id = rebuilt.get("hash")
+
+    user_doc = {
+        "questIdRef": quest_id,
+        "generatedAt": datetime.utcnow().isoformat(),
+        "questData": quest,
+    }
+    project_id = creds.project_id
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    body = {"fields": _encode_fields(user_doc)}
+    await asyncio.to_thread(rest_session.patch, user_url, json=body)
+
+    return {"quest": quest, "userQuestId": quest_id}
 
