@@ -7,7 +7,6 @@ import QuestForm from "./QuestForm"; // assuming you have this split off
 
 export default function App() {
   const [questResult, setQuestResult] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
@@ -19,7 +18,6 @@ export default function App() {
     }
 
     setErrorMessage("");
-    setLoading(true);
     setQuestResult(null);
 
     try {
@@ -35,7 +33,7 @@ export default function App() {
       console.error("Fetch error:", err);
       setErrorMessage("Error fetching quest.");
     } finally {
-      setLoading(false);
+      // request finished
     }
   };
 

@@ -8,6 +8,9 @@ import Profile from "./components/Profile";
 import Header from "./components/Header";
 import QuestRoute from "./components/QuestRoute";
 import QuestLivePage from "./components/QuestLivePage";
+import QuestPlusPage from "./components/QuestPlusPage";
+import PaymentSuccess from "./components/PaymentSuccess";
+import PaymentFailed from "./components/PaymentFailed";
 
 
 function App() {
@@ -22,6 +25,9 @@ function App() {
         <Route path="/history" element={<QuestHistory />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
+        <Route path="/quest-plus" element={<QuestPlusPage />} />
+        <Route path="/payment-success" element={<PaymentSuccess />} />
+        <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>
     </>
   );
