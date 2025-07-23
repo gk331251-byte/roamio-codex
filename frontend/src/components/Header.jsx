@@ -6,10 +6,13 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 const Header = () => {
   const { pathname } = useLocation();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
     const auth = getAuth();
     return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+
       setIsAdmin(u?.email === 'admin@roamio.app');
     });
   }, []);
@@ -28,10 +31,14 @@ const Header = () => {
         <Link to="/home" className={linkClass("/home")}>Home</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
         <Link to="/community" className={linkClass("/community")}>Community</Link>
+        <Link to="/quest-plus" className={linkClass("/quest-plus")}>Quest+</Link>
         {isAdmin && (
           <Link to="/admin" className={linkClass("/admin")}>Admin</Link>
         )}
-        <Link to="/profile" className={linkClass("/profile")}>Profile</Link>
+        {user && (
+          <Link to="/profile" className={linkClass("/profile")}>Profile</Link>
+        )}
+
       </nav>
     </header>
   );
