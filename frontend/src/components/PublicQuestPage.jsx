@@ -8,6 +8,7 @@ import {
   viewQuest,
   replayQuest,
 } from '../lib/api';
+
 import { getAuth } from 'firebase/auth';
 
 const toQuestObj = (doc) => {
@@ -100,7 +101,6 @@ export default function PublicQuestPage() {
 
   const totalTime = quest.places.reduce((t, p) => t + (p.duration_minutes || 0), 0);
   const shareLink = `${window.location.origin}/q/${questId}`;
-
   const handleLike = async () => {
     if (!user || liked) return;
     try {
