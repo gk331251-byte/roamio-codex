@@ -1,18 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
-import { db } from "../firebase";
-import { doc, updateDoc, arrayUnion, setDoc, onSnapshot } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { trackVisit, getUserQuests, completeQuest } from "../lib/api";
 
 export default function QuestLivePage() {
   const location = useLocation();
   const quest = location.state?.quest;
+  const questId = location.state?.questId;
 
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
-  const [visitedStops, setVisitedStops] = useState([]);
+  const [visitedIndices, setVisitedIndices] = useState([]);
   const [etaText, setEtaText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [completeMsg, setCompleteMsg] = useState("");
 
   // Watch user GPS
   useEffect(() => {
@@ -38,22 +40,26 @@ export default function QuestLivePage() {
     setStops([{ lat: userLocation.lat, lng: userLocation.lng }, ...questStops]);
   }, [quest, userLocation]);
 
-  // Listen for progress in Firestore
+  // Load progress from backend
   useEffect(() => {
     const auth = getAuth();
     const user = auth.currentUser;
-    if (!user || !quest) return;
-    const ref = doc(db, "user_quests", user.uid, "active", "current");
-    setDoc(ref, { visitedStops: [] }, { merge: true });
-    const unsub = onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
-        setVisitedStops(snap.data().visitedStops || []);
+    if (!user || !questId) return;
+    (async () => {
+      try {
+        const data = await getUserQuests(user.uid);
+        const found = data.quests.find((q) => q.id === questId);
+        if (found && Array.isArray(found.visitedIndices)) {
+          setVisitedIndices(found.visitedIndices);
+        }
+      } catch (err) {
+        console.error('Failed to load progress', err);
       }
-    });
-    return () => unsub();
+    })();
   }, [quest]);
 
-  const currentStopIndex = visitedStops.length + 1;
+  const currentStopIndex = visitedIndices.length;
+  const allVisited = visitedIndices.length >= (quest?.places?.length || 0);
 
   useEffect(() => {
     if (!userLocation || !stops[currentStopIndex]) return;
@@ -83,10 +89,42 @@ export default function QuestLivePage() {
     const user = auth.currentUser;
     if (!user) return alert("You must be logged in!");
 
-    const userQuestRef = doc(db, "user_quests", user.uid, "active", "current");
-    await updateDoc(userQuestRef, {
-      visitedStops: arrayUnion(visitedStops.length),
-    });
+    if (!questId) return;
+    try {
+      const res = await trackVisit(user.uid, questId, visitedIndices.length);
+      setVisitedIndices(res.visitedIndices || []);
+    } catch (err) {
+      console.error('Failed to track visit', err);
+    }
+  };
+
+  const handleComplete = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert("You must be logged in!");
+    if (!questId) return;
+    setSaving(true);
+    setCompleteMsg("");
+    try {
+      await completeQuest(user.uid, questId, {
+        title: quest.title,
+        city: quest.city,
+        mood: quest.mood,
+        difficulty: quest.difficulty,
+        questText: quest.questText,
+        locationList: quest.places,
+        imagePrompt: quest.imagePrompt,
+        imageUrl: quest.imageUrl,
+        visitedIndices,
+      });
+      setCompleteMsg("Quest Saved to Your Profile!");
+      window.dispatchEvent(new Event("quest-saved"));
+    } catch (err) {
+      console.error("Failed to complete quest", err);
+      setCompleteMsg("Failed to save quest");
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!quest) {
@@ -152,13 +190,13 @@ export default function QuestLivePage() {
             <div className="flex justify-between items-center">
               <p className="text-base font-medium text-[#0e1b0e]">Progress</p>
               <p className="text-sm text-[#0e1b0e]">
-                {visitedStops.length}/{quest?.places?.length}
+                {visitedIndices.length}/{quest?.places?.length}
               </p>
             </div>
             <div className="w-full bg-[#d0e7d0] rounded">
               <div
                 className="h-2 rounded bg-[#14b714]"
-                style={{ width: `${(visitedStops.length / (quest?.places?.length || 1)) * 100}%` }}
+                style={{ width: `${(visitedIndices.length / (quest?.places?.length || 1)) * 100}%` }}
               />
             </div>
           </div>
@@ -172,14 +210,33 @@ export default function QuestLivePage() {
           </p>
 
           <div className="flex px-4 py-3">
-            <button onClick={handleMarkVisited} className="flex-1 h-12 rounded-full bg-[#14b714] text-base font-bold text-[#f8fcf8]">
-              Mark as Visited
+            <button
+              onClick={handleMarkVisited}
+              disabled={allVisited}
+              className={`flex-1 h-12 rounded-full text-base font-bold text-[#f8fcf8] ${
+                allVisited
+                  ? "bg-gray-400 cursor-not-allowed"
+                  : "bg-[#14b714] hover:bg-[#0fa50f]"
+              }`}
+            >
+              {allVisited ? "Quest Complete!" : "Mark as Visited"}
             </button>
           </div>
 
-          <div className="flex px-4 py-3">
-            <button className="flex-1 h-12 rounded-full bg-[#14b714] text-base font-bold text-[#f8fcf8]">Complete Quest</button>
-          </div>
+          {allVisited && (
+            <div className="flex px-4 py-3">
+              <button
+                onClick={handleComplete}
+                disabled={saving}
+                className="flex-1 h-12 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-bold text-white"
+              >
+                {saving ? "Saving..." : "Complete Quest"}
+              </button>
+            </div>
+          )}
+          {completeMsg && (
+            <p className="text-center text-green-700 mt-2">{completeMsg}</p>
+          )}
         </main>
       </div>
     </div>
