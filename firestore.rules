@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===== Helper Functions =====
+    function isAdmin() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    function isBanned() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.banned == true;
+    }
+
+    // ===== User Profiles =====
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId && !isBanned();
+    }
+
+    // ===== Standard Quests =====
+    match /quests/{questId} {
+      allow read: if true;
+      allow write, delete: if isAdmin();
+    }
+
+    // ===== Custom Quests =====
+    match /custom_quests/{questId} {
+      allow read: if resource.data.isPublic == true ||
+                   (request.auth != null && request.auth.uid == resource.data.creatorId) ||
+                   isAdmin();
+      allow create: if request.auth != null &&
+                     request.auth.uid == request.resource.data.creatorId &&
+                     !isBanned();
+      allow update, delete: if (request.auth != null && request.auth.uid == resource.data.creatorId && !isBanned()) || isAdmin();
+    }
+
+    // ===== User Quest History =====
+    match /user_quests/{userId}/quests/{questId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId && !isBanned();
+    }
+
+    // ===== Reports =====
+    match /reports/{reportId} {
+      allow read, write, delete: if isAdmin();
+    }
+
+    // ===== Group Quests =====
+    match /group_quests/{groupQuestId} {
+      allow create: if request.auth != null && request.auth.uid in request.resource.data.members && !isBanned();
+      allow read, update, delete: if request.auth != null && request.auth.uid in resource.data.members && !isBanned();
+    }
+
+    // ===== Admin Config =====
+    match /config/admins {
+      allow read, write: if isAdmin();
+    }
+
+    // ===== Admin Logs =====
+    match /admin_logs/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId && isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // ===== Default Deny =====
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

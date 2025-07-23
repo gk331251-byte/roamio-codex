@@ -31,6 +31,7 @@ const Header = () => {
         <Link to="/explore" className={linkClass("/explore")}>Explore</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
         <Link to="/community" className={linkClass("/community")}>Community</Link>
+        <Link to="/community/new" className={linkClass("/community/new")}>New Community</Link>
         {user && (
           <Link to="/custom" className={linkClass("/custom")}>➕ Custom Quest</Link>
         )}
