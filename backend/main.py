@@ -7,7 +7,7 @@ from datetime import datetime
 import googlemaps
 import openai
 import certifi
-from google.cloud import firestore, storage
+from google.cloud import firestore_v1, storage
 
 
 from dotenv import load_dotenv
@@ -25,7 +25,10 @@ gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
-db = firestore.Client()  # fallback to gRPC (see if TLS errors still occur)
+
+db = firestore_v1.Client(
+    client_options={"api_endpoint": "https://firestore.googleapis.com"}
+)
 
 
 def generate_hash_key(city, mood):
