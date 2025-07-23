@@ -1165,6 +1165,10 @@ async def create_custom_quest(payload: dict = Body(...)):
         f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
     ).hexdigest()[:12]
 
+    status = payload.get("status", "draft")
+    public = payload.get("public", False)
+
+
     quest_doc = {
         "title": payload.get("title") or "Custom Quest",
         "moodTags": payload.get("mood_tags", []),
@@ -1174,16 +1178,27 @@ async def create_custom_quest(payload: dict = Body(...)):
         "createdBy": user_id,
         "createdAt": datetime.utcnow().isoformat(),
         "type": "custom",
+        "status": status,
+        "public": public,
     }
+    if status == "published" or public:
+        quest_doc["publishedAt"] = datetime.utcnow().isoformat()
+
+    body = {"fields": _encode_fields(quest_doc)}
+
 
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
     )
-    body = {"fields": _encode_fields(quest_doc)}
     resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
+
+    global_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    await asyncio.to_thread(rest_session.patch, global_url, json=body)
 
     group_id = payload.get("group_id")
     if group_id:
@@ -1193,5 +1208,50 @@ async def create_custom_quest(payload: dict = Body(...)):
         await asyncio.to_thread(rest_session.patch, g_url, json=body)
 
     return {"questId": quest_id, "quest": quest_doc}
+
+
+@app.get("/get-custom-quest/{quest_id}")
+async def get_custom_quest(quest_id: str):
+    """Fetch a custom quest by ID."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
+@app.post("/publish-custom-quest")
+async def publish_custom_quest(payload: dict = Body(...)):
+    """Mark a custom quest as public and published."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    patch_fields = {
+        "status": "published",
+        "public": True,
+        "publishedAt": datetime.utcnow().isoformat(),
+    }
+    body = {"fields": _encode_fields(patch_fields)}
+
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    global_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    for url in (user_url, global_url):
+        resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            resp.raise_for_status()
+
+    return {"status": "published"}
 
 

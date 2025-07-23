@@ -157,7 +157,6 @@ export default function QuestLivePage() {
 
   // Load personal progress when not in group
   useEffect(() => {
-
     if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
@@ -192,7 +191,6 @@ export default function QuestLivePage() {
     if (!userLocation || !stops.length) return;
     const remaining = stops.slice(currentStopIndex);
     if (!remaining.length) return;
-
     const fetchRoute = async () => {
       setEtaError("");
 
@@ -286,6 +284,32 @@ export default function QuestLivePage() {
     }
 
   };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
     if (!reason) return;

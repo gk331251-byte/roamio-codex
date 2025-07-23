@@ -244,6 +244,7 @@ export async function updateActiveQuest(userId, data) {
   }
   return resp.json();
 }
+
 export async function createCustomQuest(payload) {
   const resp = await fetch(`${BASE_URL}/create-custom-quest`, {
     method: 'POST',
@@ -256,3 +257,22 @@ export async function createCustomQuest(payload) {
   return resp.json();
 }
 
+export async function getCustomQuest(id) {
+  const resp = await fetch(`${BASE_URL}/get-custom-quest/${id}`);
+  if (!resp.ok) {
+    throw new Error('Failed to fetch custom quest');
+  }
+  return resp.json();
+}
+
+export async function publishCustomQuest(userId, questId) {
+  const resp = await fetch(`${BASE_URL}/publish-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quest_id: questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to publish quest');
+  }
+  return resp.json();
+}
