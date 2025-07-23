@@ -1182,6 +1182,7 @@ async def create_custom_quest(payload: dict = Body(...)):
         "likesCount": 0,
         "viewsCount": 0,
         "replaysCount": 0,
+
     }
     if status == "published" or public:
         quest_doc["publishedAt"] = datetime.utcnow().isoformat()
@@ -1418,5 +1419,4 @@ async def link_quest_to_group(payload: dict = Body(...)):
     body = {"fields": _encode_fields(data)}
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
-
 
