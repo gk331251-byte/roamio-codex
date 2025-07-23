@@ -349,7 +349,6 @@ export async function linkQuestToGroup(group_id, quest_id, upcoming = false) {
   }
   return resp.json();
 }
-
 export async function auditQuestCache() {
   const resp = await fetch(`${BASE_URL}/audit-quest-cache`);
   if (!resp.ok) throw new Error('Failed to audit');
