@@ -21,7 +21,7 @@ export default function App() {
     setQuestResult(null);
 
     try {
-      const data = await generateQuest({ city, mood, useGPS, timeLimit });
+      const data = await generateQuest(city, mood, timeLimit, "", "");
 
       if (!data.quest || !Array.isArray(data.quest.places) || data.quest.places.length === 0) {
         setErrorMessage("No places returned from backend.");
