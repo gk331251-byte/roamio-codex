@@ -19,10 +19,9 @@ load_dotenv()
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # === Load API keys from env (Codex-compatible) ===
-gmaps_api_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY")
-openai_api_key = os.getenv("OPENAI_API_KEY")
-openai.api_key = openai_api_key
-gmaps = googlemaps.Client(key=gmaps_api_key)
+
+gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
 db = firestore.Client(
@@ -49,23 +48,13 @@ def save_quest_to_firestore(hash_key, quest_obj):
 
 
 # Set up Secret Manager
-def get_secret(secret_id):
-    client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/366325378414/secrets/{secret_id}/versions/latest"
-    response = client.access_secret_version(request={"name": name})
-    return response.payload.data.decode("UTF-8")
 
 # Set up Firestore
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "firestore-key.json"
-db = firestore.Client()
 
-# Load Google Maps API Key
-gmaps_api_key = get_secret("places-api-key")
-gmaps = googlemaps.Client(key=gmaps_api_key)
 
-# Load OpenAI API Key
-openai_api_key = get_secret("openai-api-key")
-openai.api_key = openai_api_key
+# Load Google Maps API 
+
+
 
 app = FastAPI()
 
@@ -259,7 +248,7 @@ async def generate_postcard(request: Request):
         image_data = requests.get(image_url).content
         filename = f"postcards/{user_id}_{quest_id}.png"
 
-        bucket_name = get_secret("firebase-storage-bucket")  # or hardcode if needed
+        bucket_name = os.getenv("VITE_FIREBASE_STORAGE_BUCKET") or "your-bucket-name"
         bucket = storage.Client().bucket(bucket_name)
         blob = bucket.blob(filename)
         blob.upload_from_string(image_data, content_type="image/png")
