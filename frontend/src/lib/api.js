@@ -233,3 +233,15 @@ export async function createCheckoutSession(userId, email) {
   return resp.json();
 }
 
+export async function updateActiveQuest(userId, data) {
+  const resp = await fetch(`${BASE_URL}/update-active-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, data })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to update active quest');
+  }
+  return resp.json();
+}
+

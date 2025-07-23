@@ -1070,7 +1070,6 @@ async def get_community_quests():
         results.append(obj)
     return {"quests": results}
 
-  
 @app.post("/create-checkout-session")
 async def create_checkout_session(payload: dict = Body(...)):
     """Return a Stripe Checkout URL or mock URL."""
@@ -1134,3 +1133,27 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"premium": premium}
+  
+
+@app.post("/update-active-quest")
+async def update_active_quest(payload: dict = Body(...)):
+    """Patch the user's active quest document with extra data."""
+    user_id = payload.get("userId")
+    data = payload.get("data")
+    if not user_id or not isinstance(data, dict):
+        return {"error": "userId and data required"}
+
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    fields = {}
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+    fields.update(data)
+    body = {"fields": _encode_fields(fields)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "updated"}
+
