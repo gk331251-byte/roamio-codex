@@ -1541,4 +1541,3 @@ async def link_quest_to_group(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
 
-
