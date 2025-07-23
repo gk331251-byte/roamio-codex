@@ -28,8 +28,17 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
-openai.api_key = os.getenv("OPENAI_API_KEY")
+gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY");
+try:
+    gmaps = googlemaps.Client(key=gmaps_key)
+except Exception as e:
+    print("Google Maps disabled:", e);
+    gmaps = None
+openai_key = os.getenv("OPENAI_API_KEY");
+if openai_key and openai_key.startswith("sk-"):
+    openai.api_key = openai_key
+else:
+    openai.api_key = None
 
 # === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
 
@@ -239,6 +248,7 @@ async def complete_quest(payload: dict = Body(...)):
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     quest_data = payload.get("questData")
+
     print("/quest-complete payload:", payload)
 
     if not all([user_id, quest_id, quest_data]):
@@ -265,7 +275,6 @@ async def complete_quest(payload: dict = Body(...)):
         resp.raise_for_status()
 
     # === Update lastActive ===
-
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     )
@@ -276,6 +285,7 @@ async def complete_quest(payload: dict = Body(...)):
         resp.raise_for_status()
 
     return {"status": "Quest saved!"}
+
 
 @app.get("/places")
 def get_places(city: str = Query(...)):
@@ -354,3 +364,85 @@ def test_write():
         return {"status": "Document written!"}
     print("Firestore REST error", resp.text)
     resp.raise_for_status()
+@app.get("/get-user-quests/{user_id}")
+async def get_user_quests(user_id: str):
+    """Fetch completed quests for a user via Firestore REST."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
+@app.get("/get-quest/{quest_id}")
+async def get_quest(quest_id: str):
+    """Fetch a quest document via Firestore REST."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
+@app.post("/track-visit")
+async def track_visit(payload: dict = Body(...)):
+    """Record a quest stop visit time."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    stop_id = payload.get("stopId", "unknown")
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}/visits/{stop_id}"
+    )
+    body = {"fields": _encode_fields({"visitedAt": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "visit tracked"}
+
+
+@app.post("/upload-postcard")
+async def upload_postcard(payload: dict = Body(...)):
+    """Attach postcard image info to quest."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    image_url = payload.get("imageUrl")
+    if not all([user_id, quest_id, image_url]):
+        return {"error": "userId, questId, and imageUrl required"}
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    body = {"fields": _encode_fields({"postcardUrl": image_url})}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "postcard uploaded"}
+
+
+@app.post("/reroll-quest")
+async def reroll_quest(payload: dict = Body(...)):
+    """Regenerate a quest for the same parameters."""
+    city = payload.get("city")
+    moods = payload.get("moods", [])
+    time_limit = payload.get("time_limit", 60)
+    token = payload.get("token", "")
+    # Reuse generate_quest logic
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
+
+
+@app.get("/validate-premium/{user_id}")
+async def validate_premium(user_id: str):
+    """Mock premium validation."""
+    return {"premium": True}
