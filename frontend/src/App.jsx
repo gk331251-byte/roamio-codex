@@ -16,6 +16,7 @@ import QuestLivePage from "./components/QuestLivePage";
 import QuestPlusPage from "./components/QuestPlusPage";
 import PaymentSuccess from "./components/PaymentSuccess";
 import PaymentFailed from "./components/PaymentFailed";
+import CommunityFeed from "./components/CommunityFeed";
 
 
 function App() {
@@ -58,6 +59,7 @@ function App() {
         <Route path="/history" element={<QuestHistory />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
+        <Route path="/community" element={<CommunityFeed />} />
         <Route path="/quest-plus" element={<QuestPlusPage />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />

@@ -4,7 +4,6 @@ import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup }
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 
-
 const _toQuestObj = (doc) => {
   if (!doc || !doc.fields) return doc;
   return Object.keys(doc.fields).reduce((acc, k) => {
@@ -71,7 +70,6 @@ const QuestHome = () => {
             if (data.groupId) await leaveGroup(data.groupId, user.uid);
             setResumeData(null);
           }
-
         } else {
           setResumeData(null);
         }
@@ -124,7 +122,6 @@ const QuestHome = () => {
     const questId = `${city}_${mood.join('-')}`;
     try {
       const { groupId } = await createGroupQuest(user.uid, questId, user.displayName);
-
       navigate('/live', { state: { quest: questResult.quest, questId, groupId } });
     } catch (err) {
       console.error('Failed to create group', err);
@@ -238,7 +235,6 @@ const QuestHome = () => {
                 className={`mt-4 w-full py-2 rounded-lg font-bold transition text-white ${
                   resumeData ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#14b714] hover:bg-[#0fa50f]'
                 }`}
-
               >
                 Start Quest
               </button>
