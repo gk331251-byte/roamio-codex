@@ -149,9 +149,26 @@ def is_chain(name: str) -> bool:
     lower = name.lower()
     return any(k in lower for k in CHAIN_KEYWORDS)
 
+# === Narrative template map for tag-based generation ===
+TEMPLATE_MAP = {
+    ("weird", "occult"): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
+    ("romantic", "bookstore", "quiet"): "Take your time drifting through this soft and charming city trail of [places] in [city].",
+    ("cheap eats", "bar", "open-late"): "Feast through the night with this budget-friendly adventure across [places] in [city].",
+}
 
+def choose_template(tags: list[str]) -> str | None:
+    for key, tmpl in TEMPLATE_MAP.items():
+        if all(t in tags for t in key):
+            return tmpl
+    return None
 
-
+def fill_template(template: str, city: str, mood: str, places: list[dict]) -> str:
+    text = template.replace("[city]", city).replace("[mood]", mood)
+    text = text.replace("[places]", ", ".join(p["name"] for p in places))
+    if places:
+        text = text.replace("[firstStop]", places[0]["name"])
+        text = text.replace("[lastStop]", places[-1]["name"])
+    return text
 
 # Set up Secret Manager
 
@@ -159,8 +176,6 @@ def is_chain(name: str) -> bool:
 
 
 # Load Google Maps API 
-
-
 
 app = FastAPI()
 
@@ -262,7 +277,6 @@ async def generate_quest(
             })
         except Exception as e:
             print("Skipping place", e)
-
     candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
     selected = []
@@ -334,6 +348,12 @@ async def generate_quest(
         }
         for leg in legs
     ]
+    tag_set = set()
+    for p in ordered:
+        tag_set.update(p.get("tags", []))
+
+    gen_method = "gpt" if openai.api_key else "template"
+
 
     quest_obj = {
         "questText": quest_text,
@@ -346,6 +366,12 @@ async def generate_quest(
             "total_duration": route["legs"][-1]["duration"]["text"],
         },
         "timestamp": datetime.utcnow().isoformat(),
+        "generationMethod": gen_method,
+        "tagSource": "auto",
+        "tags": list(tag_set),
+        "city": city,
+        "mood": ",".join(moods),
+        "flagged": False,
     }
 
     save_quest_to_firestore(hash_key, quest_obj)
@@ -693,7 +719,7 @@ async def get_user_quests(userId: str = Query(...)):
         if not doc:
             continue
         obj = _decode_document(doc)
-        if obj.get("visible") is False:
+        if obj.get("visible") is False or obj.get("flagged") is True:
             continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
@@ -1540,4 +1566,170 @@ async def link_quest_to_group(payload: dict = Body(...)):
     body = {"fields": _encode_fields(data)}
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
+
+  
+@app.get("/audit-quest-cache")
+async def audit_quest_cache():
+    """Return quests with overly long or malformed text."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests:runQuery"
+    )
+    query = {"structuredQuery": {"from": [{"collectionId": "quests"}]}}
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    flagged = []
+    for item in resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        text = data.get("questText", "") or ""
+        reason = None
+        if not text:
+            reason = "missing"
+        elif len(text) > 600:
+            reason = "too_long"
+        elif text.count("NPC") > 3 or "???" in text:
+            reason = "malformed"
+        if reason:
+            flagged.append({"id": doc["name"].split("/")[-1], "reason": reason})
+    print("Audit results", flagged)
+    return {"flagged": flagged}
+
+
+@app.post("/rebuild-quest-cache")
+async def rebuild_quest_cache(payload: dict = Body(...)):
+    """Regenerate a quest using templates and optional tag overrides."""
+    city = payload.get("city")
+    mood = payload.get("mood")
+    override = payload.get("tagOverride", [])
+    if not city or not mood:
+        return {"error": "city and mood required"}
+
+    try:
+        geocode = gmaps.geocode(city)
+        city_loc = geocode[0]["geometry"]["location"]
+    except Exception as e:
+        print("geocode error", e)
+        return {"error": "geocode failed"}
+
+    try:
+        resp = gmaps.places_nearby(
+            location=(city_loc["lat"], city_loc["lng"]),
+            radius=2000,
+            type="tourist_attraction",
+        )
+        places_results = resp.get("results", [])
+    except Exception as e:
+        print("places error", e)
+        return {"error": "places failed"}
+
+    candidates = []
+    for pl in places_results:
+        name = pl.get("name")
+        if not name or is_chain(name):
+            continue
+        pid = pl.get("place_id")
+        cached = get_cached_place(pid) if pid else None
+        details = None
+        if not cached and pid:
+            try:
+                details = gmaps.place(pid)
+            except Exception:
+                details = None
+        tags = cached.get("tags") if cached else compute_place_tags(pl, details)
+        if not cached and pid:
+            save_place_to_cache(pid, {"tags": tags, "name": name})
+        loc = pl["geometry"]["location"]
+        candidates.append({
+            "name": name,
+            "type": pl.get("types", ["Unknown"])[0],
+            "lat": float(loc["lat"]),
+            "lng": float(loc["lng"]),
+            "tags": tags,
+            "rating": pl.get("rating", 0),
+        })
+
+    # simple sort by rating
+    candidates.sort(key=lambda x: x["rating"], reverse=True)
+
+    selected = []
+    seen = set()
+    for c in candidates:
+        if c["type"] in seen:
+            continue
+        selected.append(c)
+        seen.add(c["type"])
+        if len(selected) >= 5:
+            break
+
+    if len(selected) < 3:
+        return {"error": "not enough places"}
+
+    origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+    destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
+    waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
+
+    try:
+        directions = gmaps.directions(
+            origin,
+            destination,
+            waypoints=waypoints,
+            optimize_waypoints=True,
+            mode="walking",
+        )
+    except Exception as e:
+        print("directions error", e)
+        return {"error": "directions failed"}
+
+    route = directions[0]
+    order = route.get("waypoint_order", [])
+    legs = route.get("legs", [])
+    polyline = route.get("overview_polyline", {}).get("points", "")
+
+    ordered = [selected[0]] + [selected[i+1] for i in order] + [selected[-1]]
+
+    tag_set = set(override) if override else set()
+    if not override:
+        for p in ordered:
+            tag_set.update(p.get("tags", []))
+
+    template = choose_template(list(tag_set))
+    if not template:
+        template = "Explore [city] on a [mood] adventure through [places]."
+
+    quest_text = fill_template(template, city, mood, ordered)
+
+    legs_info = [
+        {
+            "start": l["start_address"],
+            "end": l["end_address"],
+            "distance": l["distance"]["text"],
+            "duration": l["duration"]["text"],
+        }
+        for l in legs
+    ]
+
+    quest_obj = {
+        "questText": quest_text,
+        "places": ordered,
+        "route": {"legs": legs_info, "polyline": polyline},
+        "timestamp": datetime.utcnow().isoformat(),
+        "generationMethod": "template",
+        "tagSource": "manual" if override else "auto",
+        "tags": list(tag_set),
+        "city": city,
+        "mood": mood,
+        "flagged": False,
+    }
+
+    loc_hash = f"{city_loc['lat']:.2f}_{city_loc['lng']:.2f}"
+    tag_combo = "-".join(sorted(tag_set))
+    hash_key = generate_hash_key(loc_hash, mood, tag_combo)
+    save_quest_to_firestore(hash_key, quest_obj)
+    return {"quest": quest_obj, "hash": hash_key}
+
 

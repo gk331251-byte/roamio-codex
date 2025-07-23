@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getQuestReports, toggleQuestVisibility } from '../lib/api';
 
 export default function AdminDashboard() {
@@ -44,7 +45,10 @@ export default function AdminDashboard() {
               <p className="text-xs text-gray-600">By {r.userId}</p>
               <p className="text-xs">Reason: {r.reason}</p>
             </div>
-            <button onClick={() => handleHide(r)} className="h-8 px-3 rounded bg-red-500 text-white text-xs">Hide Quest</button>
+            <div className="flex gap-2 items-center">
+              <Link to={`/tag-editor/${r.questId}`} className="text-blue-600 underline text-xs">Edit Tags</Link>
+              <button onClick={() => handleHide(r)} className="h-8 px-3 rounded bg-red-500 text-white text-xs">Hide Quest</button>
+            </div>
           </div>
         ))}
       </div>
