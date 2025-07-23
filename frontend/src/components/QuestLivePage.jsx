@@ -1,19 +1,30 @@
 import React, { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
+import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
-import { trackVisit, getUserQuests, completeQuest } from "../lib/api";
+import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest, updateActiveQuest } from "../lib/api";
+import { doc, onSnapshot } from "firebase/firestore";
+import { db } from "../firebase";
+import { decode } from "@googlemaps/polyline-codec";
 
 
 export default function QuestLivePage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const quest = location.state?.quest;
   const questId = location.state?.questId;
+  const groupId = location.state?.groupId || new URLSearchParams(location.search).get('groupId');
 
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
   const [visitedIndices, setVisitedIndices] = useState([]);
+  const [groupData, setGroupData] = useState(null);
+  const [activityMsg, setActivityMsg] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [showComplete, setShowComplete] = useState(false);
   const [etaText, setEtaText] = useState("");
+  const [polylinePoints, setPolylinePoints] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completeMsg, setCompleteMsg] = useState("");
 
@@ -34,15 +45,93 @@ export default function QuestLivePage() {
     }
   }, []);
 
-  // Update stops list when we have user location or quest
+  // Base stops from quest data
   useEffect(() => {
-    if (!quest || !userLocation) return;
-    const questStops = quest.places.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng) }));
-    setStops([{ lat: userLocation.lat, lng: userLocation.lng }, ...questStops]);
+    if (!quest) return;
+    const questStops = quest.places.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name }));
+    setStops(questStops);
+  }, [quest]);
+
+  // Optimize order using current location as origin
+  useEffect(() => {
+    if (!quest || !userLocation || !quest.places?.length) return;
+    const fetchOptimized = async () => {
+      const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+      const coords = quest.places.map((p) => `${p.lat},${p.lng}`);
+      if (coords.length < 2) {
+        return;
+      }
+      const origin = `${userLocation.lat},${userLocation.lng}`;
+      const destination = coords[coords.length - 1];
+      const waypointStr = coords.slice(0, -1).join('|');
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&waypoints=optimize:true|${waypointStr}&mode=walking&key=${key}`
+        );
+        const data = await res.json();
+        const order = data?.routes?.[0]?.waypoint_order;
+        if (Array.isArray(order) && order.length === coords.length - 1) {
+          const ordered = order.map((i) => quest.places[i]);
+          ordered.push(quest.places[quest.places.length - 1]);
+          setStops(
+            ordered.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name }))
+          );
+          try {
+            const auth = getAuth();
+            const user = auth.currentUser;
+            if (user) {
+              await updateActiveQuest(user.uid, { optimizedOrder: order });
+            }
+          } catch (err) {
+            console.error('failed to store optimized order', err);
+          }
+        }
+        const poly = data?.routes?.[0]?.overview_polyline?.points;
+        if (poly) {
+          const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
+          setPolylinePoints(decoded);
+        }
+      } catch (err) {
+        console.error('Failed to fetch optimized route', err);
+      }
+    };
+    fetchOptimized();
   }, [quest, userLocation]);
 
-  // Load progress from backend
+  // Join group and listen for progress
   useEffect(() => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
+    let prev = null;
+    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+      const data = snap.data();
+      if (!data) return;
+      setGroupData(data);
+      if (data.progress && data.progress[user.uid]) {
+        setVisitedIndices(data.progress[user.uid]);
+      }
+      if (prev && data.progress) {
+        Object.keys(data.progress).forEach((uid) => {
+          if (uid === user.uid) return;
+          const before = (prev.progress?.[uid] || []).length;
+          const after = (data.progress[uid] || []).length;
+          if (after > before) {
+            const member = data.members?.find((m) => m.userId === uid);
+            setActivityMsg(`${member?.displayName || uid} visited stop ${after}`);
+            setTimeout(() => setActivityMsg(''), 3000);
+          }
+        });
+      }
+      prev = data;
+    });
+    return () => unsub();
+  }, [groupId]);
+
+  // Load personal progress when not in group
+  useEffect(() => {
+    if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user || !questId) return;
@@ -57,33 +146,57 @@ export default function QuestLivePage() {
         console.error('Failed to load progress', err);
       }
     })();
-  }, [quest]);
+  }, [quest, groupId]);
 
   const currentStopIndex = visitedIndices.length;
   const allVisited = visitedIndices.length >= (quest?.places?.length || 0);
+  const questComplete = allVisited || groupData?.completed;
+
+  useEffect(() => {
+    if (questComplete) {
+      setShowComplete(true);
+      const t = setTimeout(() => setShowComplete(false), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [questComplete]);
 
 
   useEffect(() => {
-    if (!userLocation || !stops[currentStopIndex]) return;
+    if (!userLocation || !stops.length) return;
+    const remaining = stops.slice(currentStopIndex);
+    if (!remaining.length) return;
 
-    const fetchETA = async () => {
+    const fetchRoute = async () => {
       const origin = `${userLocation.lat},${userLocation.lng}`;
-      const destination = `${stops[currentStopIndex].lat},${stops[currentStopIndex].lng}`;
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+      const destination = `${remaining[remaining.length - 1].lat},${remaining[remaining.length - 1].lng}`;
+      const waypoints = remaining
+        .slice(0, -1)
+        .map((p) => `${p.lat},${p.lng}`)
+        .join('|');
+
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking` +
+        (waypoints ? `&waypoints=${waypoints}` : '') +
+        `&key=${key}`;
 
       try {
-        const res = await fetch(
-          `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking&key=${key}`
-        );
+        const res = await fetch(url);
         const data = await res.json();
-        const eta = data?.routes?.[0]?.legs?.[0]?.duration?.text;
-        if (eta) setEtaText(eta);
+        const leg = data?.routes?.[0]?.legs?.[0];
+        setEtaText(leg?.duration?.text || "");
+        const poly = data?.routes?.[0]?.overview_polyline?.points;
+        if (poly) {
+          const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
+          setPolylinePoints(decoded);
+        } else {
+          setPolylinePoints([]);
+        }
       } catch (err) {
-        console.error("Failed to fetch ETA:", err);
+        console.error('Failed to fetch directions:', err);
       }
     };
 
-    fetchETA();
+    fetchRoute();
   }, [userLocation, currentStopIndex, stops]);
 
   const handleMarkVisited = async () => {
@@ -91,10 +204,15 @@ export default function QuestLivePage() {
     const user = auth.currentUser;
     if (!user) return alert("You must be logged in!");
 
-    if (!questId) return;
+    if (!questId || questComplete) return;
     try {
-      const res = await trackVisit(user.uid, questId, visitedIndices.length);
-      setVisitedIndices(res.visitedIndices || []);
+      if (groupId) {
+        const res = await trackStopVisit(groupId, user.uid, visitedIndices.length);
+        setVisitedIndices(res.visitedStops || res.visitedIndices || []);
+      } else {
+        const res = await trackVisit(user.uid, questId, visitedIndices.length);
+        setVisitedIndices(res.visitedIndices || []);
+      }
     } catch (err) {
       console.error('Failed to track visit', err);
     }
@@ -108,6 +226,7 @@ export default function QuestLivePage() {
     setSaving(true);
     setCompleteMsg("");
     try {
+      const share = window.confirm('Share this quest publicly?');
       await completeQuest(user.uid, questId, {
         title: quest.title,
         city: quest.city,
@@ -118,7 +237,12 @@ export default function QuestLivePage() {
         imagePrompt: quest.imagePrompt,
         imageUrl: quest.imageUrl,
         visitedIndices,
+        public: share,
+        displayName: user.displayName,
       });
+      if (groupId) {
+        await completeGroupQuest(groupId, user.uid);
+      }
       setCompleteMsg("Quest Saved to Your Profile!");
       window.dispatchEvent(new Event("quest-saved"));
     } catch (err) {
@@ -130,12 +254,43 @@ export default function QuestLivePage() {
 
   };
 
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   if (!quest) {
     return <div className="p-6 text-center text-red-600">Quest data missing.</div>;
   }
 
   return (
     <div className="relative flex min-h-screen flex-col bg-[#f8fcf8] overflow-x-hidden font-jakarta">
+      {showComplete && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 text-3xl font-bold animate-bounce">
+          Quest Complete!
+        </div>
+      )}
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between border-b border-[#e7f3e7] px-10 py-3">
           <div className="flex items-center gap-4 text-[#0e1b0e]">
@@ -173,20 +328,50 @@ export default function QuestLivePage() {
 
         <main className="px-10 py-5 flex flex-col max-w-4xl mx-auto w-full">
           <div className="flex flex-wrap justify-between gap-3 p-4">
-            <div className="flex flex-col gap-3 min-w-72">
-              <p className="text-2xl font-bold text-[#0e1b0e]">
-                {quest?.title || "Your Quest"}
-              </p>
-              <p className="text-sm text-[#4e974e]">
-                {quest?.questText || "Embark on your adventure"}
-              </p>
+          <div className="flex flex-col gap-3 min-w-72">
+            <p className="text-2xl font-bold text-[#0e1b0e]">
+              {quest?.title || "Your Quest"}
+            </p>
+            <p className="text-sm text-[#4e974e]">
+              {quest?.questText || "Embark on your adventure"}
+            </p>
+            {groupId && (
+              <div className="text-xs text-blue-700 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="break-all">Invite: {`${window.location.origin}/live?groupId=${groupId}`}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/live?groupId=${groupId}`);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    }}
+                    className="px-2 py-0.5 rounded bg-blue-600 text-white"
+                  >
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                {groupData && (
+                  <GroupMemberList members={groupData.members || []} progress={groupData.progress || {}} total={quest?.places?.length || 0} />
+                )}
+              </div>
+            )}
+          </div>
+            <div className="flex gap-2">
+              {groupId && (
+                <button
+                  onClick={handleLeave}
+                  className="h-10 px-4 rounded-full bg-red-500 text-sm text-white"
+                >
+                  Leave Group
+                </button>
+              )}
+              <button
+                onClick={() => window.location.assign('/home')}
+                className="h-10 px-4 rounded-full bg-[#e7f3e7] text-sm text-[#0e1b0e]"
+              >
+                Back to Home
+              </button>
             </div>
-            <button
-              onClick={() => window.location.assign('/home')}
-              className="h-8 px-4 rounded-full bg-[#e7f3e7] text-sm text-[#0e1b0e]"
-            >
-              Back to Home
-            </button>
           </div>
 
           <div className="p-4">
@@ -196,16 +381,24 @@ export default function QuestLivePage() {
                 {visitedIndices.length}/{quest?.places?.length}
               </p>
             </div>
-            <div className="w-full bg-[#d0e7d0] rounded">
-              <div
-                className="h-2 rounded bg-[#14b714]"
-                style={{ width: `${(visitedIndices.length / (quest?.places?.length || 1)) * 100}%` }}
-              />
-            </div>
+          <div className="w-full bg-[#d0e7d0] rounded">
+            <div
+              className="h-2 rounded bg-[#14b714]"
+              style={{ width: `${(visitedIndices.length / (quest?.places?.length || 1)) * 100}%` }}
+            />
           </div>
+        </div>
+        {activityMsg && (
+          <p className="text-xs text-center text-blue-700 mt-1">{activityMsg}</p>
+        )}
 
           <div className="px-4 py-3">
-            <LiveQuestMap stops={stops} visitedIndex={currentStopIndex} userLocation={userLocation} />
+            <LiveQuestMap
+              stops={stops}
+              visitedIndex={currentStopIndex}
+              userLocation={userLocation}
+              polylinePoints={polylinePoints}
+            />
           </div>
 
           <p className="text-sm text-[#4e974e] text-center px-4">
@@ -215,23 +408,23 @@ export default function QuestLivePage() {
           <div className="flex px-4 py-3">
             <button
               onClick={handleMarkVisited}
-              disabled={allVisited}
-              className={`flex-1 h-12 rounded-full text-base font-bold text-[#f8fcf8] ${
-                allVisited
+              disabled={questComplete}
+              className={`flex-1 h-14 rounded-full text-base font-bold text-[#f8fcf8] ${
+                questComplete
                   ? "bg-gray-400 cursor-not-allowed"
                   : "bg-[#14b714] hover:bg-[#0fa50f]"
               }`}
             >
-              {allVisited ? "Quest Complete!" : "Mark as Visited"}
+              {questComplete ? "Quest Complete!" : "Mark as Visited"}
             </button>
           </div>
 
-          {allVisited && (
+          {questComplete && (
             <div className="flex px-4 py-3">
               <button
                 onClick={handleComplete}
                 disabled={saving}
-                className="flex-1 h-12 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-bold text-white"
+                className="flex-1 h-14 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-bold text-white"
               >
                 {saving ? "Saving..." : "Complete Quest"}
               </button>
@@ -240,6 +433,11 @@ export default function QuestLivePage() {
           {completeMsg && (
             <p className="text-center text-green-700 mt-2">{completeMsg}</p>
           )}
+          <div className="px-4 py-2">
+            <button onClick={handleReport} className="text-xs text-red-600 underline">
+              Report Quest
+            </button>
+          </div>
         </main>
       </div>
     </div>
