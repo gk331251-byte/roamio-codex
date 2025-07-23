@@ -68,3 +68,12 @@ export async function validatePremium(userId) {
   }
   return resp.json();
 }
+
+export async function getUserQuests(userId) {
+  const resp = await fetch(`${BASE_URL}/get-user-quests?userId=${userId}`);
+  if (!resp.ok) {
+    throw new Error('Failed to load quests');
+  }
+  return resp.json();
+}
+

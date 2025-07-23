@@ -242,6 +242,32 @@ def _to_value(val):
 def _encode_fields(data: dict):
     return {k: _to_value(v) for k, v in data.items()}
 
+def _from_value(val):
+    if "nullValue" in val:
+        return None
+    if "booleanValue" in val:
+        return val["booleanValue"]
+    if "integerValue" in val:
+        return int(val["integerValue"])
+    if "doubleValue" in val:
+        return float(val["doubleValue"])
+    if "stringValue" in val:
+        return val["stringValue"]
+    if "arrayValue" in val:
+        return [
+            _from_value(v) for v in val.get("arrayValue", {}).get("values", [])
+        ]
+    if "mapValue" in val:
+        return {
+            k: _from_value(v)
+            for k, v in val.get("mapValue", {}).get("fields", {}).items()
+        }
+    return val
+
+def _decode_document(doc: dict) -> dict:
+    return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
+
+
 
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
@@ -256,6 +282,35 @@ async def complete_quest(payload: dict = Body(...)):
 
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
+
+    # === Save quest completion ===
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "completedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # === Update lastActive ===
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "Quest saved!"}
+
 
     # === Save quest completion ===
     quest_doc = {
@@ -363,18 +418,39 @@ def test_write():
     print("Firestore REST error", resp.text)
     resp.raise_for_status()
 
-@app.get("/get-user-quests/{user_id}")
-async def get_user_quests(user_id: str):
-    """Fetch completed quests for a user via Firestore REST."""
+@app.get("/get-user-quests")
+async def get_user_quests(userId: str = Query(...)):
+    """Return quests for a user sorted by completedAt desc."""
     project_id = creds.project_id
     url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{userId}:runQuery"
     )
-    resp = await asyncio.to_thread(rest_session.get, url)
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "quests"}],
+            "orderBy": [
+                {
+                    "field": {"fieldPath": "completedAt"},
+                    "direction": "DESCENDING",
+                }
+            ],
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
-    return resp.json()
+    raw = resp.json()
+    results = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        obj["id"] = doc["name"].split("/")[-1]
+        results.append(obj)
+    return {"quests": results}
+
 
 
 @app.get("/get-quest/{quest_id}")

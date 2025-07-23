@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { motion } from 'framer-motion';
+import { motion as Motion } from 'framer-motion';
 import { auth, db } from '../firebase';
 
 const PostcardGallery = () => {
@@ -39,7 +39,7 @@ const PostcardGallery = () => {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
       {cards.map(card => (
-        <motion.div
+        <Motion.div
           key={card.id}
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -56,7 +56,7 @@ const PostcardGallery = () => {
               {card.questData?.difficulty || card.difficulty || 'easy'}
             </span>
           </div>
-        </motion.div>
+        </Motion.div>
       ))}
     </div>
   );
