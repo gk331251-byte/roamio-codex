@@ -277,7 +277,7 @@ async def complete_quest(payload: dict = Body(...)):
 
     if not all([user_id, quest_id, quest_data]):
         return {"error": "userId, questId and questData required"}
-      
+
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
 
@@ -308,7 +308,6 @@ async def complete_quest(payload: dict = Body(...)):
         resp.raise_for_status()
 
     return {"status": "Quest saved!"}
-
 
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
@@ -496,21 +495,70 @@ async def get_quest(quest_id: str):
 
 @app.post("/track-visit")
 async def track_visit(payload: dict = Body(...)):
-    """Record a quest stop visit time."""
+    """Update visited quest indices and award XP."""
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
-    stop_id = payload.get("stopId", "unknown")
-    timestamp = datetime.utcnow().isoformat()
+    place_index = payload.get("placeIndex")
+
+    if user_id is None or quest_id is None or place_index is None:
+        return {"error": "userId, questId and placeIndex required"}
+
     project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}/visits/{stop_id}"
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
     )
-    body = {"fields": _encode_fields({"visitedAt": timestamp})}
-    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+
+    # Fetch existing quest document
+    resp = await asyncio.to_thread(rest_session.get, quest_url)
+    existing_fields = {}
+    if resp.status_code == 200:
+        existing_fields = _decode_document(resp.json())
+
+    visited = existing_fields.get("visitedIndices", [])
+    new_visit = place_index not in visited
+    if new_visit:
+        visited.append(place_index)
+        visited.sort()
+    existing_fields["visitedIndices"] = visited
+
+    # Update quest document
+    body = {"fields": _encode_fields(existing_fields)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
-    return {"status": "visit tracked"}
+
+    # ----- XP & Badges -----
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, user_url)
+    user_data = {}
+    if resp.status_code == 200:
+        user_data = _decode_document(resp.json())
+
+    xp = user_data.get("xp", 0)
+    stats = user_data.get("stats", {})
+    badges = user_data.get("badges", {})
+
+    if new_visit:
+        xp += 10
+        stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
+        stats["totalXP"] = stats.get("totalXP", 0) + 10
+
+    if len(visited) == 10:
+        badges["adventurer"] = True
+    if stats.get("totalQuestsCompleted", 0) >= 5:
+        badges["explorer"] = True
+
+    user_body = {"fields": _encode_fields({"xp": xp, "stats": stats, "badges": badges})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "ok", "visitedIndices": visited, "xp": xp, "badges": badges}
+
 
 
 @app.post("/upload-postcard")

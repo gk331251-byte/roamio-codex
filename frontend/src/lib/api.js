@@ -89,3 +89,15 @@ export async function getDirections(places) {
   return resp.json();
 }
 
+export async function trackVisit(userId, questId, placeIndex) {
+  const resp = await fetch(`${BASE_URL}/track-visit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, placeIndex }),
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to track visit');
+  }
+  return resp.json();
+}
+

@@ -163,7 +163,14 @@ const QuestHome = () => {
               />
 
               <button
-                onClick={() => navigate('/live', { state: { quest: questResult.quest } })}
+                onClick={() =>
+                  navigate('/live', {
+                    state: {
+                      quest: questResult.quest,
+                      questId: `${city}_${mood.join('-')}`,
+                    },
+                  })
+                }
                 className="mt-4 w-full bg-[#14b714] text-white py-2 rounded-lg font-bold hover:bg-[#0fa50f] transition"
               >
                 Start Quest
