@@ -239,7 +239,6 @@ async def complete_quest(payload: dict = Body(...)):
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     quest_data = payload.get("questData")
-
     print("/quest-complete payload:", payload)
 
     if not all([user_id, quest_id, quest_data]):
@@ -253,7 +252,8 @@ async def complete_quest(payload: dict = Body(...)):
         "userId": user_id,
         "questId": quest_id,
         "questData": quest_data,
-        "completedAt": timestamp,
+        "generatedAt": timestamp,
+        "completedAt": timestamp
     }
     quest_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
@@ -265,6 +265,7 @@ async def complete_quest(payload: dict = Body(...)):
         resp.raise_for_status()
 
     # === Update lastActive ===
+
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     )
