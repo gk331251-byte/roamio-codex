@@ -29,7 +29,6 @@ export default function LiveQuestMap({
   const mapRef = useRef(null);
   const mapsRef = useRef(null);
   const polyRef = useRef(null);
-
   const drawPolyline = () => {
     if (!mapRef.current || !mapsRef.current) return;
     if (polyRef.current) {
@@ -53,6 +52,7 @@ export default function LiveQuestMap({
   }, [polylinePoints]);
 
   const panTimeout = useRef(null);
+
 
   useEffect(() => {
     if (!mapRef.current || !userLocation) return;

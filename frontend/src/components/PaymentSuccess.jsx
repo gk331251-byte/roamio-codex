@@ -7,6 +7,7 @@ const PaymentSuccess = () => {
   const [status, setStatus] = useState('Activating...');
   const navigate = useNavigate();
 
+
   useEffect(() => {
     const uid = params.get('userId');
     const session = params.get('session_id');
