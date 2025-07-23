@@ -24,10 +24,8 @@ gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
-db = firestore.Client(
-    client_options={"api_endpoint": "https://firestore.googleapis.com"},
-    transport="rest"
-)
+db = firestore.Client()  # fallback to gRPC (see if TLS errors still occur)
+
 
 def generate_hash_key(city, mood):
     key_str = f"{city.strip().lower()}_{mood.strip().lower()}"
