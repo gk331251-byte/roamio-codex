@@ -9,6 +9,7 @@ import openai
 import certifi
 from google.cloud import firestore, storage
 
+
 from dotenv import load_dotenv
 from emotion_utils import generate_filtered_quest_payload
 
