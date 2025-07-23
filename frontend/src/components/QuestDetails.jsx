@@ -73,7 +73,6 @@ const QuestDetails = () => {
 
       setCompleted(true);
       window.dispatchEvent(new Event('quest-saved'));
-
       console.log("✅ Quest completed and postcard uploaded.");
     } catch (err) {
       console.error("🔥 Error completing quest:", err);

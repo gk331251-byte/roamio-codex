@@ -76,4 +76,3 @@ export async function getUserQuests(userId) {
   }
   return resp.json();
 }
-
