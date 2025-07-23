@@ -284,7 +284,7 @@ async def complete_quest(payload: dict = Body(...)):
         resp.raise_for_status()
 
     return {"status": "Quest saved!"}
-
+  
 @app.get("/places")
 def get_places(city: str = Query(...)):
     geocode_result = gmaps.geocode(city)
