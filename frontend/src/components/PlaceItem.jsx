@@ -26,6 +26,7 @@ export default function PlaceItem({ place }) {
   const name = place?.name || "Unnamed Place";
   const type = place?.type || "Unknown";
   const icon = typeIcons[type] || typeIcons["Unknown"];
+  const visit = place.visitDuration || 10;
   const mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}`;
 
   return (
@@ -39,7 +40,7 @@ export default function PlaceItem({ place }) {
       >
         <strong>{name}</strong>
       </a>
-      <span className="text-sm text-gray-500">({type})</span>
+      <span className="text-sm text-gray-500">({type}, ~{visit} min)</span>
     </li>
   );
 }
