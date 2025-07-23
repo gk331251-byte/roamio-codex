@@ -1,20 +1,28 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { validatePremium } from '../lib/api';
 
 const PaymentSuccess = () => {
   const [params] = useSearchParams();
   const [status, setStatus] = useState('Activating...');
+  const navigate = useNavigate();
+
 
   useEffect(() => {
     const uid = params.get('userId');
     const session = params.get('session_id');
     if (uid && session) {
       validatePremium(uid, session)
-        .then(() => setStatus('Quest+ Activated!'))
-        .catch(() => setStatus('Validation failed'));
+        .then((res) => {
+          if (res.premium) {
+            setStatus('Quest+ Activated!');
+          } else {
+            navigate('/payment-failed');
+          }
+        })
+        .catch(() => navigate('/payment-failed'));
     } else {
-      setStatus('Quest+ Activated!');
+      navigate('/payment-failed');
     }
   }, [params]);
 
