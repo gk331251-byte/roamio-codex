@@ -3,8 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
 import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
-import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup } from "../lib/api";
-
+import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest } from "../lib/api";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -78,7 +77,6 @@ export default function QuestLivePage() {
         });
       }
       prev = data;
-
     });
     return () => unsub();
   }, [groupId]);
@@ -165,6 +163,7 @@ export default function QuestLivePage() {
     setSaving(true);
     setCompleteMsg("");
     try {
+      const share = window.confirm('Share this quest publicly?');
       await completeQuest(user.uid, questId, {
         title: quest.title,
         city: quest.city,
@@ -175,6 +174,8 @@ export default function QuestLivePage() {
         imagePrompt: quest.imagePrompt,
         imageUrl: quest.imageUrl,
         visitedIndices,
+        public: share,
+        displayName: user.displayName,
       });
       if (groupId) {
         await completeGroupQuest(groupId, user.uid);
@@ -188,6 +189,19 @@ export default function QuestLivePage() {
       setSaving(false);
     }
 
+  };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
   };
 
   const handleLeave = async () => {
@@ -294,7 +308,6 @@ export default function QuestLivePage() {
                 Back to Home
               </button>
             </div>
-
           </div>
 
           <div className="p-4">
@@ -351,6 +364,11 @@ export default function QuestLivePage() {
           {completeMsg && (
             <p className="text-center text-green-700 mt-2">{completeMsg}</p>
           )}
+          <div className="px-4 py-2">
+            <button onClick={handleReport} className="text-xs text-red-600 underline">
+              Report Quest
+            </button>
+          </div>
         </main>
       </div>
     </div>

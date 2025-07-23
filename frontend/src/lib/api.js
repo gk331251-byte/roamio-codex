@@ -108,7 +108,6 @@ export async function createGroupQuest(userId, questId, displayName) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, questId, displayName })
-
   });
   if (!resp.ok) {
     throw new Error('Failed to create group');
@@ -121,7 +120,6 @@ export async function joinGroup(userId, groupId, displayName) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, groupId, displayName })
-
   });
   if (!resp.ok) {
     throw new Error('Failed to join group');
@@ -165,7 +163,6 @@ export async function leaveGroup(groupId, userId) {
   return resp.json();
 }
 
-
 export async function getActiveQuest(userId) {
   const resp = await fetch(`${BASE_URL}/active-quest/${userId}`);
   if (!resp.ok) {
@@ -181,3 +178,23 @@ export async function getQuest(questId) {
   }
   return resp.json();
 }
+export async function getCommunityQuests() {
+  const resp = await fetch(`${BASE_URL}/get-community-quests`);
+  if (!resp.ok) {
+    throw new Error('Failed to load community quests');
+  }
+  return resp.json();
+}
+
+export async function reportQuest(userId, questId, reason, city, mood) {
+  const resp = await fetch(`${BASE_URL}/report-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, reason, city, mood })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to report quest');
+  }
+  return resp.json();
+}
+

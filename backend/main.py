@@ -347,6 +347,28 @@ async def complete_quest(payload: dict = Body(...)):
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
 
+    if payload.get("public"):
+        feed_id = f"{quest_id}_{user_id}"
+        feed_doc = {
+            "city": payload.get("city"),
+            "mood": payload.get("mood"),
+            "displayName": payload.get("displayName"),
+            "imageUrl": payload.get("imageUrl"),
+            "questText": payload.get("questText"),
+            "completedAt": timestamp,
+            "userId": user_id,
+            "questId": quest_id,
+            "title": payload.get("title"),
+        }
+        feed_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{feed_id}"
+        )
+        feed_body = {"fields": _encode_fields(feed_doc)}
+        fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
+        if fr.status_code != 200:
+            print("Firestore REST error", fr.text)
+            fr.raise_for_status()
+
     return {"status": "completed", "newXP": xp, "badges": badges}
 
 
@@ -726,7 +748,6 @@ async def create_group_quest(payload: dict = Body(...)):
         "progress": {user_id: []},
         "invitedBy": user_id,
         "completed": False,
-
         "createdAt": datetime.utcnow().isoformat(),
     }
     group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
@@ -756,7 +777,6 @@ async def join_group(payload: dict = Body(...)):
     user_id = payload.get("userId")
     group_id = payload.get("groupId")
     display_name = payload.get("displayName")
-
     if not user_id or not group_id:
         return {"error": "userId and groupId required"}
 
@@ -767,7 +787,6 @@ async def join_group(payload: dict = Body(...)):
         active_fields = _decode_document(active_resp.json())
         if active_fields.get("status") != "completed" and active_fields.get("groupId") not in (None, group_id):
             return {"error": "active quest already"}
-
     group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
@@ -779,7 +798,6 @@ async def join_group(payload: dict = Body(...)):
     members = fields.get("members", [])
     if not any(m.get("userId") == user_id for m in members):
         members.append({"userId": user_id, "displayName": display_name or user_id})
-
     progress = fields.get("progress", {})
     if user_id not in progress:
         progress[user_id] = []
@@ -792,7 +810,6 @@ async def join_group(payload: dict = Body(...)):
         "groupId": group_id,
         "questId": fields.get("questId"),
         "status": "active",
-
         "visitedStops": progress[user_id],
         "startedAt": datetime.utcnow().isoformat(),
     }
@@ -823,7 +840,6 @@ async def track_stop_visit(payload: dict = Body(...)):
     if not any(m.get("userId") == user_id for m in fields.get("members", [])):
         return {"error": "Not a group member"}
 
-
     progress = fields.get("progress", {})
     user_progress = progress.get(user_id, [])
     if place_index not in user_progress:
@@ -845,7 +861,6 @@ async def track_stop_visit(payload: dict = Body(...)):
         "status": "active",
         "visitedStops": user_progress,
     })
-
     active_body = {"fields": _encode_fields(active_fields)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
@@ -885,8 +900,7 @@ async def complete_group_quest(payload: dict = Body(...)):
 
     return {"status": "completed"}
 
-
-
+  
 @app.get("/active-quest/{user_id}")
 async def get_active_quest(user_id: str):
     """Return the current active quest doc for the user."""
@@ -943,4 +957,62 @@ async def leave_group(payload: dict = Body(...)):
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     await asyncio.to_thread(rest_session.delete, active_url)
     return {"status": "left"}
+
+
+@app.post("/report-quest")
+async def report_quest(payload: dict = Body(...)):
+    """Receive a quest report and store in Firestore."""
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    reason = payload.get("reason")
+    if not user_id or not quest_id or not reason:
+        return {"error": "userId, questId and reason required"}
+
+    project_id = creds.project_id
+    doc_id = f"{quest_id}_{user_id}"
+    report = {
+        "userId": user_id,
+        "questId": quest_id,
+        "reason": reason,
+        "city": payload.get("city"),
+        "mood": payload.get("mood"),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_reports/{doc_id}"
+    body = {"fields": _encode_fields(report)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "reported"}
+
+
+@app.get("/get-community-quests")
+async def get_community_quests():
+    """Return recently completed public quests."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests:runQuery"
+    )
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "community_quests"}],
+            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "limit": 20,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    results = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        obj["id"] = doc["name"].split("/")[-1]
+        results.append(obj)
+    return {"quests": results}
 
