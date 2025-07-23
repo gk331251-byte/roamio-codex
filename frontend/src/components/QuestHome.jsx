@@ -138,6 +138,7 @@ const QuestHome = () => {
       navigate('/quest-plus');
       return;
     }
+
     if (!questResult) return;
     const questId = `${city}_${mood.join('-')}`;
     try {
