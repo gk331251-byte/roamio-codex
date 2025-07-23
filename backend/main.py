@@ -19,6 +19,10 @@ load_dotenv()
 # === Set up trusted certs for HTTPS (esp. in Codex) ===
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
+if "CODEX_PROXY_URL" in os.environ:
+    os.environ["HTTPS_PROXY"] = os.environ["CODEX_PROXY_URL"]
+    os.environ["HTTP_PROXY"] = os.environ["CODEX_PROXY_URL"]
+
 # === Load API keys from env (Codex-compatible) ===
 #
 gmaps = googlemaps.Client(key=os.getenv("VITE_GOOGLE_MAPS_API_KEY"))
