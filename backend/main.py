@@ -726,6 +726,7 @@ async def create_group_quest(payload: dict = Body(...)):
         "progress": {user_id: []},
         "invitedBy": user_id,
         "completed": False,
+
         "createdAt": datetime.utcnow().isoformat(),
     }
     group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
@@ -755,6 +756,7 @@ async def join_group(payload: dict = Body(...)):
     user_id = payload.get("userId")
     group_id = payload.get("groupId")
     display_name = payload.get("displayName")
+
     if not user_id or not group_id:
         return {"error": "userId and groupId required"}
 
@@ -765,6 +767,7 @@ async def join_group(payload: dict = Body(...)):
         active_fields = _decode_document(active_resp.json())
         if active_fields.get("status") != "completed" and active_fields.get("groupId") not in (None, group_id):
             return {"error": "active quest already"}
+
     group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
@@ -776,6 +779,7 @@ async def join_group(payload: dict = Body(...)):
     members = fields.get("members", [])
     if not any(m.get("userId") == user_id for m in members):
         members.append({"userId": user_id, "displayName": display_name or user_id})
+
     progress = fields.get("progress", {})
     if user_id not in progress:
         progress[user_id] = []
@@ -788,6 +792,7 @@ async def join_group(payload: dict = Body(...)):
         "groupId": group_id,
         "questId": fields.get("questId"),
         "status": "active",
+
         "visitedStops": progress[user_id],
         "startedAt": datetime.utcnow().isoformat(),
     }
@@ -818,6 +823,7 @@ async def track_stop_visit(payload: dict = Body(...)):
     if not any(m.get("userId") == user_id for m in fields.get("members", [])):
         return {"error": "Not a group member"}
 
+
     progress = fields.get("progress", {})
     user_progress = progress.get(user_id, [])
     if place_index not in user_progress:
@@ -839,6 +845,7 @@ async def track_stop_visit(payload: dict = Body(...)):
         "status": "active",
         "visitedStops": user_progress,
     })
+
     active_body = {"fields": _encode_fields(active_fields)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
@@ -877,6 +884,7 @@ async def complete_group_quest(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     return {"status": "completed"}
+
 
 
 @app.get("/active-quest/{user_id}")
@@ -935,3 +943,4 @@ async def leave_group(payload: dict = Body(...)):
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     await asyncio.to_thread(rest_session.delete, active_url)
     return {"status": "left"}
+
