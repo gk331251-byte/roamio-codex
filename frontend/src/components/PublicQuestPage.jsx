@@ -1,6 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getCustomQuest, createCustomQuest, createGroupQuest } from '../lib/api';
+import {
+  getCustomQuest,
+  createCustomQuest,
+  createGroupQuest,
+  likeQuest,
+  viewQuest,
+  replayQuest,
+} from '../lib/api';
+
 import { getAuth } from 'firebase/auth';
 
 const toQuestObj = (doc) => {
@@ -30,6 +38,7 @@ export default function PublicQuestPage() {
   const { questId } = useParams();
   const [quest, setQuest] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [liked, setLiked] = useState(false);
   const navigate = useNavigate();
   const auth = getAuth();
   const user = auth.currentUser;
@@ -38,6 +47,9 @@ export default function PublicQuestPage() {
     getCustomQuest(questId)
       .then((doc) => setQuest(toQuestObj(doc)))
       .catch((err) => console.error('fetch quest failed', err));
+    if (user) {
+      viewQuest(user.uid, questId).catch(() => {});
+    }
   }, [questId]);
 
   const handleStart = async () => {
@@ -59,6 +71,7 @@ export default function PublicQuestPage() {
       };
       const res = await createCustomQuest(payload);
       const group = await createGroupQuest(user.uid, res.questId, user.displayName);
+      await replayQuest(questId).catch(() => {});
       navigate('/live', { state: { quest, questId: res.questId, groupId: group.groupId } });
     } catch (err) {
       console.error('start failed', err);
@@ -77,6 +90,7 @@ export default function PublicQuestPage() {
         custom_prompt: quest.customPrompt,
         status: 'draft',
       });
+      await replayQuest(questId).catch(() => {});
       setCopied(true);
     } catch (err) {
       console.error('copy failed', err);
@@ -87,12 +101,26 @@ export default function PublicQuestPage() {
 
   const totalTime = quest.places.reduce((t, p) => t + (p.duration_minutes || 0), 0);
   const shareLink = `${window.location.origin}/q/${questId}`;
+  const handleLike = async () => {
+    if (!user || liked) return;
+    try {
+      await likeQuest(user.uid, questId);
+      setLiked(true);
+    } catch (err) {
+      console.error('like failed', err);
+    }
+  };
 
   return (
     <div className="max-w-xl mx-auto p-6 space-y-4 text-[#0e1b0e]">
       <h1 className="text-2xl font-bold">{quest.title}</h1>
       <div className="text-sm">Mood: {quest.moodTags?.join(', ')}</div>
       <div className="text-sm">Estimated Time: {totalTime} mins</div>
+      <div className="text-sm flex gap-4">
+        <span>❤️ {quest.likesCount || 0}</span>
+        <span>👁️ {quest.viewsCount || 0}</span>
+        <span>🔄 {quest.replaysCount || 0}</span>
+      </div>
       <ol className="list-decimal pl-5 space-y-1">
         {quest.places.map((p, idx) => (
           <li key={idx}>{p.name} ({p.duration_minutes} min)</li>
@@ -110,6 +138,14 @@ export default function PublicQuestPage() {
           onClick={handleCopy}
         >
           {copied ? 'Copied!' : 'Copy Quest'}
+        </button>
+      )}
+      {user && (
+        <button
+          className="ml-2 px-3 py-2 border rounded"
+          onClick={handleLike}
+        >
+          {liked ? 'Liked!' : 'Like this Quest'}
         </button>
       )}
       <div className="mt-4">

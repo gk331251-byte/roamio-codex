@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { getAuth } from 'firebase/auth';
 import { createCustomQuest, createGroupQuest, validatePremium, publishCustomQuest } from '../lib/api';
 
-
 const moodOptions = [
   'romantic',
   'spooky',
@@ -20,7 +19,6 @@ const templates = [
   { title: 'First Date Adventure', moods: ['romantic', 'outdoorsy'], prompt: 'Break the ice with fun mini challenges.' },
   { title: 'Funky Vintage Hunt', moods: ['quirky'], prompt: 'Search for the coolest retro finds.' },
 ];
-
 
 export default function CustomQuestBuilder() {
   const [user, setUser] = useState(null);
@@ -185,7 +183,6 @@ export default function CustomQuestBuilder() {
             <option key={idx} value={idx}>{t.title}</option>
           ))}
         </select>
-
         <input
           type="text"
           placeholder="Quest Title"

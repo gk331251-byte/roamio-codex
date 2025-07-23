@@ -276,3 +276,75 @@ export async function publishCustomQuest(userId, questId) {
   }
   return resp.json();
 }
+
+export async function likeQuest(userId, questId) {
+  const resp = await fetch(`${BASE_URL}/like-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quest_id: questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to like quest');
+  }
+  return resp.json();
+}
+
+export async function viewQuest(userId, questId) {
+  const resp = await fetch(`${BASE_URL}/view-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quest_id: questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to view quest');
+  }
+  return resp.json();
+}
+
+export async function replayQuest(questId) {
+  const resp = await fetch(`${BASE_URL}/replay-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quest_id: questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to replay quest');
+  }
+  return resp.json();
+}
+
+export async function createCommunityGroup(data) {
+  const resp = await fetch(`${BASE_URL}/create-community-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to create group');
+  }
+  return resp.json();
+}
+
+export async function joinCommunityGroup(group_id, user_id) {
+  const resp = await fetch(`${BASE_URL}/join-community-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group_id, user_id })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to join group');
+  }
+  return resp.json();
+}
+
+export async function linkQuestToGroup(group_id, quest_id, upcoming = false) {
+  const resp = await fetch(`${BASE_URL}/link-quest-to-group`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group_id, quest_id, upcoming })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to link quest');
+  }
+  return resp.json();
+}
