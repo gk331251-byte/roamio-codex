@@ -17,6 +17,8 @@ import QuestPlusPage from "./components/QuestPlusPage";
 import PaymentSuccess from "./components/PaymentSuccess";
 import PaymentFailed from "./components/PaymentFailed";
 import CommunityFeed from "./components/CommunityFeed";
+import AdminDashboard from "./components/AdminDashboard";
+
 
 
 function App() {
@@ -60,6 +62,7 @@ function App() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
         <Route path="/community" element={<CommunityFeed />} />
+        <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/quest-plus" element={<QuestPlusPage />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
