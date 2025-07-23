@@ -988,6 +988,7 @@ async def report_quest(payload: dict = Body(...)):
         resp.raise_for_status()
     return {"status": "reported"}
 
+  
 @app.get("/get-quest-reports")
 async def get_quest_reports():
     """Return recent quest reports for admin review."""
@@ -1038,7 +1039,6 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
     return {"status": "updated"}
 
 
-
 @app.get("/get-community-quests")
 async def get_community_quests():
     """Return recently completed public quests."""
@@ -1069,4 +1069,70 @@ async def get_community_quests():
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
+
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(payload: dict = Body(...)):
+    """Return a Stripe Checkout URL or mock URL."""
+    user_id = payload.get("userId")
+    email = payload.get("email")
+    if not user_id or not email:
+        return {"error": "userId and email required"}
+
+    base_url = payload.get("baseUrl", "https://example.com")
+    success = f"{base_url}/payment-success?userId={user_id}&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel = f"{base_url}/payment-failed"
+    stripe_key = os.getenv("STRIPE_SECRET_KEY")
+    if stripe_key:
+        try:
+            import stripe
+            stripe.api_key = stripe_key
+            session = await asyncio.to_thread(
+                stripe.checkout.Session.create,
+                payment_method_types=["card"],
+                mode="payment",
+                line_items=[{"price": os.getenv("STRIPE_PRICE_ID", "price_123"), "quantity": 1}],
+                customer_email=email,
+                success_url=success,
+                cancel_url=cancel,
+            )
+            return {"url": session.url}
+        except Exception as e:
+            print("Stripe error", e)
+            return {"error": "stripe failed"}
+    # Fallback mock URL
+    return {"url": success.replace("{CHECKOUT_SESSION_ID}", "mock")}
+
+
+@app.get("/validate-premium/{user_id}")
+async def validate_premium(user_id: str, session_id: str | None = Query(None)):
+    """Check premium flag and optionally verify checkout session."""
+    project_id = creds.project_id
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, user_url)
+    fields = {}
+    if resp.status_code == 200:
+        fields = _decode_document(resp.json())
+    premium = fields.get("premium") is True
+
+    if not premium and session_id:
+        stripe_key = os.getenv("STRIPE_SECRET_KEY")
+        if stripe_key and session_id != "mock":
+            try:
+                import stripe
+                stripe.api_key = stripe_key
+                sess = await asyncio.to_thread(stripe.checkout.Session.retrieve, session_id)
+                premium = sess.get("payment_status") == "paid"
+            except Exception as e:
+                print("Stripe verify error", e)
+                premium = False
+        elif session_id == "mock":
+            premium = True
+        if premium:
+            fields["premium"] = True
+            body = {"fields": _encode_fields(fields)}
+            await asyncio.to_thread(rest_session.patch, user_url, json=body)
+
+    return {"premium": premium}
+
 

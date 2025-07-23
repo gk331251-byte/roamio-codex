@@ -62,8 +62,10 @@ export async function uploadPostcard(userId, questId, imageUrl) {
   return resp.json();
 }
 
-export async function validatePremium(userId) {
-  const resp = await fetch(`${BASE_URL}/validate-premium/${userId}`);
+export async function validatePremium(userId, sessionId) {
+  const url = new URL(`${BASE_URL}/validate-premium/${userId}`);
+  if (sessionId) url.searchParams.set('session_id', sessionId);
+  const resp = await fetch(url.toString());
   if (!resp.ok) {
     throw new Error('Failed to validate premium');
   }
@@ -215,6 +217,18 @@ export async function toggleQuestVisibility(questId, userId, visible) {
   });
   if (!resp.ok) {
     throw new Error('Failed to update visibility');
+  }
+  return resp.json();
+}
+
+export async function createCheckoutSession(userId, email) {
+  const resp = await fetch(`${BASE_URL}/create-checkout-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, email, baseUrl: window.location.origin })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to create checkout session');
   }
   return resp.json();
 }

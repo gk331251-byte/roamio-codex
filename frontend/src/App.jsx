@@ -20,7 +20,6 @@ import CommunityFeed from "./components/CommunityFeed";
 import AdminDashboard from "./components/AdminDashboard";
 
 
-
 function App() {
   const navigate = useNavigate();
   const location = useLocation();

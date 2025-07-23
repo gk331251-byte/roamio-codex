@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup } from "../lib/api.js";
+import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium } from "../lib/api.js";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -41,13 +41,24 @@ const QuestHome = () => {
   const [error, setError] = useState("");
   const [questResult, setQuestResult] = useState(null);
   const [user, setUser] = useState(null);
+  const [premium, setPremium] = useState(false);
   const [resumeData, setResumeData] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
+      if (firebaseUser) {
+        try {
+          const res = await validatePremium(firebaseUser.uid);
+          setPremium(!!res.premium);
+        } catch (err) {
+          console.error('premium check failed', err);
+        }
+      } else {
+        setPremium(false);
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -94,6 +105,11 @@ const QuestHome = () => {
     setError("");
     setQuestResult(null);
 
+    if (!premium) {
+      navigate('/quest-plus');
+      return;
+    }
+
     if (!user) {
       setError("You must be signed in to generate a quest.");
       return;
@@ -118,6 +134,11 @@ const QuestHome = () => {
   };
 
   const handleStartQuest = async () => {
+    if (!premium) {
+      navigate('/quest-plus');
+      return;
+    }
+
     if (!questResult) return;
     const questId = `${city}_${mood.join('-')}`;
     try {
@@ -238,6 +259,12 @@ const QuestHome = () => {
               >
                 Start Quest
               </button>
+              {!premium && (
+                <p className="text-center text-xs mt-1">
+                  Quest+ required to start quests.{' '}
+                  <a href="/quest-plus" className="text-blue-600 underline">Upgrade</a>
+                </p>
+              )}
               {resumeData && (
                 <p className="text-center text-sm text-red-600 mt-1">
                   You have a quest in progress.
