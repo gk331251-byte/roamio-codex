@@ -9,17 +9,34 @@ const QuestHistory = () => {
   const [quests, setQuests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [highlight, setHighlight] = useState(null);
 
-  const loadQuests = async (uid) => {
-    try {
-      const data = await getUserQuests(uid);
-      setQuests(data.quests || []);
-    } catch (err) {
-      console.error('Failed to load quests', err);
-      setError('Failed to load quests');
-    } finally {
-      setLoading(false);
+  const loadQuests = async (uid, highlightNew = false) => {
+    setLoading(true);
+    setError('');
+    const delays = [500, 1000, 2000];
+    for (let i = 0; i < delays.length; i++) {
+      try {
+        const data = await getUserQuests(uid);
+        setQuests(data.quests || []);
+        if (highlightNew && data.quests && data.quests.length > 0) {
+          setHighlight(data.quests[0].id || null);
+          setTimeout(() => setHighlight(null), 2000);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        setLoading(false);
+        return;
+      } catch (err) {
+        console.error('Failed to load quests', err);
+        if (i === delays.length - 1) {
+          setError('Failed to load quests');
+        } else {
+          await new Promise((res) => setTimeout(res, delays[i]));
+        }
+      }
     }
+    setLoading(false);
+
   };
 
   useEffect(() => {
@@ -34,7 +51,8 @@ const QuestHistory = () => {
       }
     });
     const refresh = () => {
-      if (currentUser) loadQuests(currentUser.uid);
+      if (currentUser) loadQuests(currentUser.uid, true);
+      
     };
     window.addEventListener('quest-saved', refresh);
     return () => {
@@ -44,7 +62,11 @@ const QuestHistory = () => {
   }, []);
 
   if (loading) {
-    return <div className="p-6">Loading quests...</div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        Loading your adventures...
+      </div>
+    );
   }
   if (error) {
     return <div className="p-6 text-red-600">{error}</div>;
@@ -53,7 +75,7 @@ const QuestHistory = () => {
   if (quests.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p>No quests found.</p>
+        <p>No quests yet — get exploring!</p>
       </div>
     );
   }
@@ -71,7 +93,9 @@ const QuestHistory = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: index * 0.1 }}
-              className="flex flex-col lg:flex-row gap-4 items-stretch rounded-xl bg-white p-4 shadow-md"
+              className={`flex flex-col lg:flex-row gap-4 items-stretch rounded-xl bg-white p-4 shadow-md ${
+                highlight === (quest.id || null) ? 'ring-2 ring-yellow-400' : ''
+              }`}
             >
               <div className="flex-[2] flex flex-col justify-between gap-2">
                 <div>

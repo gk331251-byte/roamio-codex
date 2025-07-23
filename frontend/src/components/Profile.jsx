@@ -9,7 +9,6 @@ const Profile = () => {
   const [premium, setPremium] = useState(false);
   const [stats, setStats] = useState({ total: 0, mostCity: '', longest: 0 });
 
-
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
@@ -36,7 +35,6 @@ const Profile = () => {
           setStats({ total, mostCity, longest });
         } catch (err) {
           console.error('Failed to load quest stats', err);
-
         }
       }
     });
@@ -56,7 +54,6 @@ const Profile = () => {
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
         {stats.longest > 0 && <p>Longest quest: {stats.longest} stops</p>}
       </div>
-
       <PostcardGallery />
     </div>
   );

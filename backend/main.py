@@ -267,8 +267,6 @@ def _from_value(val):
 def _decode_document(doc: dict) -> dict:
     return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
 
-
-
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
     user_id = payload.get("userId")
@@ -308,9 +306,7 @@ async def complete_quest(payload: dict = Body(...)):
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
-
     return {"status": "Quest saved!"}
-
 
     # === Save quest completion ===
     quest_doc = {
@@ -450,8 +446,6 @@ async def get_user_quests(userId: str = Query(...)):
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
-
-
 
 @app.get("/get-quest/{quest_id}")
 async def get_quest(quest_id: str):
