@@ -133,7 +133,7 @@ const QuestHome = () => {
     setLoading(true);
     try {
       const token = await user.getIdToken();
-      const result = await generateQuest(city, mood, Number(timeLimit), token);
+      const result = await generateQuest(city, mood, Number(timeLimit), token, user.uid);
       setQuestResult(result);
     } catch (err) {
       console.error(err);

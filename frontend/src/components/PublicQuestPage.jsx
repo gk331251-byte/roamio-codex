@@ -8,7 +8,6 @@ import {
   viewQuest,
   replayQuest,
 } from '../lib/api';
-
 import { getAuth } from 'firebase/auth';
 
 const toQuestObj = (doc) => {

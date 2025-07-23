@@ -54,8 +54,9 @@ creds = service_account.Credentials.from_service_account_file(
 rest_session = AuthorizedSession(creds)
 
 
-def generate_hash_key(city, mood):
-    key_str = f"{city.strip().lower()}_{mood.strip().lower()}"
+def generate_hash_key(*parts: str) -> str:
+    """Generate a deterministic cache key from string parts."""
+    key_str = "_".join(p.strip().lower() for p in parts if p)
     return hashlib.sha256(key_str.encode()).hexdigest()
 
 def get_cached_quest(hash_key):
@@ -76,6 +77,77 @@ def save_quest_to_firestore(hash_key, quest_obj):
     if response.status_code != 200:
         print("Firestore REST Error:", response.text)
         response.raise_for_status()
+
+
+def get_cached_place(place_id: str) -> dict | None:
+    """Retrieve a cached place with tags."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        return _decode_document(resp.json())
+    return None
+
+
+def save_place_to_cache(place_id: str, data: dict):
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
+    body = {"fields": _encode_fields(data)}
+    resp = rest_session.patch(url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+
+def get_user_preferred_tags(user_id: str) -> list[str]:
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = rest_session.get(url)
+    if resp.status_code == 200:
+        doc = _decode_document(resp.json())
+        if isinstance(doc.get("preferredTags"), list):
+            return doc.get("preferredTags")
+    return []
+
+
+CHAIN_KEYWORDS = [
+    "starbucks",
+    "mcdonald",
+    "chipotle",
+    "subway",
+    "dunkin",
+    "walmart",
+    "target",
+]
+
+
+def compute_place_tags(place: dict, details: dict | None = None) -> list[str]:
+    """Assign tags using simple heuristic rules."""
+    tags = set()
+    for t in place.get("types", []):
+        tags.add(t.replace("_", "-"))
+    name = place.get("name", "").lower()
+    if any(k in name for k in ["brew", "bar", "tap"]):
+        tags.add("bar")
+    if any(k in name for k in ["occult", "witch", "dark"]):
+        tags.update(["occult", "weird"])
+    rating = place.get("rating")
+    if isinstance(rating, (int, float)) and rating >= 4.5:
+        tags.add("local-fave")
+    if details:
+        periods = details.get("result", {}).get("opening_hours", {}).get("periods", [])
+        for p in periods:
+            close = p.get("close", {})
+            time = close.get("time")
+            if time and int(time[:2]) >= 22:
+                tags.add("open-late")
+                break
+    return list(tags)
+
+
+def is_chain(name: str) -> bool:
+    lower = name.lower()
+    return any(k in lower for k in CHAIN_KEYWORDS)
 
 
 
@@ -115,18 +187,16 @@ def read_root():
 @app.post("/generate-quest")
 async def generate_quest(
     city: str = Body(...),
-    moods: list[str] = Body(...),  # Now directly accepts a list
+    moods: list[str] = Body(...),
     time_limit: int = Body(...),
     token: str = Body(...),
+    user_id: str | None = Body(None),
 ):
+    """Generate a quest using tag-based filtering and optional GPT text."""
     if not city or not moods:
         return {"error": "City and mood list are required."}
 
-    hash_key = generate_hash_key(city, "_".join(moods))
-    cached = get_cached_quest(hash_key)
-    if cached:
-        print("Using cached quest")
-        return {"quest": cached}
+    preferred = get_user_preferred_tags(user_id) if user_id else []
 
     try:
         geocode = gmaps.geocode(city)
@@ -135,40 +205,82 @@ async def generate_quest(
         print(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
 
+    loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
+    tag_combo = "-".join(sorted(preferred)) if preferred else "none"
+    hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
+    cached = get_cached_quest(hash_key)
+    if cached:
+        print("Using cached quest")
+        return {"quest": cached}
+
     try:
         response = gmaps.places_nearby(
             location=(city_location["lat"], city_location["lng"]),
-            radius=5000,
-            type="tourist_attraction"
+            radius=2000,
+            type="tourist_attraction",
         )
-        places_results = response.get("results", [])[:15]
+        places_results = response.get("results", [])
     except Exception as e:
         print(f"Places API error: {e}")
         return {"error": "Failed to fetch places"}
 
-    all_places = []
+    candidates = []
     for place in places_results:
         try:
-            loc = place["geometry"]["location"]
             name = place.get("name")
-            lat = float(loc["lat"])
-            lng = float(loc["lng"])
-            type_ = place.get("types", ["Unknown"])[0]
-            if name and lat and lng:
-                all_places.append({"name": name, "type": type_, "lat": lat, "lng": lng})
+            if not name or is_chain(name):
+                continue
+            pid = place.get("place_id")
+            cached_place = get_cached_place(pid) if pid else None
+            details = None
+            if not cached_place and pid:
+                try:
+                    details = gmaps.place(pid)
+                except Exception:
+                    details = None
+            tags = (
+                cached_place.get("tags") if cached_place else compute_place_tags(place, details)
+            )
+            if not cached_place and pid:
+                save_place_to_cache(pid, {"tags": tags, "name": name})
+            if preferred:
+                overlap = len(set(tags) & set(preferred))
+            else:
+                overlap = 1
+            if overlap <= 0:
+                continue
+            loc = place["geometry"]["location"]
+            typ = place.get("types", ["Unknown"])[0]
+            candidates.append({
+                "name": name,
+                "type": typ,
+                "lat": float(loc["lat"]),
+                "lng": float(loc["lng"]),
+                "tags": tags,
+                "score": overlap,
+                "rating": place.get("rating", 0),
+            })
         except Exception as e:
-            print(f"Skipping place: {e}")
+            print("Skipping place", e)
 
-    quest_data = generate_filtered_quest_payload(all_places, moods, time_limit)
-    filtered_places = quest_data["filtered_places"]
-    difficulty = quest_data["difficulty"]
+    candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
-    if len(filtered_places) < 2:
-        return {"error": "Filtered results too low. Try different moods."}
+    selected = []
+    seen_types = set()
+    for c in candidates:
+        if c["type"] in seen_types:
+            continue
+        selected.append(c)
+        seen_types.add(c["type"])
+        if len(selected) >= 5:
+            break
 
-    origin = f"{filtered_places[0]['lat']},{filtered_places[0]['lng']}"
-    destination = f"{filtered_places[-1]['lat']},{filtered_places[-1]['lng']}"
-    waypoints = [f"{p['lat']},{p['lng']}" for p in filtered_places[1:-1]]
+    if len(selected) < 3:
+        return {"error": "Not enough matching places"}
+
+    origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+    destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
+    waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
 
     try:
         directions = gmaps.directions(
@@ -176,10 +288,10 @@ async def generate_quest(
             destination,
             waypoints=waypoints,
             optimize_waypoints=True,
-            mode="walking"
+            mode="walking",
         )
     except Exception as e:
-        print(f"Directions error: {e}")
+        print("Directions error", e)
         raise HTTPException(status_code=500, detail="Failed to retrieve directions")
 
     route = directions[0]
@@ -187,45 +299,55 @@ async def generate_quest(
     legs = route.get("legs", [])
     polyline = route.get("overview_polyline", {}).get("points", "")
 
-    ordered_places = [filtered_places[0]] + [filtered_places[i+1] for i in waypoint_order] + [filtered_places[-1]]
+    ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
+    place_names = ", ".join([p["name"] for p in ordered])
 
-    places_summary = ", ".join([p["name"] for p in ordered_places])
-    prompt = f"""Write a short and fun quest (3–5 sentences max) for exploring {city}. Style: {', '.join(moods)}. Include 3–5 specific local places from this list: {places_summary}. Format as a single paragraph. No titles, no list items. Avoid repetition. Be playful."""
-
-    try:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a quest designer for a real-world RPG."},
-                {"role": "user", "content": prompt}
-            ]
+    if openai.api_key:
+        prompt = (
+            f"Write a short playful quest including these places: {place_names}. "
+            f"Keep it under 300 tokens. Style: {', '.join(moods)}"
         )
-        quest_text = completion.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"OpenAI error: {e}")
-        return {"error": "Failed to generate quest text."}
+        try:
+            completion = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            quest_text = completion.choices[0].message.content.strip()
+        except Exception as e:
+            print("OpenAI error", e)
+            quest_text = (
+                f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
+                f"and ends at {ordered[-1]['name']}!"
+            )
+    else:
+        quest_text = (
+            f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
+            f"and ends at {ordered[-1]['name']}!"
+        )
 
-    route_legs = []
-    for leg in legs:
-        route_legs.append({
+    route_legs = [
+        {
             "start": leg["start_address"],
             "end": leg["end_address"],
             "distance": leg["distance"]["text"],
-            "duration": leg["duration"]["text"]
-        })
+            "duration": leg["duration"]["text"],
+        }
+        for leg in legs
+    ]
 
     quest_obj = {
         "questText": quest_text,
-        "places": ordered_places,
-        "difficulty": difficulty,
+        "places": ordered,
+        "difficulty": "Easy",
         "route": {
             "legs": route_legs,
             "polyline": polyline,
             "total_distance": route["legs"][-1]["distance"]["text"],
-            "total_duration": route["legs"][-1]["duration"]["text"]
+            "total_duration": route["legs"][-1]["duration"]["text"],
         },
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
+
     save_quest_to_firestore(hash_key, quest_obj)
     return {"quest": quest_obj}
 
@@ -1182,7 +1304,6 @@ async def create_custom_quest(payload: dict = Body(...)):
         "likesCount": 0,
         "viewsCount": 0,
         "replaysCount": 0,
-
     }
     if status == "published" or public:
         quest_doc["publishedAt"] = datetime.utcnow().isoformat()
