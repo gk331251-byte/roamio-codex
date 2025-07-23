@@ -87,7 +87,6 @@ const QuestHome = () => {
               status: data.status,
               usedTimeLimit: data.usedTimeLimit,
             });
-
           } else {
             if (data.groupId) await leaveGroup(data.groupId, user.uid);
             setResumeData(null);
@@ -160,7 +159,6 @@ const QuestHome = () => {
       navigate('/live', {
         state: { quest: questResult.quest, questId, groupId, timeLimit },
       });
-
     } catch (err) {
       console.error('Failed to create group', err);
       setError('Failed to start group quest');
@@ -185,7 +183,6 @@ const QuestHome = () => {
           <button
             onClick={() =>
               navigate('/live', { state: { quest: resumeData.quest, questId: resumeData.questId, groupId: resumeData.groupId, timeLimit: resumeData.usedTimeLimit } })
-
             }
             className="bg-blue-600 text-white px-4 py-2 rounded-lg"
           >

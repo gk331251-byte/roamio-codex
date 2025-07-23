@@ -16,8 +16,6 @@ export default function QuestLivePage() {
   const questId = location.state?.questId;
   const groupId = location.state?.groupId || new URLSearchParams(location.search).get('groupId');
   const initialLimit = location.state?.timeLimit ? Number(location.state.timeLimit) : 90;
-
-
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
   const timeLimit = initialLimit;
@@ -27,6 +25,8 @@ export default function QuestLivePage() {
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [etaText, setEtaText] = useState("");
+  const [etaError, setEtaError] = useState("");
+  const [etaRefresh, setEtaRefresh] = useState(0);
   const [polylinePoints, setPolylinePoints] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completeMsg, setCompleteMsg] = useState("");
@@ -56,10 +56,10 @@ export default function QuestLivePage() {
   }, [quest]);
 
   // Optimize order and trim stops using current location
-
   useEffect(() => {
     if (!quest || !userLocation || !quest.places?.length) return;
     const fetchOptimized = async () => {
+      const VISIT_SEC = 10 * 60; // assumed time spent at each stop
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       const coords = quest.places.map((p) => `${p.lat},${p.lng}`);
       if (coords.length < 2) return;
@@ -85,8 +85,9 @@ export default function QuestLivePage() {
         let keep = legs.length;
         for (let i = 0; i < legs.length; i++) {
           total += legs[i]?.duration?.value || 0;
+          total += VISIT_SEC;
           if (total > limitSec) {
-            keep = i;
+            keep = i + 1;
             break;
           }
         }
@@ -111,7 +112,6 @@ export default function QuestLivePage() {
           console.error('failed to store optimized order', err);
         }
 
-
         const poly = data?.routes?.[0]?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
@@ -125,9 +125,7 @@ export default function QuestLivePage() {
   }, [quest, userLocation, timeLimit]);
 
   // Join group and listen for progress
-
   useEffect(() => {
-    if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user || !groupId) return;
@@ -159,6 +157,7 @@ export default function QuestLivePage() {
 
   // Load personal progress when not in group
   useEffect(() => {
+
     if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
@@ -177,9 +176,9 @@ export default function QuestLivePage() {
   }, [quest, groupId, questId]);
 
   const currentStopIndex = visitedIndices.length;
-  const allVisited = visitedIndices.length >= stops.length;
+  const allVisited = stops.length > 0 && visitedIndices.length >= stops.length;
+  const questComplete = allVisited || groupData?.completed === true;
 
-  const questComplete = allVisited || groupData?.completed;
 
   useEffect(() => {
     if (questComplete) {
@@ -196,6 +195,8 @@ export default function QuestLivePage() {
     if (!remaining.length) return;
 
     const fetchRoute = async () => {
+      setEtaError("");
+
       const origin = `${userLocation.lat},${userLocation.lng}`;
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       const destination = `${remaining[remaining.length - 1].lat},${remaining[remaining.length - 1].lng}`;
@@ -211,8 +212,12 @@ export default function QuestLivePage() {
       try {
         const res = await fetch(url);
         const data = await res.json();
-        const leg = data?.routes?.[0]?.legs?.[0];
-        setEtaText(leg?.duration?.text || "");
+        const legs = data?.routes?.[0]?.legs || [];
+        if (legs.length === 0) throw new Error('No route');
+        const sec = legs.reduce((s, l) => s + (l.duration?.value || 0), 0);
+        const mins = Math.round(sec / 60);
+        setEtaText(`${mins} min`);
+
         const poly = data?.routes?.[0]?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
@@ -222,11 +227,14 @@ export default function QuestLivePage() {
         }
       } catch (err) {
         console.error('Failed to fetch directions:', err);
+        setEtaError('Failed to load ETA');
+
       }
     };
 
     fetchRoute();
-  }, [userLocation, currentStopIndex, stops]);
+  }, [userLocation, currentStopIndex, stops, etaRefresh]);
+
 
   const handleMarkVisited = async () => {
     const auth = getAuth();
@@ -282,6 +290,32 @@ export default function QuestLivePage() {
     }
 
   };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
     if (!reason) return;
@@ -484,7 +518,6 @@ export default function QuestLivePage() {
                 </div>
                 {groupData && (
                   <GroupMemberList members={groupData.members || []} progress={groupData.progress || {}} total={stops.length} />
-
                 )}
               </div>
             )}
@@ -494,7 +527,6 @@ export default function QuestLivePage() {
                 <button
                   onClick={handleLeave}
                   className="h-10 px-4 rounded-full bg-red-500 text-sm text-white"
-
                 >
                   Leave Group
                 </button>
@@ -502,7 +534,6 @@ export default function QuestLivePage() {
               <button
                 onClick={() => window.location.assign('/home')}
                 className="h-10 px-4 rounded-full bg-[#e7f3e7] text-sm text-[#0e1b0e]"
-
               >
                 Back to Home
               </button>
@@ -520,7 +551,6 @@ export default function QuestLivePage() {
             <div
               className="h-2 rounded bg-[#14b714]"
               style={{ width: `${(visitedIndices.length / (stops.length || 1)) * 100}%` }}
-
             />
           </div>
         </div>
@@ -538,8 +568,25 @@ export default function QuestLivePage() {
           </div>
 
           <p className="text-sm text-[#4e974e] text-center px-4">
-            {etaText ? `ETA to Next Stop: ${etaText}` : "Calculating ETA..."}
+            {etaError
+              ? `${etaError}`
+              : etaText
+              ? `ETA to Next Stop: ${etaText}`
+              : "Calculating ETA..."}
           </p>
+          {etaError && (
+            <div className="text-center mt-1">
+              <button
+                onClick={() => {
+                  setEtaError("");
+                  setEtaRefresh((c) => c + 1);
+                }}
+                className="text-xs underline text-blue-600"
+              >
+                Retry ETA
+              </button>
+            </div>
+          )}
 
           <div className="flex px-4 py-3">
             <button
