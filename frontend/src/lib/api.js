@@ -88,3 +88,4 @@ export async function getDirections(places) {
   }
   return resp.json();
 }
+
