@@ -988,7 +988,6 @@ async def report_quest(payload: dict = Body(...)):
         resp.raise_for_status()
     return {"status": "reported"}
 
-
 @app.get("/get-quest-reports")
 async def get_quest_reports():
     """Return recent quest reports for admin review."""
@@ -1039,6 +1038,7 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
     return {"status": "updated"}
 
 
+
 @app.get("/get-community-quests")
 async def get_community_quests():
     """Return recently completed public quests."""
@@ -1069,3 +1069,4 @@ async def get_community_quests():
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
+
