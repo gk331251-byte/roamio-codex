@@ -18,6 +18,7 @@ const Header = () => {
       <nav className="flex gap-4">
         <Link to="/home" className={linkClass("/home")}>Home</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
+        <Link to="/community" className={linkClass("/community")}>Community</Link>
         <Link to="/profile" className={linkClass("/profile")}>Profile</Link>
       </nav>
     </header>
