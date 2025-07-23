@@ -30,6 +30,10 @@ const Header = () => {
         <Link to="/home" className={linkClass("/home")}>Home</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
         <Link to="/community" className={linkClass("/community")}>Community</Link>
+        {user && (
+          <Link to="/custom" className={linkClass("/custom")}>➕ Custom Quest</Link>
+        )}
+
         <Link to="/quest-plus" className={linkClass("/quest-plus")}>Quest+</Link>
         {isAdmin && (
           <Link to="/admin" className={linkClass("/admin")}>Admin</Link>

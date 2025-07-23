@@ -690,12 +690,6 @@ async def reroll_quest(payload: dict = Body(...)):
     return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
 
 
-@app.get("/validate-premium/{user_id}")
-async def validate_premium(user_id: str):
-    """Mock premium validation."""
-    return {"premium": True}
-
-
 @app.post("/get-directions")
 async def get_directions(payload: dict = Body(...)):
     """Return mocked directions data for a list of places."""
@@ -1156,4 +1150,48 @@ async def update_active_quest(payload: dict = Body(...)):
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
     return {"status": "updated"}
+
+
+@app.post("/create-custom-quest")
+async def create_custom_quest(payload: dict = Body(...)):
+    """Store a manually crafted quest."""
+    user_id = payload.get("user_id")
+    places = payload.get("places", [])
+    if not user_id or len(places) < 2:
+        return {"error": "user_id and at least 2 places required"}
+
+    project_id = creds.project_id
+    quest_id = hashlib.sha1(
+        f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
+    ).hexdigest()[:12]
+
+    quest_doc = {
+        "title": payload.get("title") or "Custom Quest",
+        "moodTags": payload.get("mood_tags", []),
+        "places": places,
+        "timeLimit": payload.get("time_limit", 60),
+        "customPrompt": payload.get("custom_prompt") or "",
+        "createdBy": user_id,
+        "createdAt": datetime.utcnow().isoformat(),
+        "type": "custom",
+    }
+
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    group_id = payload.get("group_id")
+    if group_id:
+        g_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
+        )
+        await asyncio.to_thread(rest_session.patch, g_url, json=body)
+
+    return {"questId": quest_id, "quest": quest_doc}
+
 

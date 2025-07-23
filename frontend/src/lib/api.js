@@ -244,3 +244,15 @@ export async function updateActiveQuest(userId, data) {
   }
   return resp.json();
 }
+export async function createCustomQuest(payload) {
+  const resp = await fetch(`${BASE_URL}/create-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to create custom quest');
+  }
+  return resp.json();
+}
+

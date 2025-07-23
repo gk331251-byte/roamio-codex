@@ -179,7 +179,6 @@ export default function QuestLivePage() {
   const allVisited = stops.length > 0 && visitedIndices.length >= stops.length;
   const questComplete = allVisited || groupData?.completed === true;
 
-
   useEffect(() => {
     if (questComplete) {
       setShowComplete(true);
@@ -217,7 +216,6 @@ export default function QuestLivePage() {
         const sec = legs.reduce((s, l) => s + (l.duration?.value || 0), 0);
         const mins = Math.round(sec / 60);
         setEtaText(`${mins} min`);
-
         const poly = data?.routes?.[0]?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
@@ -228,13 +226,11 @@ export default function QuestLivePage() {
       } catch (err) {
         console.error('Failed to fetch directions:', err);
         setEtaError('Failed to load ETA');
-
       }
     };
 
     fetchRoute();
   }, [userLocation, currentStopIndex, stops, etaRefresh]);
-
 
   const handleMarkVisited = async () => {
     const auth = getAuth();
@@ -290,6 +286,32 @@ export default function QuestLivePage() {
     }
 
   };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
     if (!reason) return;

@@ -18,6 +18,8 @@ import PaymentSuccess from "./components/PaymentSuccess";
 import PaymentFailed from "./components/PaymentFailed";
 import CommunityFeed from "./components/CommunityFeed";
 import AdminDashboard from "./components/AdminDashboard";
+import CustomQuestBuilder from "./components/CustomQuestBuilder";
+
 
 
 function App() {
@@ -63,6 +65,7 @@ function App() {
         <Route path="/community" element={<CommunityFeed />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/quest-plus" element={<QuestPlusPage />} />
+        <Route path="/custom" element={<CustomQuestBuilder />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>

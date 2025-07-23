@@ -53,7 +53,6 @@ export default function LiveQuestMap({
 
   const panTimeout = useRef(null);
 
-
   useEffect(() => {
     if (!mapRef.current || !userLocation) return;
     if (panTimeout.current) clearTimeout(panTimeout.current);
@@ -63,6 +62,7 @@ export default function LiveQuestMap({
   }, [userLocation]);
 
   useEffect(() => {
+
     if (!mapRef.current || !stops.length) return;
     const target = stops[visitedIndex] || stops[stops.length - 1];
     mapRef.current.panTo(target);
