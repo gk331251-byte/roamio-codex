@@ -178,7 +178,6 @@ export async function getQuest(questId) {
   }
   return resp.json();
 }
-
 export async function getCommunityQuests() {
   const resp = await fetch(`${BASE_URL}/get-community-quests`);
   if (!resp.ok) {
@@ -198,3 +197,4 @@ export async function reportQuest(userId, questId, reason, city, mood) {
   }
   return resp.json();
 }
+

@@ -190,7 +190,6 @@ export default function QuestLivePage() {
     }
 
   };
-
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
     if (!reason) return;
