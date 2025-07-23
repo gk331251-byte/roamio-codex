@@ -244,7 +244,6 @@ export async function updateActiveQuest(userId, data) {
   }
   return resp.json();
 }
-
 export async function createCustomQuest(payload) {
   const resp = await fetch(`${BASE_URL}/create-custom-quest`, {
     method: 'POST',
@@ -256,3 +255,4 @@ export async function createCustomQuest(payload) {
   }
   return resp.json();
 }
+
