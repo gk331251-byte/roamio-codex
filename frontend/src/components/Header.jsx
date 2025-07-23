@@ -12,7 +12,6 @@ const Header = () => {
     const auth = getAuth();
     return onAuthStateChanged(auth, (u) => {
       setUser(u);
-
       setIsAdmin(u?.email === 'admin@roamio.app');
     });
   }, []);
@@ -38,7 +37,6 @@ const Header = () => {
         {user && (
           <Link to="/profile" className={linkClass("/profile")}>Profile</Link>
         )}
-
       </nav>
     </header>
   );

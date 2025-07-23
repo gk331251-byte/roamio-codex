@@ -39,15 +39,7 @@ const RouteMap = ({ places = [], route = null }) => {
   const orderedPlaces = places.filter(
     (p) => parseLatLng(p.lat) !== null && parseLatLng(p.lng) !== null
   );
-  console.log("Route legs:", route?.legs);
-    // ✅ Add logs here for debugging
-console.log("PLACES:", orderedPlaces);
-console.log("ROUTE LEGS:", route?.legs);
-console.log("LEG 0 FULL:", route?.legs?.[0]);
-console.log("LEG 0 DURATION:", route?.legs?.[0]?.duration);
-
-
-
+  // Debug logs removed for production
   if (!orderedPlaces.length) return null;
 
   const center = {

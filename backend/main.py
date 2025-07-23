@@ -988,7 +988,7 @@ async def report_quest(payload: dict = Body(...)):
         resp.raise_for_status()
     return {"status": "reported"}
 
-  
+
 @app.get("/get-quest-reports")
 async def get_quest_reports():
     """Return recent quest reports for admin review."""
@@ -1070,7 +1070,7 @@ async def get_community_quests():
         results.append(obj)
     return {"quests": results}
 
-
+  
 @app.post("/create-checkout-session")
 async def create_checkout_session(payload: dict = Body(...)):
     """Return a Stripe Checkout URL or mock URL."""
@@ -1134,5 +1134,3 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"premium": premium}
-
-

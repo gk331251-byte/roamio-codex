@@ -6,6 +6,8 @@ import { getAuth } from "firebase/auth";
 import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest } from "../lib/api";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
+import { decode } from "@googlemaps/polyline-codec";
+
 
 
 export default function QuestLivePage() {
@@ -23,6 +25,7 @@ export default function QuestLivePage() {
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [etaText, setEtaText] = useState("");
+  const [polylinePoints, setPolylinePoints] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completeMsg, setCompleteMsg] = useState("");
 
@@ -116,7 +119,7 @@ export default function QuestLivePage() {
   useEffect(() => {
     if (!userLocation || !stops[currentStopIndex]) return;
 
-    const fetchETA = async () => {
+    const fetchRoute = async () => {
       const origin = `${userLocation.lat},${userLocation.lng}`;
       const destination = `${stops[currentStopIndex].lat},${stops[currentStopIndex].lng}`;
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
@@ -126,14 +129,21 @@ export default function QuestLivePage() {
           `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking&key=${key}`
         );
         const data = await res.json();
-        const eta = data?.routes?.[0]?.legs?.[0]?.duration?.text;
-        if (eta) setEtaText(eta);
+        const leg = data?.routes?.[0]?.legs?.[0];
+        setEtaText(leg?.duration?.text || "");
+        const poly = data?.routes?.[0]?.overview_polyline?.points;
+        if (poly) {
+          const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
+          setPolylinePoints(decoded);
+        } else {
+          setPolylinePoints([]);
+        }
       } catch (err) {
-        console.error("Failed to fetch ETA:", err);
+        console.error("Failed to fetch directions:", err);
       }
     };
 
-    fetchETA();
+    fetchRoute();
   }, [userLocation, currentStopIndex, stops]);
 
   const handleMarkVisited = async () => {
@@ -190,6 +200,32 @@ export default function QuestLivePage() {
     }
 
   };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
     if (!reason) return;
@@ -329,7 +365,12 @@ export default function QuestLivePage() {
         )}
 
           <div className="px-4 py-3">
-            <LiveQuestMap stops={stops} visitedIndex={currentStopIndex} userLocation={userLocation} />
+            <LiveQuestMap
+              stops={stops}
+              visitedIndex={currentStopIndex}
+              userLocation={userLocation}
+              polylinePoints={polylinePoints}
+            />
           </div>
 
           <p className="text-sm text-[#4e974e] text-center px-4">
