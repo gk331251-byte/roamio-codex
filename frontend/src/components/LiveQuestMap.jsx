@@ -1,50 +1,77 @@
 import GoogleMapReact from "google-map-react";
 import { useEffect, useRef } from "react";
 
-const UserMarker = () => <div className="text-2xl">🧍‍♂️</div>;
-
-const StopMarker = ({ visited, current }) => (
-  <div className={`text-2xl ${current ? "text-green-600" : visited ? "text-gray-400" : "text-red-500"}`}>
-    📍
+const UserMarker = () => (
+  <div className="relative flex items-center justify-center">
+    <div className="absolute h-4 w-4 rounded-full bg-blue-400 opacity-75 animate-ping" />
+    <div className="relative h-3 w-3 rounded-full bg-blue-600" />
   </div>
 );
 
-export default function LiveQuestMap({ stops = [], visitedIndex = 0, userLocation }) {
+const StopMarker = ({ visited, current, final, name }) => {
+  let icon = "📍";
+  if (final) icon = "🏁";
+  if (current) icon = "⭐";
+  if (visited && !current) icon = "✅";
+  return (
+    <div title={name} className="text-2xl">
+      {icon}
+    </div>
+  );
+};
+
+export default function LiveQuestMap({
+  stops = [],
+  visitedIndex = 0,
+  userLocation,
+  polylinePoints = [],
+}) {
   const mapRef = useRef(null);
   const mapsRef = useRef(null);
+  const polyRef = useRef(null);
 
-  const drawRoute = () => {
-    if (!mapRef.current || !mapsRef.current || stops.length < 2) return;
-
-    const directionsService = new mapsRef.current.DirectionsService();
-    const directionsRenderer = new mapsRef.current.DirectionsRenderer({ suppressMarkers: true });
-    directionsRenderer.setMap(mapRef.current);
-
-    directionsService.route(
-      {
-        origin: stops[0],
-        destination: stops[stops.length - 1],
-        waypoints: stops.slice(1, -1).map((s) => ({ location: s })),
-        travelMode: mapsRef.current.TravelMode.WALKING,
-      },
-      (result, status) => {
-        if (status === "OK") {
-          directionsRenderer.setDirections(result);
-        } else {
-          console.error("Directions request failed due to " + status);
-        }
-      }
-    );
+  const drawPolyline = () => {
+    if (!mapRef.current || !mapsRef.current) return;
+    if (polyRef.current) {
+      polyRef.current.setMap(null);
+      polyRef.current = null;
+    }
+    if (!polylinePoints.length) return;
+    const path = polylinePoints.map((p) => new mapsRef.current.LatLng(p.lat, p.lng));
+    polyRef.current = new mapsRef.current.Polyline({
+      path,
+      geodesic: true,
+      strokeColor: "#019863",
+      strokeOpacity: 0.9,
+      strokeWeight: 5,
+    });
+    polyRef.current.setMap(mapRef.current);
   };
 
   useEffect(() => {
-    drawRoute();
-  }, [stops]);
+    drawPolyline();
+  }, [polylinePoints]);
+
+  const panTimeout = useRef(null);
+
+  useEffect(() => {
+    if (!mapRef.current || !userLocation) return;
+    if (panTimeout.current) clearTimeout(panTimeout.current);
+    panTimeout.current = setTimeout(() => {
+      mapRef.current.panTo(userLocation);
+    }, 500);
+  }, [userLocation]);
+
+  useEffect(() => {
+    if (!mapRef.current || !stops.length) return;
+    const target = stops[visitedIndex] || stops[stops.length - 1];
+    mapRef.current.panTo(target);
+  }, [visitedIndex, stops]);
 
   const center = userLocation || stops[0];
 
   return (
-    <div className="h-[300px] w-full rounded-xl overflow-hidden shadow-md">
+    <div className="w-full h-[60vh] max-h-[500px] rounded-xl overflow-hidden shadow-md">
       <GoogleMapReact
         bootstrapURLKeys={{ key: import.meta.env.VITE_GOOGLE_MAPS_API_KEY }}
         defaultCenter={center}
@@ -53,7 +80,7 @@ export default function LiveQuestMap({ stops = [], visitedIndex = 0, userLocatio
         onGoogleApiLoaded={({ map, maps }) => {
           mapRef.current = map;
           mapsRef.current = maps;
-          drawRoute();
+          drawPolyline();
         }}
       >
         {userLocation && <UserMarker lat={userLocation.lat} lng={userLocation.lng} />}
@@ -64,6 +91,8 @@ export default function LiveQuestMap({ stops = [], visitedIndex = 0, userLocatio
             lng={stop.lng}
             visited={idx < visitedIndex}
             current={idx === visitedIndex}
+            final={idx === stops.length - 1}
+            name={stop.name}
           />
         ))}
       </GoogleMapReact>
