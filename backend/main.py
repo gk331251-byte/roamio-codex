@@ -4,10 +4,13 @@ import os
 import requests
 import hashlib
 from datetime import datetime
+import asyncio
 import googlemaps
 import openai
 import certifi
 from google.cloud import firestore_v1, storage
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
 
 
 from dotenv import load_dotenv
@@ -33,6 +36,13 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 db = firestore_v1.Client(
     client_options={"api_endpoint": "https://firestore.googleapis.com"}
 )
+
+# Session for REST-based Firestore calls
+creds = service_account.Credentials.from_service_account_file(
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "firestore-key.json"),
+    scopes=["https://www.googleapis.com/auth/datastore"],
+)
+rest_session = AuthorizedSession(creds)
 
 
 def generate_hash_key(city, mood):
@@ -203,13 +213,65 @@ async def generate_quest(
 
 
 
+def _to_value(val):
+    if val is None:
+        return {"nullValue": None}
+    if isinstance(val, bool):
+        return {"booleanValue": val}
+    if isinstance(val, int):
+        return {"integerValue": str(val)}
+    if isinstance(val, float):
+        return {"doubleValue": val}
+    if isinstance(val, str):
+        return {"stringValue": val}
+    if isinstance(val, list):
+        return {"arrayValue": {"values": [_to_value(v) for v in val]}}
+    if isinstance(val, dict):
+        return {"mapValue": {"fields": {k: _to_value(v) for k, v in val.items()}}}
+    return {"stringValue": str(val)}
+
+def _encode_fields(data: dict):
+    return {k: _to_value(v) for k, v in data.items()}
+
+
 @app.post("/quest-complete")
-def complete_quest(user_id: str = Body(...), quest_id: str = Body(...)):
-    user_quest_ref = db.collection("user_quests").document(user_id).collection("completed").document(quest_id)
-    user_quest_ref.set({"completed": True, "timestamp": firestore.SERVER_TIMESTAMP})
-    quest_ref = db.collection("quests").document(quest_id)
-    quest_ref.update({"usageCount": firestore.Increment(1)})
-    return {"status": "Quest marked as completed"}
+async def complete_quest(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    quest_data = payload.get("questData")
+    if not all([user_id, quest_id, quest_data]):
+        return {"error": "userId, questId and questData required"}
+
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+
+    # Write quest record under user_quests/{userId}/{questId}
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "generatedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # Update user's lastActive timestamp
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "Quest saved!"}
 
 @app.get("/places")
 def get_places(city: str = Query(...)):
@@ -278,6 +340,13 @@ async def generate_postcard(request: Request):
 
 @app.get("/test-write")
 def test_write():
-    doc_ref = db.collection("test").document("sample")
-    doc_ref.set({"message": "Hello from FastAPI!"})
-    return {"status": "Document written!"}
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
+    )
+    body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
+    resp = rest_session.patch(url, json=body)
+    if resp.status_code == 200:
+        return {"status": "Document written!"}
+    print("Firestore REST error", resp.text)
+    resp.raise_for_status()
