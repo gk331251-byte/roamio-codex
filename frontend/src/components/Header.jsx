@@ -1,9 +1,18 @@
 // src/components/Header.jsx
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 
 const Header = () => {
   const { pathname } = useLocation();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    const auth = getAuth();
+    return onAuthStateChanged(auth, (u) => {
+      setIsAdmin(u?.email === 'admin@roamio.app');
+    });
+  }, []);
 
   const linkClass = (path) =>
     `text-sm font-medium transition px-2 py-1 rounded ${
@@ -18,6 +27,10 @@ const Header = () => {
       <nav className="flex gap-4">
         <Link to="/home" className={linkClass("/home")}>Home</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
+        <Link to="/community" className={linkClass("/community")}>Community</Link>
+        {isAdmin && (
+          <Link to="/admin" className={linkClass("/admin")}>Admin</Link>
+        )}
         <Link to="/profile" className={linkClass("/profile")}>Profile</Link>
       </nav>
     </header>
