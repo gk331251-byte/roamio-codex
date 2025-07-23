@@ -3,11 +3,10 @@ import { useLocation, useNavigate } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
 import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
-import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest } from "../lib/api";
+import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest, updateActiveQuest } from "../lib/api";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { decode } from "@googlemaps/polyline-codec";
-
 
 
 export default function QuestLivePage() {
@@ -46,15 +45,61 @@ export default function QuestLivePage() {
     }
   }, []);
 
-  // Update stops list when we have user location or quest
+  // Base stops from quest data
   useEffect(() => {
-    if (!quest || !userLocation) return;
+    if (!quest) return;
     const questStops = quest.places.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng) }));
-    setStops([{ lat: userLocation.lat, lng: userLocation.lng }, ...questStops]);
+    setStops(questStops);
+  }, [quest]);
+
+  // Optimize order using current location as origin
+  useEffect(() => {
+    if (!quest || !userLocation || !quest.places?.length) return;
+    const fetchOptimized = async () => {
+      const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+      const coords = quest.places.map((p) => `${p.lat},${p.lng}`);
+      if (coords.length < 2) {
+        return;
+      }
+      const origin = `${userLocation.lat},${userLocation.lng}`;
+      const destination = coords[coords.length - 1];
+      const waypointStr = coords.slice(0, -1).join('|');
+      try {
+        const res = await fetch(
+          `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&waypoints=optimize:true|${waypointStr}&mode=walking&key=${key}`
+        );
+        const data = await res.json();
+        const order = data?.routes?.[0]?.waypoint_order;
+        if (Array.isArray(order) && order.length === coords.length - 1) {
+          const ordered = order.map((i) => quest.places[i]);
+          ordered.push(quest.places[quest.places.length - 1]);
+          setStops(
+            ordered.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng) }))
+          );
+          try {
+            const auth = getAuth();
+            const user = auth.currentUser;
+            if (user) {
+              await updateActiveQuest(user.uid, { optimizedOrder: order });
+            }
+          } catch (err) {
+            console.error('failed to store optimized order', err);
+          }
+        }
+        const poly = data?.routes?.[0]?.overview_polyline?.points;
+        if (poly) {
+          const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
+          setPolylinePoints(decoded);
+        }
+      } catch (err) {
+        console.error('Failed to fetch optimized route', err);
+      }
+    };
+    fetchOptimized();
   }, [quest, userLocation]);
 
-  // Join group and listen for progress
   useEffect(() => {
+    if (groupId) return;
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user || !groupId) return;
@@ -117,17 +162,25 @@ export default function QuestLivePage() {
 
 
   useEffect(() => {
-    if (!userLocation || !stops[currentStopIndex]) return;
+    if (!userLocation || !stops.length) return;
+    const remaining = stops.slice(currentStopIndex);
+    if (!remaining.length) return;
 
     const fetchRoute = async () => {
       const origin = `${userLocation.lat},${userLocation.lng}`;
-      const destination = `${stops[currentStopIndex].lat},${stops[currentStopIndex].lng}`;
       const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+      const destination = `${remaining[remaining.length - 1].lat},${remaining[remaining.length - 1].lng}`;
+      const waypoints = remaining
+        .slice(0, -1)
+        .map((p) => `${p.lat},${p.lng}`)
+        .join('|');
+
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking` +
+        (waypoints ? `&waypoints=${waypoints}` : '') +
+        `&key=${key}`;
 
       try {
-        const res = await fetch(
-          `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking&key=${key}`
-        );
+        const res = await fetch(url);
         const data = await res.json();
         const leg = data?.routes?.[0]?.legs?.[0];
         setEtaText(leg?.duration?.text || "");
@@ -139,7 +192,8 @@ export default function QuestLivePage() {
           setPolylinePoints([]);
         }
       } catch (err) {
-        console.error("Failed to fetch directions:", err);
+        console.error('Failed to fetch directions:', err);
+
       }
     };
 
@@ -200,6 +254,32 @@ export default function QuestLivePage() {
     }
 
   };
+  const handleReport = async () => {
+    const reason = window.prompt('Reason for report?');
+    if (!reason) return;
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return alert('You must be logged in!');
+    try {
+      await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
+      alert('Report submitted');
+    } catch (err) {
+      console.error('failed to report quest', err);
+    }
+  };
+
+  const handleLeave = async () => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user || !groupId) return;
+    try {
+      await leaveGroup(groupId, user.uid);
+      navigate('/home');
+    } catch (err) {
+      console.error('failed to leave group', err);
+    }
+  };
+
   const handleReport = async () => {
     const reason = window.prompt('Reason for report?');
     if (!reason) return;
