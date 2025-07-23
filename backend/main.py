@@ -1952,3 +1952,155 @@ async def remix_quest(payload: dict = Body(...)):
 
     return {"quest": quest, "userQuestId": quest_id}
 
+@app.post("/create-community")
+async def create_community(payload: dict = Body(...)):
+    """Create a new community document."""
+    name = payload.get("name")
+    owner_id = payload.get("ownerId")
+    if not name or not owner_id:
+        return {"error": "name and ownerId required"}
+
+    description = payload.get("description", "")
+    tags = payload.get("tags", [])
+    is_public = bool(payload.get("isPublic", True))
+
+    community_id = hashlib.sha1(f"{owner_id}-{name}-{datetime.utcnow()}".encode()).hexdigest()[:12]
+    created_at = datetime.utcnow().isoformat()
+
+    doc = {
+        "name": name,
+        "description": description,
+        "tags": tags,
+        "isPublic": is_public,
+        "ownerId": owner_id,
+        "createdAt": created_at,
+        "followerCount": 1,
+        "memberIds": [owner_id],
+        "questRefs": [],
+        "analytics": {},
+    }
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
+    body = {"fields": _encode_fields(doc)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{owner_id}/joinedCommunities/{community_id}"
+    join_doc = {"communityId": community_id, "joinedAt": created_at}
+    join_body = {"fields": _encode_fields(join_doc)}
+    await asyncio.to_thread(rest_session.patch, user_url, json=join_body)
+
+    return {"communityId": community_id}
+
+
+@app.post("/join-community")
+async def join_community(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    community_id = payload.get("communityId")
+    if not user_id or not community_id:
+        return {"error": "userId and communityId required"}
+
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "community not found"}
+    data = _decode_document(resp.json())
+    members = data.get("memberIds", [])
+    updated = False
+    if user_id not in members:
+        members.append(user_id)
+        data["memberIds"] = members
+        data["followerCount"] = int(data.get("followerCount", 0)) + 1
+        updated = True
+    if updated:
+        body = {"fields": _encode_fields(data)}
+        await asyncio.to_thread(rest_session.patch, url, json=body)
+
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/joinedCommunities/{community_id}"
+    join_doc = {"communityId": community_id, "joinedAt": datetime.utcnow().isoformat()}
+    join_body = {"fields": _encode_fields(join_doc)}
+    await asyncio.to_thread(rest_session.patch, user_url, json=join_body)
+
+    return {"status": "joined"}
+
+
+@app.post("/publish-to-community")
+async def publish_to_community(payload: dict = Body(...)):
+    community_id = payload.get("communityId")
+    quest_id = payload.get("questId")
+    if not community_id or not quest_id:
+        return {"error": "communityId and questId required"}
+
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "community not found"}
+    data = _decode_document(resp.json())
+    refs = data.get("questRefs", [])
+    if quest_id not in refs:
+        refs.append(quest_id)
+        data["questRefs"] = refs
+        body = {"fields": _encode_fields(data)}
+        await asyncio.to_thread(rest_session.patch, url, json=body)
+
+    return {"status": "published"}
+
+
+@app.get("/community/{community_id}")
+async def get_community(community_id: str):
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"error": "community not found"}
+    data = _decode_document(resp.json())
+    quests = []
+    for qid in data.get("questRefs", []):
+        qurl = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{qid}"
+        qresp = await asyncio.to_thread(rest_session.get, qurl)
+        if qresp.status_code != 200:
+            qurl = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{qid}"
+            qresp = await asyncio.to_thread(rest_session.get, qurl)
+            if qresp.status_code != 200:
+                continue
+        qdata = _decode_document(qresp.json())
+        qdata["id"] = qid
+        quests.append(qdata)
+    return {"community": data, "quests": quests}
+
+
+@app.get("/community-trending")
+async def community_trending():
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities:runQuery"
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "communities"}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "isPublic"},
+                    "op": "EQUAL",
+                    "value": {"booleanValue": True},
+                }
+            },
+            "orderBy": [{"field": {"fieldPath": "followerCount"}, "direction": "DESCENDING"}],
+            "limit": 10,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    results = []
+    for item in resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        data["id"] = doc["name"].split("/")[-1]
+        results.append(data)
+    return {"communities": results}
