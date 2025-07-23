@@ -1,12 +1,38 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { validatePremium } from '../lib/api';
 
-const PaymentSuccess = () => (
-  <div className="min-h-screen flex items-center justify-center bg-[#f8fcf8] px-6 py-10 text-center">
-    <div>
-      <h1 className="text-3xl font-bold text-green-700 mb-4">Payment Successful</h1>
-      <p className="text-[#0e1b0e]">Welcome to Quest+! Enjoy your new adventures.</p>
+const PaymentSuccess = () => {
+  const [params] = useSearchParams();
+  const [status, setStatus] = useState('Activating...');
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const uid = params.get('userId');
+    const session = params.get('session_id');
+    if (uid && session) {
+      validatePremium(uid, session)
+        .then((res) => {
+          if (res.premium) {
+            setStatus('Quest+ Activated!');
+          } else {
+            navigate('/payment-failed');
+          }
+        })
+        .catch(() => navigate('/payment-failed'));
+    } else {
+      navigate('/payment-failed');
+    }
+  }, [params]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[#f8fcf8] px-6 py-10 text-center">
+      <div>
+        <h1 className="text-3xl font-bold text-green-700 mb-4">Payment Successful</h1>
+        <p className="text-[#0e1b0e]">{status}</p>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export default PaymentSuccess;
