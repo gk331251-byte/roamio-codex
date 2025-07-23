@@ -1,5 +1,8 @@
 // src/App.jsx
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { useEffect } from "react";
+import { onAuthStateChanged, getAuth } from "firebase/auth";
+import { getActiveQuest, getQuest } from "./lib/api";
 import LandingPage from "./components/LandingPage";
 import QuestHome from "./components/QuestHome";
 import QuestDetails from "./components/QuestDetails";
@@ -14,6 +17,25 @@ import PaymentFailed from "./components/PaymentFailed";
 
 
 function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => {
+    const auth = getAuth();
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) return;
+      try {
+        const data = await getActiveQuest(user.uid);
+        if (data && data.questId && data.status !== 'completed' && location.pathname !== '/live') {
+          const quest = await getQuest(data.questId);
+          navigate('/live', { state: { quest, questId: data.questId, groupId: data.groupId } });
+        }
+      } catch (err) {
+        console.error('resume failed', err);
+      }
+    });
+    return () => unsub();
+  }, [location.pathname, navigate]);
+
   return (
     <>
       <Header />

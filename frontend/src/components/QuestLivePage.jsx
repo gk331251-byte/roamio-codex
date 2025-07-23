@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
+import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
-import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit } from "../lib/api";
+import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest } from "../lib/api";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -16,6 +17,8 @@ export default function QuestLivePage() {
   const [userLocation, setUserLocation] = useState(null);
   const [stops, setStops] = useState([]);
   const [visitedIndices, setVisitedIndices] = useState([]);
+  const [groupData, setGroupData] = useState(null);
+  const [activityMsg, setActivityMsg] = useState("");
   const [etaText, setEtaText] = useState("");
   const [saving, setSaving] = useState(false);
   const [completeMsg, setCompleteMsg] = useState("");
@@ -49,12 +52,28 @@ export default function QuestLivePage() {
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user || !groupId) return;
-    joinGroup(user.uid, groupId).catch((e) => console.error('join failed', e));
+    joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
+    let prev = null;
     const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
       const data = snap.data();
-      if (data && data.progress && data.progress[user.uid]) {
+      if (!data) return;
+      setGroupData(data);
+      if (data.progress && data.progress[user.uid]) {
         setVisitedIndices(data.progress[user.uid]);
       }
+      if (prev && data.progress) {
+        Object.keys(data.progress).forEach((uid) => {
+          if (uid === user.uid) return;
+          const before = (prev.progress?.[uid] || []).length;
+          const after = (data.progress[uid] || []).length;
+          if (after > before) {
+            const member = data.members?.find((m) => m.userId === uid);
+            setActivityMsg(`${member?.displayName || uid} visited stop ${after}`);
+            setTimeout(() => setActivityMsg(''), 3000);
+          }
+        });
+      }
+      prev = data;
     });
     return () => unsub();
   }, [groupId]);
@@ -80,6 +99,7 @@ export default function QuestLivePage() {
 
   const currentStopIndex = visitedIndices.length;
   const allVisited = visitedIndices.length >= (quest?.places?.length || 0);
+  const questComplete = allVisited || groupData?.completed;
 
 
   useEffect(() => {
@@ -110,7 +130,7 @@ export default function QuestLivePage() {
     const user = auth.currentUser;
     if (!user) return alert("You must be logged in!");
 
-    if (!questId) return;
+    if (!questId || questComplete) return;
     try {
       if (groupId) {
         const res = await trackStopVisit(groupId, user.uid, visitedIndices.length);
@@ -143,6 +163,9 @@ export default function QuestLivePage() {
         imageUrl: quest.imageUrl,
         visitedIndices,
       });
+      if (groupId) {
+        await completeGroupQuest(groupId, user.uid);
+      }
       setCompleteMsg("Quest Saved to Your Profile!");
       window.dispatchEvent(new Event("quest-saved"));
     } catch (err) {
@@ -205,7 +228,20 @@ export default function QuestLivePage() {
               {quest?.questText || "Embark on your adventure"}
             </p>
             {groupId && (
-              <p className="text-xs text-blue-700 break-all">Invite Link: {`${window.location.origin}/live?groupId=${groupId}`}</p>
+              <div className="text-xs text-blue-700 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="break-all">Invite: {`${window.location.origin}/live?groupId=${groupId}`}</span>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(`${window.location.origin}/live?groupId=${groupId}`)}
+                    className="px-2 py-0.5 rounded bg-blue-600 text-white"
+                  >
+                    Copy
+                  </button>
+                </div>
+                {groupData && (
+                  <GroupMemberList members={groupData.members || []} progress={groupData.progress || {}} total={quest?.places?.length || 0} />
+                )}
+              </div>
             )}
           </div>
             <button
@@ -223,13 +259,16 @@ export default function QuestLivePage() {
                 {visitedIndices.length}/{quest?.places?.length}
               </p>
             </div>
-            <div className="w-full bg-[#d0e7d0] rounded">
-              <div
-                className="h-2 rounded bg-[#14b714]"
-                style={{ width: `${(visitedIndices.length / (quest?.places?.length || 1)) * 100}%` }}
-              />
-            </div>
+          <div className="w-full bg-[#d0e7d0] rounded">
+            <div
+              className="h-2 rounded bg-[#14b714]"
+              style={{ width: `${(visitedIndices.length / (quest?.places?.length || 1)) * 100}%` }}
+            />
           </div>
+        </div>
+        {activityMsg && (
+          <p className="text-xs text-center text-blue-700 mt-1">{activityMsg}</p>
+        )}
 
           <div className="px-4 py-3">
             <LiveQuestMap stops={stops} visitedIndex={currentStopIndex} userLocation={userLocation} />
@@ -242,18 +281,18 @@ export default function QuestLivePage() {
           <div className="flex px-4 py-3">
             <button
               onClick={handleMarkVisited}
-              disabled={allVisited}
+              disabled={questComplete}
               className={`flex-1 h-12 rounded-full text-base font-bold text-[#f8fcf8] ${
-                allVisited
+                questComplete
                   ? "bg-gray-400 cursor-not-allowed"
                   : "bg-[#14b714] hover:bg-[#0fa50f]"
               }`}
             >
-              {allVisited ? "Quest Complete!" : "Mark as Visited"}
+              {questComplete ? "Quest Complete!" : "Mark as Visited"}
             </button>
           </div>
 
-          {allVisited && (
+          {questComplete && (
             <div className="flex px-4 py-3">
               <button
                 onClick={handleComplete}
