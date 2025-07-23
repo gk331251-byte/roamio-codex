@@ -178,6 +178,7 @@ export async function getQuest(questId) {
   }
   return resp.json();
 }
+
 export async function getCommunityQuests() {
   const resp = await fetch(`${BASE_URL}/get-community-quests`);
   if (!resp.ok) {
@@ -198,3 +199,22 @@ export async function reportQuest(userId, questId, reason, city, mood) {
   return resp.json();
 }
 
+export async function getQuestReports() {
+  const resp = await fetch(`${BASE_URL}/get-quest-reports`);
+  if (!resp.ok) {
+    throw new Error('Failed to load reports');
+  }
+  return resp.json();
+}
+
+export async function toggleQuestVisibility(questId, userId, visible) {
+  const resp = await fetch(`${BASE_URL}/toggle-quest-visibility`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questId, userId, visible })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to update visibility');
+  }
+  return resp.json();
+}

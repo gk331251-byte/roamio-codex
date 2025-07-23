@@ -571,6 +571,8 @@ async def get_user_quests(userId: str = Query(...)):
         if not doc:
             continue
         obj = _decode_document(doc)
+        if obj.get("visible") is False:
+            continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
@@ -900,7 +902,7 @@ async def complete_group_quest(payload: dict = Body(...)):
 
     return {"status": "completed"}
 
-  
+
 @app.get("/active-quest/{user_id}")
 async def get_active_quest(user_id: str):
     """Return the current active quest doc for the user."""
@@ -986,6 +988,56 @@ async def report_quest(payload: dict = Body(...)):
         resp.raise_for_status()
     return {"status": "reported"}
 
+@app.get("/get-quest-reports")
+async def get_quest_reports():
+    """Return recent quest reports for admin review."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_reports:runQuery"
+    )
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "quest_reports"}],
+            "orderBy": [{"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}],
+            "limit": 20,
+        }
+    }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    results = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        obj["id"] = doc["name"].split("/")[-1]
+        results.append(obj)
+    return {"reports": results}
+
+
+@app.post("/toggle-quest-visibility")
+async def toggle_quest_visibility(payload: dict = Body(...)):
+    """Hide or show a community quest."""
+    quest_id = payload.get("questId")
+    user_id = payload.get("userId")
+    visible = payload.get("visible", True)
+    if not quest_id or not user_id:
+        return {"error": "questId and userId required"}
+
+    project_id = creds.project_id
+    doc_id = f"{quest_id}_{user_id}"
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{doc_id}"
+    body = {"fields": _encode_fields({"visible": visible})}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "updated"}
+
+
 
 @app.get("/get-community-quests")
 async def get_community_quests():
@@ -1012,6 +1064,8 @@ async def get_community_quests():
         if not doc:
             continue
         obj = _decode_document(doc)
+        if obj.get("visible") is False:
+            continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
