@@ -100,3 +100,4 @@ export async function trackVisit(userId, questId, placeIndex) {
   }
   return resp.json();
 }
+

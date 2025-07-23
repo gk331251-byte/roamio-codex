@@ -267,7 +267,6 @@ def _from_value(val):
 def _decode_document(doc: dict) -> dict:
     return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
 
-
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
     user_id = payload.get("userId")
@@ -310,6 +309,64 @@ async def complete_quest(payload: dict = Body(...)):
 
     return {"status": "Quest saved!"}
 
+    timestamp = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+
+    # === Save quest completion ===
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "completedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # === Update lastActive ===
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "Quest saved!"}
+
+    # === Save quest completion ===
+    quest_doc = {
+        "userId": user_id,
+        "questId": quest_id,
+        "questData": quest_data,
+        "completedAt": timestamp,
+    }
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    # === Update lastActive ===
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    user_body = {"fields": _encode_fields({"lastActive": timestamp})}
+    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    return {"status": "Quest saved!"}
+  
 @app.get("/places")
 def get_places(city: str = Query(...)):
     geocode_result = gmaps.geocode(city)
@@ -503,6 +560,7 @@ async def track_visit(payload: dict = Body(...)):
     return {"status": "ok", "visitedIndices": visited, "xp": xp, "badges": badges}
 
 
+
 @app.post("/upload-postcard")
 async def upload_postcard(payload: dict = Body(...)):
     """Attach postcard image info to quest."""
@@ -566,3 +624,4 @@ async def get_directions(payload: dict = Body(...)):
         ],
         "totalTime": "22 mins",
     }
+
