@@ -29,18 +29,9 @@ from firestore_utils import (
 from group_utils import create_group_document, add_user_to_group
 
 # ----- XP & Level Helpers -----
-LEVEL_THRESHOLDS = [
-    0,   # Level 1
-    50,  # Level 2
-    120, # Level 3
-    200, # Level 4
-    300, # Level 5
-    420, # Level 6
-    550, # Level 7
-    700, # Level 8
-    880, # Level 9
-    1080 # Level 10
-]
+# Each level is reached every 1000 XP. Pre-generate a list so we can
+# easily look up the next threshold when returning quest results.
+LEVEL_THRESHOLDS = [i * 1000 for i in range(1, 101)]  # supports up to level 100
 
 BADGE_CATALOG = {
     "first_quest": {
@@ -89,14 +80,12 @@ BADGE_CATALOG = {
 
 
 def get_level_from_xp(xp: int) -> int:
-    """Return user level based on total XP."""
-    level = 1
-    for idx, threshold in enumerate(LEVEL_THRESHOLDS, start=1):
-        if xp >= threshold:
-            level = idx
-        else:
-            break
-    return level
+    """Return user level based on total XP using 1000 XP per level."""
+    try:
+        xp_val = int(xp)
+    except Exception:
+        xp_val = 0
+    return xp_val // 1000
 
 def calculate_age(dob_str: str) -> int:
     """Return age in years from YYYY-MM-DD string."""
@@ -836,6 +825,15 @@ async def complete_quest(payload: dict = Body(...)):
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
 
+    # Path to quest document under the user's quests collection
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, quest_url)
+    existing_doc = _decode_document(resp.json()) if resp.status_code == 200 else {}
+
+    xp_already_applied = bool(existing_doc.get("xpApplied"))
+
     # Quest fields
     quest_doc = {
         "title": payload.get("title"),
@@ -845,99 +843,50 @@ async def complete_quest(payload: dict = Body(...)):
         "questText": payload.get("questText"),
         "locationList": payload.get("locationList", []),
         "imagePrompt": payload.get("imagePrompt"),
-        "postcardUrl": None,
-        "visitedIndices": payload.get("visitedIndices", []),
+        "postcardUrl": existing_doc.get("postcardUrl"),
+        "visitedIndices": payload.get("visitedIndices", existing_doc.get("visitedIndices", [])),
         "completed": True,
-        "completedAt": timestamp,
+        "completedAt": existing_doc.get("completedAt", timestamp),
         "isDemo": payload.get("isDemo", False),
-        "xpEarned": 0,
-        "levelBefore": 0,
-        "levelAfter": 0,
-        "badgesUnlocked": [],
     }
 
-    # Save quest under user_quests/{userId}/quests/{questId}
-    quest_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
-    )
-    quest_body = {"fields": _encode_fields(quest_doc)}
-    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+    difficulty = (payload.get("difficulty") or "Easy").title()
+    base_xp = 100 if difficulty == "Easy" else 200 if difficulty == "Medium" else 300
+    xp_earned = 0 if xp_already_applied else base_xp
+    if payload.get("groupQuest") and not xp_already_applied:
+        xp_earned += 100
+    bonus_xp = 0
+    new_badges = []
 
     # Fetch current user doc
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     )
     resp = await asyncio.to_thread(rest_session.get, user_url)
-    user_data = {}
-    if resp.status_code == 200:
-        user_data = _decode_document(resp.json())
+    user_data = _decode_document(resp.json()) if resp.status_code == 200 else {}
 
-    difficulty = (payload.get("difficulty") or "Easy").title()
-    base_xp = 25 if difficulty == "Easy" else 50 if difficulty == "Medium" else 75
-    xp_earned = base_xp
-    bonus_xp = 0
-    if user_data.get("ugcBoostActive"):
-        cfg_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
-        )
-        cfg_resp = await asyncio.to_thread(rest_session.get, cfg_url)
-        cfg = _decode_document(cfg_resp.json()) if cfg_resp.status_code == 200 else {}
-        mult = float(cfg.get("xpMultiplier", 1.2))
-        xp_earned = int(base_xp * mult)
-        bonus_xp = xp_earned - base_xp
-    level_before = user_data.get("level", 1)
-    total_xp = user_data.get("totalXP", 0) + xp_earned
+    total_xp = user_data.get("xp", user_data.get("totalXP", 0))
+    quests_completed = user_data.get("questsCompleted", 0)
+    if xp_earned:
+        total_xp += xp_earned
+        quests_completed += 1
+        user_data["lastCompleted"] = timestamp
     level = get_level_from_xp(total_xp)
-    stats = user_data.get("stats", {})
-    badges = user_data.get("badges", {})
-    badge_list = user_data.get("badgesUnlocked", [])
-    badge_list = user_data.get("badgesUnlocked", [])
-    stats["totalQuestsCompleted"] = stats.get("totalQuestsCompleted", 0) + 1
-    stats["totalXP"] = total_xp
-    if quest_doc.get("mood") == "Foodie":
-        stats["foodieQuests"] = stats.get("foodieQuests", 0) + 1
-
-    new_badges = compute_badge_unlocks(stats, level, badge_list)
-    for b in new_badges:
-        badges[b] = True
-        if b not in badge_list:
-            badge_list.append(b)
 
     quest_doc.update({
         "xpEarned": xp_earned,
-        "levelBefore": level_before,
-        "levelAfter": level,
-        "badgesUnlocked": new_badges,
-        "bonusXP": bonus_xp,
+        "xpApplied": True,
     })
-    # Update quest document with summary details
-    summary_body = {"fields": _encode_fields({
-        "xpEarned": xp_earned,
-        "levelBefore": level_before,
-        "levelAfter": level,
-        "badgesUnlocked": new_badges,
-        "bonusXP": bonus_xp,
-    })}
-    await asyncio.to_thread(rest_session.patch, quest_url, json=summary_body)
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
 
     user_update = {
-        "totalXP": total_xp,
+        "xp": total_xp,
         "level": level,
-        "stats": stats,
-        "badges": badges,
-        "badgesUnlocked": badge_list,
-        "lastActive": timestamp,
+        "lastCompleted": user_data.get("lastCompleted"),
+        "questsCompleted": quests_completed,
     }
-    if user_data.get("ugcBoostActive"):
-        user_update["ugcBoostActive"] = False
-    user_body = {"fields": _encode_fields(user_update)}
-    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+    await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
 
     postcard_url = None
     prompt = payload.get("imagePrompt") or f"A vintage postcard from {payload.get('city','somewhere')}"
@@ -1516,20 +1465,19 @@ async def get_user_xp(user_id: str):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        return {
-            "totalXP": 0,
-            "level": 1,
-            "badgesUnlocked": [],
-            "showRoamioWatermark": True,
-            "skipSharePrompt": False,
-            "publicSharingOptIn": False,
-            "showUsernameOnShare": True,
-            "showCityOnShare": True,
-        }
-    data = _decode_document(resp.json())
+        data = {}
+    else:
+        data = _decode_document(resp.json())
+    xp = data.get("xp")
+    if xp is None:
+        xp = data.get("totalXP", 0)
+    level = data.get("level")
+    if level is None:
+        level = get_level_from_xp(xp)
     return {
-        "totalXP": data.get("totalXP", 0),
-        "level": data.get("level", 1),
+        "xp": xp,
+        "totalXP": xp,
+        "level": level,
         "badgesUnlocked": data.get("badgesUnlocked", []),
         "showRoamioWatermark": data.get("showRoamioWatermark", True),
         "skipSharePrompt": data.get("skipSharePrompt", False),
