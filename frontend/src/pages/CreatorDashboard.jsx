@@ -59,6 +59,12 @@ export default function CreatorDashboard() {
           ))}
         </ul>
       </div>
+      <button
+        onClick={() => navigate('/creator-dashboard/submit-quest')}
+        className="bg-blue-600 text-white px-3 py-2 rounded"
+      >
+        Submit Featured Quest
+      </button>
     </div>
   );
 }

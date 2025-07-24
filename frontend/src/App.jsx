@@ -34,7 +34,10 @@ import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import UGCSubmitForm from "./components/UGCSubmitForm";
 import CreatorDashboard from "./pages/CreatorDashboard";
+import CreatorSubmitQuest from "./pages/CreatorSubmitQuest";
+import Featured from "./pages/Featured";
 import UGCAnalytics from "./pages/admin/UGCAnalytics";
+import FeaturedReview from "./pages/admin/FeaturedReview";
 import CookieConsent from "react-cookie-consent";
 
 
@@ -103,7 +106,10 @@ function App() {
         <Route path="/terms" element={<Terms />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/creator-dashboard" element={<CreatorDashboard />} />
+        <Route path="/creator-dashboard/submit-quest" element={<CreatorSubmitQuest />} />
+        <Route path="/featured" element={<Featured />} />
         <Route path="/admin/ugc-analytics" element={<UGCAnalytics />} />
+        <Route path="/admin/featured-review" element={<FeaturedReview />} />
         <Route path="/ugc-submit" element={<UGCSubmitForm />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />

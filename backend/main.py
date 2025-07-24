@@ -2674,6 +2674,15 @@ async def _verify_admin(user_id: str) -> bool:
         return data.get("isAdmin") is True
     return False
 
+async def _verify_creator(user_id: str) -> bool:
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/creators/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        data = _decode_document(resp.json())
+        return data.get("isApproved", True) is True
+    return False
+
 
 @app.get("/admin/dashboard")
 async def admin_dashboard(userId: str = Query(...)):
@@ -2853,3 +2862,110 @@ async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None))
     if resp.status_code != 200:
         return {}
     return _decode_document(resp.json())
+
+@app.post("/submit-featured-quest")
+async def submit_featured_quest(request: Request, payload: dict = Body(...)):
+    """Allow approved creators to submit a featured quest draft."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid or uid != payload.get("uid"):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    if not await _verify_creator(uid):
+        return JSONResponse(status_code=403, content={"error": "not_creator"})
+
+    project_id = creds.project_id
+    quest_id = hashlib.sha1(f"{uid}-{datetime.utcnow()}".encode()).hexdigest()[:16]
+    quest_doc = {
+        "title": payload.get("title") or "Untitled Quest",
+        "questText": payload.get("questText", ""),
+        "locationList": payload.get("locationList", []),
+        "mood": payload.get("mood", ""),
+        "imageUrl": payload.get("imageUrl"),
+        "submittedBy": uid,
+        "createdAt": datetime.utcnow().isoformat(),
+        "isApproved": False,
+        "adminReviewed": False,
+        "tags": payload.get("tags", []),
+        "remixable": bool(payload.get("remixable", True)),
+        "stats": {"completions": 0, "remixes": 0},
+    }
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests/{quest_id}"
+    )
+    body = {"fields": _encode_fields(quest_doc)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+
+    creator_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/creators/{uid}"
+    cresp = await asyncio.to_thread(rest_session.get, creator_url)
+    if cresp.status_code == 200:
+        data = _decode_document(cresp.json())
+        ids = data.get("featuredQuestIds", [])
+        if quest_id not in ids:
+            ids.append(quest_id)
+            patch = {"fields": _encode_fields({"featuredQuestIds": ids})}
+            await asyncio.to_thread(rest_session.patch, creator_url, json=patch)
+
+    return {"questId": quest_id}
+
+
+@app.get("/featured-quests")
+async def get_featured_quests(approved: bool = Query(True)):
+    """Return featured quests optionally filtered by approval."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests:runQuery"
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "featured_quests"}],
+            "orderBy": [{"field": {"fieldPath": "createdAt"}, "direction": "DESCENDING"}],
+        }
+    }
+    if approved is not None:
+        query["structuredQuery"]["where"] = {
+            "fieldFilter": {
+                "field": {"fieldPath": "isApproved"},
+                "op": "EQUAL",
+                "value": {"booleanValue": approved},
+            }
+        }
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    quests = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        obj["id"] = doc["name"].split("/")[-1]
+        quests.append(obj)
+    return {"quests": quests}
+
+
+@app.get("/admin/featured-pending")
+async def admin_featured_pending(userId: str = Query(...)):
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    return await get_featured_quests(approved=False)
+
+
+@app.post("/admin/review-featured-quest")
+async def admin_review_featured(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    approved = payload.get("approved", True)
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not quest_id:
+        return {"error": "questId required"}
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests/{quest_id}"
+    patch = {"fields": _encode_fields({"isApproved": bool(approved), "adminReviewed": True})}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=patch)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return {"status": "updated"}
