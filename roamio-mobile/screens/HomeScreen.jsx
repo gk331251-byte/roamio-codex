@@ -19,7 +19,7 @@ export default function HomeScreen({ navigation }) {
       toast('Custom quests are a Roamio+ feature. Upgrade to plan your own adventures.');
       return;
     }
-    navigation.navigate('CustomQuest');
+    navigation.navigate('CustomQuestBuilder');
   };
 
   const requestLocation = async () => {

@@ -24,7 +24,8 @@
       }
     },
     "extra": {
-      "backendUrl": "http://localhost:8080"
+      "backendUrl": "http://localhost:8080",
+      "googlePlacesApiKey": "YOUR_GOOGLE_PLACES_API_KEY"
     }
   }
 }
