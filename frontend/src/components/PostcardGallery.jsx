@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { motion as Motion } from 'framer-motion';
 import { auth, db } from '../firebase';
 
@@ -8,6 +8,8 @@ const PostcardGallery = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [cards, setCards] = useState([]);
+  const [mood, setMood] = useState('');
+  const [difficulty, setDifficulty] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async user => {
@@ -17,11 +19,11 @@ const PostcardGallery = () => {
         return;
       }
       try {
-        const ref = collection(db, 'user_quests', user.uid);
-        const q = query(ref, where('postcardUrl', '!=', null));
-        const snapshot = await getDocs(q);
+        const ref = collection(db, 'user_quests', user.uid, 'quests');
+        const snapshot = await getDocs(ref);
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setCards(data);
+        const filtered = data.filter(d => d.postcardUrl);
+        setCards(filtered);
       } catch (err) {
         console.error('Failed to load postcards', err);
         setError('Failed to load postcards');
@@ -36,9 +38,32 @@ const PostcardGallery = () => {
   if (error) return <p className="p-4 text-red-600">{error}</p>;
   if (cards.length === 0) return <p className="p-4">No postcards yet.</p>;
 
+  const displayed = cards.filter(
+    c => (!mood || c.mood === mood || c.questData?.mood === mood) &&
+          (!difficulty || c.difficulty === difficulty || c.questData?.difficulty === difficulty)
+  );
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-      {cards.map(card => (
+    <div>
+      <div className="mb-4 flex gap-4">
+        <select value={mood} onChange={e => setMood(e.target.value)} className="border px-2 py-1 rounded">
+          <option value="">All Moods</option>
+          <option value="Adventure">Adventure</option>
+          <option value="Romantic">Romantic</option>
+          <option value="Weird">Weird</option>
+          <option value="Nature">Nature</option>
+          <option value="Foodie">Foodie</option>
+          <option value="Cozy">Cozy</option>
+        </select>
+        <select value={difficulty} onChange={e => setDifficulty(e.target.value)} className="border px-2 py-1 rounded">
+          <option value="">All Difficulties</option>
+          <option value="Easy">Easy</option>
+          <option value="Medium">Medium</option>
+          <option value="Hard">Hard</option>
+        </select>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+      {displayed.map(card => (
         <Motion.div
           key={card.id}
           initial={{ opacity: 0, scale: 0.95 }}
@@ -58,6 +83,7 @@ const PostcardGallery = () => {
           </div>
         </Motion.div>
       ))}
+      </div>
     </div>
   );
 };
