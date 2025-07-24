@@ -1,12 +1,29 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect } from 'react';
 import { View, Text, Button, FlatList } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import SharedHeader from '../components/SharedHeader';
 import { AppContext } from '../context/AppContext';
+import * as Notifications from 'expo-notifications';
+
 
 export default function QuestLiveScreen() {
   const { quest } = useContext(AppContext);
   const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    if (step === 1) {
+      const t = setTimeout(() => {
+        Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Next Stop Ahead!',
+            body: 'Your next destination is just a few minutes away.',
+          },
+          trigger: null,
+        });
+      }, 15000);
+      return () => clearTimeout(t);
+    }
+  }, [step]);
 
   if (!quest) {
     return (
