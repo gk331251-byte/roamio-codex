@@ -24,7 +24,7 @@ import CommunityFeed from "./components/CommunityFeed";
 import UGCFeed from "./pages/UGCFeed";
 import CommunityPage from "./components/CommunityPage";
 import CreateCommunity from "./components/CreateCommunity";
-import AdminDashboard from "./components/AdminDashboard";
+import AdminDashboard from "./pages/AdminDashboard";
 import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 import TagEditor from "./components/TagEditor";
