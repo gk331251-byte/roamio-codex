@@ -20,11 +20,24 @@ const StopMarker = ({ visited, current, final, name }) => {
   );
 };
 
+const MemberMarker = ({ lat, lng, name, color }) => (
+  <div
+    lat={lat}
+    lng={lng}
+    className="text-xs font-bold rounded-full px-1 py-0.5"
+    style={{ backgroundColor: color, color: '#fff' }}
+  >
+    {name}
+  </div>
+);
+
 export default function LiveQuestMap({
   stops = [],
   visitedIndex = 0,
   userLocation,
   polylinePoints = [],
+  groupProgress = {},
+  members = [],
 }) {
   const mapRef = useRef(null);
   const mapsRef = useRef(null);
@@ -95,6 +108,23 @@ export default function LiveQuestMap({
             name={stop.name}
           />
         ))}
+        {members.map((m) => {
+          const visited = groupProgress[m.userId] || [];
+          if (!visited.length) return null;
+          const index = Math.min(visited[visited.length - 1], stops.length - 1);
+          const pos = stops[index];
+          if (!pos) return null;
+          const color = `#${m.userId.slice(0, 6)}`;
+          return (
+            <MemberMarker
+              key={m.userId}
+              lat={pos.lat}
+              lng={pos.lng}
+              name={m.displayName ? m.displayName[0] : m.userId[0]}
+              color={color}
+            />
+          );
+        })}
       </GoogleMapReact>
     </div>
   );
