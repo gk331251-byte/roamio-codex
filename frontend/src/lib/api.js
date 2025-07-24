@@ -553,6 +553,20 @@ export async function banUser(userId, targetId) {
   return resp.json();
 }
 
+export async function submitUGC(payload) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('Auth required');
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/ugc-submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error('Failed to submit');
+  return resp.json();
+}
+
 // ===== Group Chat =====
 
 export async function sendMessage(groupId, senderId, senderName, text) {
