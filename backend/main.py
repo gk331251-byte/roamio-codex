@@ -257,7 +257,8 @@ app = FastAPI()
 # ✅ Replace this with your actual frontend deployed domain
 allowed_origins = [
     "http://localhost:5173",  # Vite dev server (local)
-    "https://real-quest-frontend.web.app"  # Firebase Hosting / production
+    "https://real-quest-frontend.web.app",  # Firebase Hosting / production
+    "https://real-world-quest-app.web.app",  # Firebase hosted frontend
 ]
 
 app.add_middleware(
