@@ -640,3 +640,28 @@ export function fetchChatStream(groupId, callback) {
 }
 
 
+
+export async function createPromoCode(userId, data) {
+  const resp = await fetch(`${BASE_URL}/create-promo-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, ...data })
+  });
+  if (!resp.ok) throw new Error('Failed to create code');
+  return resp.json();
+}
+
+export async function redeemPromoCode(uid, code) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('Auth required');
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/redeem-promo-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ uid, code })
+  });
+  if (!resp.ok) throw new Error('Failed to redeem code');
+  return resp.json();
+}
+
