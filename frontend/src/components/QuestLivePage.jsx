@@ -499,7 +499,6 @@ export default function QuestLivePage() {
         )}
         <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
         <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
-
           <div className="px-4 py-3">
             <LiveQuestMap
               stops={stops}

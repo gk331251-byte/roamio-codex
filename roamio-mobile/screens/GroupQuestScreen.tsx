@@ -7,7 +7,6 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { decode } from '@googlemaps/polyline-codec';
 import { trackStopVisit } from '../lib/api';
 import { toast } from '../lib/toast';
-
 export default function GroupQuestScreen({ route }) {
   const { groupId, quest } = route.params;
   const { user } = useContext(AppContext);
