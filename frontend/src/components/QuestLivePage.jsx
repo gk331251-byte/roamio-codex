@@ -23,6 +23,7 @@ export default function QuestLivePage() {
   const [visitedIndices, setVisitedIndices] = useState([]);
   const [groupData, setGroupData] = useState(null);
   const [activityMsg, setActivityMsg] = useState("");
+  const [xpMsg, setXpMsg] = useState("");
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [etaText, setEtaText] = useState("");
@@ -273,12 +274,17 @@ export default function QuestLivePage() {
 
     if (!questId || questComplete) return;
     try {
+      let result;
       if (groupId) {
-        const res = await trackStopVisit(groupId, user.uid, visitedIndices.length);
-        setVisitedIndices(res.visitedStops || res.visitedIndices || []);
+        result = await trackStopVisit(groupId, user.uid, visitedIndices.length);
+        setVisitedIndices(result.visitedStops || result.visitedIndices || []);
       } else {
-        const res = await trackVisit(user.uid, questId, visitedIndices.length);
-        setVisitedIndices(res.visitedIndices || []);
+        result = await trackVisit(user.uid, questId, visitedIndices.length);
+        setVisitedIndices(result.visitedIndices || []);
+      }
+      if (result?.xp) {
+        setXpMsg(`+${result.xp} XP`);
+        setTimeout(() => setXpMsg(""), 2000);
       }
     } catch (err) {
       console.error('Failed to track visit', err);
@@ -459,6 +465,9 @@ export default function QuestLivePage() {
         </div>
         {activityMsg && (
           <p className="text-xs text-center text-blue-700 mt-1">{activityMsg}</p>
+        )}
+        {xpMsg && (
+          <p className="text-xs text-center text-purple-700 mt-1">{xpMsg}</p>
         )}
 
           <div className="px-4 py-3">
