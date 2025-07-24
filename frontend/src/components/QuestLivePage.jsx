@@ -234,6 +234,9 @@ export default function QuestLivePage() {
         .map((p) => `${p.lat},${p.lng}`)
         .join('|');
 
+      console.log('Waypoints', waypoints);
+      console.log('Remaining stops', remaining);
+
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking` +
         (waypoints ? `&waypoints=${waypoints}` : '') +
         `&key=${key}`;
@@ -246,6 +249,7 @@ export default function QuestLivePage() {
         const sec = legs.reduce((s, l) => s + (l.duration?.value || 0), 0);
         const mins = Math.round(sec / 60);
         setEtaText(`${mins} min`);
+        console.log('ETA legs', legs.map((l) => l.duration?.text));
         const poly = data?.routes?.[0]?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
