@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import LiveQuestMap from './LiveQuestMap';
 import GroupMemberList from './GroupMemberList';
-import { getGroupQuest, getQuest, trackStopVisit } from '../lib/api';
+import { getQuest, trackStopVisit } from '../lib/api';
 import { decode } from '@googlemaps/polyline-codec';
 import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
