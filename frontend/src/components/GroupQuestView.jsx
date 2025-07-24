@@ -47,7 +47,6 @@ export default function GroupQuestView() {
   const auth = getAuth();
   const me = auth.currentUser;
   const visitedIndex = group?.progress?.[me?.uid] ? group.progress[me.uid].length : 0;
-
   const handleVisit = async () => {
     if (!group || !quest || !me) return;
     try {
