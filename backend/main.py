@@ -1495,12 +1495,14 @@ async def get_user_xp(user_id: str):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        return {"totalXP": 0, "level": 1, "badgesUnlocked": []}
+        return {"totalXP": 0, "level": 1, "badgesUnlocked": [], "showRoamioWatermark": True, "skipSharePrompt": False}
     data = _decode_document(resp.json())
     return {
         "totalXP": data.get("totalXP", 0),
         "level": data.get("level", 1),
         "badgesUnlocked": data.get("badgesUnlocked", []),
+        "showRoamioWatermark": data.get("showRoamioWatermark", True),
+        "skipSharePrompt": data.get("skipSharePrompt", False),
     }
 
 

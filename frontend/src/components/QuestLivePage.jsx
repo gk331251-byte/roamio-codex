@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import LiveQuestMap from "./LiveQuestMap";
 import GroupMemberList from "./GroupMemberList";
-import { getAuth } from "firebase/auth";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest, updateActiveQuest } from "../lib/api";
 import { doc, onSnapshot, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
@@ -13,6 +13,7 @@ import BadgePopup from './BadgePopup';
 import TooltipManager from './TooltipManager';
 import { toast } from '../lib/toast';
 import QuestCompleteSummary from './QuestCompleteSummary';
+import PostQuestShareModal from './PostQuestShareModal';
 
 
 export default function QuestLivePage() {
@@ -36,6 +37,9 @@ export default function QuestLivePage() {
   const [showComplete, setShowComplete] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryData, setSummaryData] = useState({});
+  const [shareOpen, setShareOpen] = useState(false);
+  const [skipSharePrompt, setSkipSharePromptState] = useState(false);
+  const [showWatermark, setShowWatermark] = useState(true);
   const [etaText, setEtaText] = useState("");
   const [etaError, setEtaError] = useState("");
   const [etaRefresh, setEtaRefresh] = useState(0);
@@ -53,6 +57,8 @@ export default function QuestLivePage() {
         if (data) {
           setUserXP(data.xp || 0);
           setBadges(data.badges || {});
+          setSkipSharePromptState(!!data.skipSharePrompt);
+          setShowWatermark(data.showRoamioWatermark !== false);
         }
       })
       .catch((e) => console.error('user fetch error', e));
@@ -523,7 +529,19 @@ export default function QuestLivePage() {
           badgesUnlocked={summaryData.badgesUnlocked || []}
           nextLevelXP={summaryData.nextLevelXP || 100}
           imageUrl={summaryData.imageUrl}
-          onClose={() => setSummaryOpen(false)}
+          onClose={() => {
+            setSummaryOpen(false);
+            if (!skipSharePrompt) setShareOpen(true);
+          }}
+        />
+        <PostQuestShareModal
+          open={shareOpen}
+          imageUrl={summaryData.imageUrl}
+          city={quest?.city || ''}
+          xpEarned={summaryData.xpEarned}
+          badge={summaryData.badgesUnlocked?.[0]}
+          showWatermark={showWatermark}
+          onClose={() => setShareOpen(false)}
         />
           <div className="px-4 py-3">
           <LiveQuestMap

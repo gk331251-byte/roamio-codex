@@ -13,6 +13,7 @@ import {
 } from '../lib/api';
 import XPProgressBar from './XPProgressBar';
 import BadgeGallery from './BadgeGallery';
+import { setShowRoamioWatermark } from '../lib/firebase';
 const LEVEL_THRESHOLDS = [0,50,120,200,300,420,550,700,880,1080];
 
 const Profile = () => {
@@ -23,6 +24,7 @@ const Profile = () => {
   const [xp, setXp] = useState(0);
   const [level, setLevel] = useState(1);
   const [badges, setBadges] = useState([]);
+  const [showWatermark, setShowWatermark] = useState(true);
   const nextThreshold = LEVEL_THRESHOLDS[Math.min(level, LEVEL_THRESHOLDS.length - 1)];
 
   useEffect(() => {
@@ -40,6 +42,7 @@ const Profile = () => {
           setXp(xpData.totalXP || 0);
           setLevel(xpData.level || 1);
           setBadges(xpData.badgesUnlocked || []);
+          setShowWatermark(xpData.showRoamioWatermark !== false);
         } catch (err) {
           console.error('load xp error', err);
         }
@@ -119,6 +122,20 @@ const Profile = () => {
       <div className="mb-8">
         <h2 className="text-xl font-bold mb-2">Badges</h2>
         <BadgeGallery unlocked={badges} />
+      </div>
+
+      <div className="mb-8">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showWatermark}
+            onChange={async (e) => {
+              setShowWatermark(e.target.checked);
+              if (user) await setShowRoamioWatermark(user.uid, e.target.checked);
+            }}
+          />
+          Watermark shared postcards with "Made with Roamio"
+        </label>
       </div>
 
       <div className="mt-8">
