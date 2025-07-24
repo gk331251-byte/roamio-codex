@@ -7,16 +7,19 @@ import {
   validatePremium,
   createCustomQuest,
   publishCustomQuest,
+  unpublishCustomQuest,
   createGroupQuest,
   getCustomQuest,
+  updateCustomQuest,
 } from '../lib/api';
 import LocationInputRow, { PlaceInput } from '../components/LocationInputRow';
 import MoodSelector from '../components/MoodSelector';
 import TimeLimitSlider from '../components/TimeLimitSlider';
 
-export default function CustomQuestBuilderScreen({ navigation }: any) {
+export default function CustomQuestBuilderScreen({ navigation, route }: any) {
   const { user, setQuest } = useContext(AppContext);
   const [checking, setChecking] = useState(true);
+  const questId = route?.params?.questId as string | undefined;
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
   const [moods, setMoods] = useState<string[]>([]);
@@ -25,6 +28,7 @@ export default function CustomQuestBuilderScreen({ navigation }: any) {
     { name: '', place_id: '', lat: 0, lng: 0, duration_minutes: 10 },
     { name: '', place_id: '', lat: 0, lng: 0, duration_minutes: 10 },
   ]);
+  const [status, setStatus] = useState('draft');
   const [shareLink, setShareLink] = useState<string | null>(null);
 
   useEffect(() => {
@@ -35,6 +39,29 @@ export default function CustomQuestBuilderScreen({ navigation }: any) {
           toast('Quest+ membership required');
           navigation.goBack();
           return;
+        }
+        if (questId) {
+          try {
+            const q = await getCustomQuest(questId);
+            setTitle(q.title || '');
+            setPrompt(q.custom_prompt || '');
+            setMoods(q.mood_tags || q.mood || []);
+            setTimeLimit(q.time_limit || 60);
+            if (Array.isArray(q.places || q.locationList)) {
+              setLocations(
+                (q.places || q.locationList).map((p: any) => ({
+                  name: p.name,
+                  place_id: p.place_id || p.placeId,
+                  lat: p.lat,
+                  lng: p.lng,
+                  duration_minutes: p.duration_minutes || p.duration || 10,
+                }))
+              );
+            }
+            setStatus(q.status || (q.public ? 'published' : 'draft'));
+          } catch (err) {
+            console.log('load quest', err);
+          }
         }
       } catch (err) {
         console.log('premium check', err);
@@ -94,7 +121,11 @@ export default function CustomQuestBuilderScreen({ navigation }: any) {
   const handleSave = async () => {
     if (!validateForm()) return;
     try {
-      await createCustomQuest(basePayload());
+      if (questId) {
+        await updateCustomQuest({ quest_id: questId, data: basePayload() });
+      } else {
+        await createCustomQuest(basePayload());
+      }
       toast('Draft saved');
     } catch (err) {
       console.log('save error', err);
@@ -105,10 +136,16 @@ export default function CustomQuestBuilderScreen({ navigation }: any) {
   const handleStart = async () => {
     if (!validateForm()) return;
     try {
-      const res = await createCustomQuest(basePayload());
-      const quest = await getCustomQuest(res.questId);
-      const group = await createGroupQuest(user!.uid, res.questId, user!.displayName || '');
-      setQuest({ ...quest, id: res.questId, visitedIndices: [] });
+      let id = questId;
+      if (questId) {
+        await updateCustomQuest({ quest_id: questId, data: basePayload() });
+      } else {
+        const res = await createCustomQuest(basePayload());
+        id = res.questId;
+      }
+      const quest = await getCustomQuest(id!);
+      const group = await createGroupQuest(user!.uid, id!, user!.displayName || '');
+      setQuest({ ...quest, id, visitedIndices: [] });
       navigation.navigate('QuestLive');
     } catch (err) {
       console.log('start error', err);
@@ -119,9 +156,16 @@ export default function CustomQuestBuilderScreen({ navigation }: any) {
   const handlePublish = async () => {
     if (!validateForm()) return;
     try {
-      const res = await createCustomQuest(basePayload());
-      await publishCustomQuest(user!.uid, res.questId);
-      setShareLink(`${Constants.expoConfig?.extra?.backendUrl}/q/${res.questId}`);
+      let id = questId;
+      if (questId) {
+        await updateCustomQuest({ quest_id: questId, data: basePayload() });
+      } else {
+        const res = await createCustomQuest(basePayload());
+        id = res.questId;
+      }
+      await publishCustomQuest(user!.uid, id!);
+      setStatus('published');
+      setShareLink(`${Constants.expoConfig?.extra?.backendUrl}/q/${id}`);
       toast('Quest published');
     } catch (err) {
       console.log('publish error', err);
@@ -169,6 +213,20 @@ export default function CustomQuestBuilderScreen({ navigation }: any) {
         <Button title="Save Draft" onPress={handleSave} />
         <Button title="Start Quest" onPress={handleStart} />
         <Button title="Publish" onPress={handlePublish} />
+        {questId && status === 'published' && (
+          <Button
+            title="Unpublish"
+            onPress={async () => {
+              try {
+                await unpublishCustomQuest(user!.uid, questId);
+                setStatus('draft');
+                toast('Unpublished');
+              } catch (err) {
+                console.log('unpublish error', err);
+              }
+            }}
+          />
+        )}
         {shareLink && <Text className="mt-2 text-center">Share: {shareLink}</Text>}
       </View>
     </ScrollView>

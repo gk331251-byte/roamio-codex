@@ -288,6 +288,15 @@ export async function getCustomQuest(id) {
   return resp.json();
 }
 
+export async function listCustomQuests(userId, publicOnly = false) {
+  const url = new URL(`${BASE_URL}/custom-quests`);
+  url.searchParams.set('creatorId', userId);
+  url.searchParams.set('publicOnly', publicOnly);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to list custom quests');
+  return resp.json();
+}
+
 export async function publishCustomQuest(userId, questId) {
   const resp = await fetch(`${BASE_URL}/publish-custom-quest`, {
     method: 'POST',
@@ -297,6 +306,32 @@ export async function publishCustomQuest(userId, questId) {
   if (!resp.ok) {
     throw new Error('Failed to publish quest');
   }
+  return resp.json();
+}
+
+export async function unpublishCustomQuest(userId, questId) {
+  const resp = await fetch(`${BASE_URL}/unpublish-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quest_id: questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to unpublish quest');
+  }
+  return resp.json();
+}
+
+export async function updateCustomQuest(payload) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('Auth required');
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/update-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error('Failed to update quest');
   return resp.json();
 }
 

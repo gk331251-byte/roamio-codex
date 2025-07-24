@@ -78,6 +78,7 @@ function App() {
         <Route path="/quest-plus" element={<Pricing />} />
         <Route path="/pricing" element={<Pricing />} />
         <Route path="/custom" element={<CustomQuestBuilder />} />
+        <Route path="/custom/edit/:questId" element={<CustomQuestBuilder />} />
         <Route path="/q/:questId" element={<PublicQuestPage />} />
         <Route path="/tag-editor/:questId" element={<TagEditor />} />
         <Route path="/terms" element={<Terms />} />

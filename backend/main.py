@@ -1573,6 +1573,32 @@ async def create_custom_quest(request: Request, payload: dict = Body(...)):
         return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
 
 
+@app.post("/update-custom-quest")
+async def update_custom_quest(request: Request, payload: dict = Body(...)):
+    """Update an existing custom quest for the authenticated user."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    quest_id = payload.get("quest_id")
+    if not quest_id:
+        return {"error": "quest_id required"}
+
+    data = payload.get("data", {})
+    data["updatedAt"] = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+    body = {"fields": _encode_fields(data)}
+
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
+    global_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    for url in (user_url, global_url):
+        resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            resp.raise_for_status()
+
+    return {"status": "updated"}
+
+
 @app.get("/custom-quests/{quest_id}")
 async def get_custom_quest_endpoint(quest_id: str):
     """Publicly fetch a custom quest by its ID."""
@@ -1619,6 +1645,36 @@ async def publish_custom_quest(payload: dict = Body(...)):
             resp.raise_for_status()
 
     return {"status": "published"}
+
+
+@app.post("/unpublish-custom-quest")
+async def unpublish_custom_quest(payload: dict = Body(...)):
+    """Mark a custom quest as draft and private."""
+    user_id = payload.get("user_id")
+    quest_id = payload.get("quest_id")
+    if not user_id or not quest_id:
+        return {"error": "user_id and quest_id required"}
+
+    project_id = creds.project_id
+    patch_fields = {
+        "status": "draft",
+        "public": False,
+    }
+    body = {"fields": _encode_fields(patch_fields)}
+
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    )
+    global_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    for url in (user_url, global_url):
+        resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            resp.raise_for_status()
+
+    return {"status": "unpublished"}
 
 
 @app.post("/like-quest")

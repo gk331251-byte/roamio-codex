@@ -1,11 +1,11 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { View, Text, Image, FlatList } from 'react-native';
+import { View, Text, Image, FlatList, Button } from 'react-native';
 import SharedHeader from '../components/SharedHeader';
 import { AppContext } from '../context/AppContext';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 
-export default function ProfileScreen() {
+export default function ProfileScreen({ navigation }) {
   const { user } = useContext(AppContext);
   const [postcards, setPostcards] = useState([]);
 
@@ -42,6 +42,7 @@ export default function ProfileScreen() {
           <Text>You haven\u2019t completed any quests yet!</Text>
         }
       />
+      <Button title="My Custom Quests" onPress={() => navigation.navigate('MyQuests')} />
     </View>
   );
 }
