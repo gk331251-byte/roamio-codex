@@ -2,6 +2,7 @@ import React, { useState, useContext } from 'react';
 import { View, Text, Button, TextInput } from "react-native";
 import Slider from "@react-native-community/slider";
 import * as Location from 'expo-location';
+import { toast } from '../lib/toast';
 import SharedHeader from '../components/SharedHeader';
 import { generateQuest } from '../lib/questApi';
 import { AppContext } from '../context/AppContext';
@@ -13,12 +14,12 @@ export default function HomeScreen({ navigation }) {
   const [timeLimit, setTimeLimit] = useState(60);
   const [statusMsg, setStatusMsg] = useState('');
   const { setQuest, isPremium } = useContext(AppContext);
-
-
   const requestLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       setStatusMsg('Permission denied');
+      toast('Location not shared — routing may be less accurate');
+
       return;
     }
     const loc = await Location.getCurrentPositionAsync({});
@@ -37,11 +38,11 @@ export default function HomeScreen({ navigation }) {
       setQuest(questData.quest);
       navigation.navigate('QuestLive');
       if (questData.fallbackCity) {
-        alert(`Showing results near ${questData.fallbackCity}`);
+        toast(`Showing results near ${questData.fallbackCity}`);
       }
     } catch (err) {
       console.log('Quest error', err);
-      alert('Failed to generate quest');
+      toast('Failed to generate quest');
     }
   };
 
