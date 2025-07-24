@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import LiveQuestMap from './LiveQuestMap';
 import GroupMemberList from './GroupMemberList';
-import { getGroupQuest, getQuest } from '../lib/api';
+import { getGroupQuest, getQuest, trackStopVisit } from '../lib/api';
 import { decode } from '@googlemaps/polyline-codec';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -13,6 +13,7 @@ export default function GroupQuestView() {
   const [quest, setQuest] = useState(null);
   const [group, setGroup] = useState(null);
   const [polyline, setPolyline] = useState([]);
+  const [xpMsg, setXpMsg] = useState('');
 
   useEffect(() => {
     if (!groupId) return;
@@ -46,6 +47,18 @@ export default function GroupQuestView() {
   const auth = getAuth();
   const me = auth.currentUser;
   const visitedIndex = group?.progress?.[me?.uid] ? group.progress[me.uid].length : 0;
+  const handleVisit = async () => {
+    if (!group || !quest || !me) return;
+    try {
+      const res = await trackStopVisit(groupId, me.uid, visitedIndex);
+      if (res?.xp) {
+        setXpMsg(`+${res.xp} XP`);
+        setTimeout(() => setXpMsg(''), 2000);
+      }
+    } catch (err) {
+      console.error('track visit error', err);
+    }
+  };
 
   return (
     <div className="p-4 space-y-4">
@@ -61,6 +74,15 @@ export default function GroupQuestView() {
             groupProgress={group.progress}
             members={group.members}
           />
+          <div className="text-center mt-2">
+            <button
+              onClick={handleVisit}
+              className="px-4 py-2 rounded bg-green-600 text-white"
+            >
+              Mark as Visited
+            </button>
+            {xpMsg && <div className="mt-1 text-sm text-purple-700">{xpMsg}</div>}
+          </div>
         </>
       ) : (
         <p>Loading...</p>

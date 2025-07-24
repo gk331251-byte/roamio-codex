@@ -1175,7 +1175,8 @@ async def track_stop_visit(payload: dict = Body(...)):
 
     progress = fields.get("progress", {})
     user_progress = progress.get(user_id, [])
-    if place_index not in user_progress:
+    new_visit = place_index not in user_progress
+    if new_visit:
         user_progress.append(place_index)
         user_progress.sort()
         progress[user_id] = user_progress
@@ -1197,7 +1198,33 @@ async def track_stop_visit(payload: dict = Body(...)):
     active_body = {"fields": _encode_fields(active_fields)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
-    return {"visitedStops": user_progress}
+    # ----- XP & Badges -----
+    user_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, user_url)
+    user_data = {}
+    if resp.status_code == 200:
+        user_data = _decode_document(resp.json())
+
+    xp = user_data.get("xp", 0)
+    stats = user_data.get("stats", {})
+    badges = user_data.get("badges", {})
+
+    if new_visit:
+        xp += 10
+        stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
+        stats["totalXP"] = stats.get("totalXP", 0) + 10
+
+    if stats.get("totalStopsVisited", 0) >= 10:
+        badges["adventurer"] = True
+    if stats.get("totalQuestsCompleted", 0) >= 5:
+        badges["explorer"] = True
+
+    user_body = {"fields": _encode_fields({"xp": xp, "stats": stats, "badges": badges})}
+    await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
+
+    return {"visitedStops": user_progress, "xp": xp, "badges": badges}
 
 
 @app.post("/complete-group-quest")

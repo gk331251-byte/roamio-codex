@@ -96,3 +96,23 @@ export async function getGroupQuest(groupId: string) {
   if (!res.ok) throw new Error('Fetch group quest failed');
   return res.json();
 }
+
+export async function trackVisit(userId: string, questId: string, placeIndex: number) {
+  const res = await fetch(`${BASE_URL}/track-visit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, placeIndex }),
+  });
+  if (!res.ok) throw new Error('Track visit failed');
+  return res.json();
+}
+
+export async function trackStopVisit(groupId: string, userId: string, placeIndex: number) {
+  const res = await fetch(`${BASE_URL}/track-stop-visit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupId, userId, placeIndex }),
+  });
+  if (!res.ok) throw new Error('Track stop failed');
+  return res.json();
+}

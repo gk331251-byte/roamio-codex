@@ -4,6 +4,8 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import SharedHeader from '../components/SharedHeader';
 import { AppContext } from '../context/AppContext';
 import { saveQuestProgress, completeQuest } from '../lib/progress';
+import { trackVisit, trackStopVisit } from '../lib/api';
+import { toast } from '../lib/toast';
 import * as Notifications from 'expo-notifications';
 
 export default function QuestLiveScreen({ navigation }) {
@@ -59,6 +61,12 @@ export default function QuestLiveScreen({ navigation }) {
     const visited = [...(quest.visitedIndices || []), step];
     const updated = { ...quest, visitedIndices: visited };
     setQuest(updated);
+    try {
+      const res = await trackVisit(quest.userId || '', quest.id, step);
+      if (res?.xp) toast(`+${res.xp} XP`);
+    } catch (err) {
+      console.log('track visit error', err);
+    }
     await saveQuestProgress(quest.id, visited);
     setStep(step + 1);
   };

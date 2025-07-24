@@ -5,7 +5,8 @@ import { AppContext } from '../context/AppContext';
 import { db } from '../firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { decode } from '@googlemaps/polyline-codec';
-
+import { trackStopVisit } from '../lib/api';
+import { toast } from '../lib/toast';
 export default function GroupQuestScreen({ route }) {
   const { groupId, quest } = route.params;
   const { user } = useContext(AppContext);
@@ -27,6 +28,16 @@ export default function GroupQuestScreen({ route }) {
   }, [quest]);
 
   const step = group?.progress?.[user?.uid || '']?.length || 0;
+
+  const handleVisit = async () => {
+    if (!user) return;
+    try {
+      const res = await trackStopVisit(groupId, user.uid, step);
+      if (res?.xp) toast(`+${res.xp} XP`);
+    } catch (err) {
+      console.log('track stop error', err);
+    }
+  };
 
   const lastIndexFor = (uid:string) => {
     const arr = group?.progress?.[uid] || [];
@@ -78,6 +89,9 @@ export default function GroupQuestScreen({ route }) {
             <Text className={index === step ? 'font-bold' : ''}>{item.name}</Text>
           )}
         />
+        {step < quest.places.length && (
+          <Button title="Mark as Visited" onPress={handleVisit} />
+        )}
       </View>
     </View>
   );
