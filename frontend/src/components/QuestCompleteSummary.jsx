@@ -39,11 +39,11 @@ export default function QuestCompleteSummary({
         {imageUrl && (
           <img src={imageUrl} alt="Postcard" className="w-full rounded mb-4" />
         )}
-        <div className="text-2xl font-bold text-purple-700 mb-1">
-          {count} XP
-        </div>
+        <div className="text-2xl font-bold text-purple-700 mb-1">+{count} XP</div>
         <XPProgressBar xp={newTotal} next={nextLevelXP} />
-        <p className="text-sm mt-1">Level {level}</p>
+        <p className="text-sm mt-1">
+          {newTotal} / {nextLevelXP} XP (Level {level})
+        </p>
         {badgesUnlocked.length > 0 && (
           <div className="mt-4">
             <p className="text-sm font-medium mb-1">🏆 New Badges</p>
