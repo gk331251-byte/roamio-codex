@@ -37,6 +37,8 @@ const QuestHome = () => {
   const [city, setCity] = useState("");
   const [mood, setMood] = useState([]);
   const [timeLimit, setTimeLimit] = useState(90);
+  const [coords, setCoords] = useState(null);
+  const [gpsMsg, setGpsMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [questResult, setQuestResult] = useState(null);
@@ -111,6 +113,24 @@ const QuestHome = () => {
     }
   };
 
+  const requestGps = () => {
+    if (!navigator.geolocation) {
+      setGpsMsg("Geolocation not supported");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setGpsMsg("");
+      },
+      (err) => {
+        console.error("Geolocation error", err);
+        setCoords(null);
+        setGpsMsg("Location not shared — routing may be less accurate");
+      }
+    );
+  };
+
   const handleGenerate = async () => {
     setError("");
     setQuestResult(null);
@@ -128,7 +148,14 @@ const QuestHome = () => {
     setLoading(true);
     try {
       const token = await user.getIdToken();
-      const result = await generateQuest(city, mood, Number(timeLimit), token, user.uid);
+      const result = await generateQuest(
+        city,
+        mood,
+        Number(timeLimit),
+        token,
+        user.uid,
+        coords
+      );
       if (result.error) {
         console.error('❌ API error:', result);
         setError(result.error || 'Something went wrong generating your quest.');
@@ -211,6 +238,14 @@ const QuestHome = () => {
               onChange={(e) => setCity(e.target.value)}
               className="w-full px-4 py-2 border border-[#d0e7d0] rounded-lg focus:outline-none"
             />
+            <button
+              type="button"
+              onClick={requestGps}
+              className="text-sm underline text-blue-600"
+            >
+              {coords ? 'Location Set ✓' : 'Use My Location'}
+            </button>
+            {gpsMsg && <p className="text-xs text-red-600">{gpsMsg}</p>}
 
             <div className="flex flex-wrap gap-2">
               {moodOptions.map((option) => (
@@ -228,12 +263,18 @@ const QuestHome = () => {
               ))}
             </div>
 
-            <input
-              type="number"
-              value={String(timeLimit ?? "")}
-              onChange={(e) => setTimeLimit(Number(e.target.value) || 0)}
-              className="w-full px-4 py-2 border border-[#d0e7d0] rounded-lg focus:outline-none"
-            />
+            <label className="block text-sm font-medium text-[#0e1b0e]">
+              Time Limit: {timeLimit} minutes
+              <input
+                type="range"
+                min="15"
+                max="180"
+                step="15"
+                value={timeLimit}
+                onChange={(e) => setTimeLimit(Number(e.target.value))}
+                className="w-full mt-1"
+              />
+            </label>
 
             <button
               onClick={handleGenerate}
