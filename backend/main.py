@@ -2863,7 +2863,6 @@ async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None))
         return {}
     return _decode_document(resp.json())
 
-
 @app.post("/submit-featured-quest")
 async def submit_featured_quest(request: Request, payload: dict = Body(...)):
     """Allow approved creators to submit a featured quest draft."""

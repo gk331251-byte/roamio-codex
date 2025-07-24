@@ -577,7 +577,6 @@ export async function submitUGC(payload) {
   if (!resp.ok) throw new Error('Failed to submit');
   return resp.json();
 }
-
 export async function submitFeaturedQuest(payload) {
   const auth = getAuth();
   const user = auth.currentUser;
