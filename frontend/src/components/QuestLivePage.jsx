@@ -12,6 +12,7 @@ import XPToast from './XPToast';
 import BadgePopup from './BadgePopup';
 import TooltipManager from './TooltipManager';
 import { toast } from '../lib/toast';
+import QuestCompleteModal from './QuestCompleteModal';
 
 
 export default function QuestLivePage() {
@@ -33,6 +34,8 @@ export default function QuestLivePage() {
   const [newBadge, setNewBadge] = useState("");
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryData, setSummaryData] = useState({});
   const [etaText, setEtaText] = useState("");
   const [etaError, setEtaError] = useState("");
   const [etaRefresh, setEtaRefresh] = useState(0);
@@ -341,8 +344,8 @@ export default function QuestLivePage() {
         questText: quest.questText,
         locationList: quest.places,
         imagePrompt: quest.imagePrompt,
-        imageUrl: quest.imageUrl,
         visitedIndices,
+        isDemo: questId.startsWith('demo_'),
         public: share,
         displayName: user.displayName,
       });
@@ -350,6 +353,8 @@ export default function QuestLivePage() {
         await completeGroupQuest(groupId, user.uid);
       }
       if (res?.xpEarned) setXpMsg(`+${res.xpEarned} XP`);
+      setSummaryData(res);
+      setSummaryOpen(true);
       setCompleteMsg("Quest Saved to Your Profile!");
       window.dispatchEvent(new Event("quest-saved"));
     } catch (err) {
@@ -510,6 +515,15 @@ export default function QuestLivePage() {
         )}
         <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
         <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
+        <QuestCompleteModal
+          open={summaryOpen}
+          xpEarned={summaryData.xpEarned}
+          newTotal={summaryData.newTotal}
+          level={summaryData.level}
+          badge={Object.keys(summaryData.badges || {}).find(k => summaryData.badges[k])}
+          imageUrl={summaryData.imageUrl}
+          onClose={() => setSummaryOpen(false)}
+        />
           <div className="px-4 py-3">
           <LiveQuestMap
             stops={stops}

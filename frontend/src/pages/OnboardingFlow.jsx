@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getAuth } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { generateQuest, createGroupQuest } from '../lib/api';
+import { generateDemoQuest } from '../lib/api';
 
 const moodOptions = ['Adventure', 'Romantic', 'Weird', 'Nature', 'Foodie', 'Cozy'];
 
@@ -51,32 +51,18 @@ export default function OnboardingFlow() {
     setLoading(true);
     try {
       const token = await user.getIdToken();
-      let result = await generateQuest(
+      const result = await generateDemoQuest(
         city || 'gps',
-        selected,
-        Number(time),
         token,
         user.uid,
         useGPS ? coords : null
       );
-      if (result.error || !result.quest) {
-        result = await generateQuest(
-          city || 'gps',
-          ['Adventure'],
-          Number(time),
-          token,
-          user.uid,
-          useGPS ? coords : null
-        );
-      }
       await setDoc(
         doc(db, 'users', user.uid),
         { onboarding: { mood: selected, timeLimit: Number(time), useGPS } },
         { merge: true }
       );
-      const questId = `${city || 'gps'}_${selected.join('-')}`;
-      const { groupId } = await createGroupQuest(user.uid, questId, user.displayName || '');
-      navigate('/live', { state: { quest: result.quest, questId, groupId, timeLimit: Number(time) } });
+      navigate('/live', { state: { quest: result.quest, questId: result.questId, timeLimit: Number(time) } });
     } catch (err) {
       console.error('onboarding failed', err);
       setError('Failed to start quest');

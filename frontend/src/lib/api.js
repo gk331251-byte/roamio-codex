@@ -42,6 +42,17 @@ export async function generateQuest(city, mood, timeLimit, token, userId, coords
   return await response.json();
 }
 
+export async function generateDemoQuest(city, token, userId, coords) {
+  const url = `${BASE_URL}/generate-demo-quest`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ city, user_id: userId, lat: coords?.lat, lng: coords?.lng, token })
+  });
+  if (!resp.ok) throw new Error('Failed to generate demo quest');
+  return resp.json();
+}
+
 export async function completeQuest(userId, questId, data) {
   const url = `${BASE_URL}/quest-complete`;
   const resp = await fetch(url, {
