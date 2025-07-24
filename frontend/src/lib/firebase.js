@@ -28,14 +28,21 @@ export async function guestLogin() {
   const res = await signInAnonymously(auth);
   return res.user;
 }
-import { doc, updateDoc } from 'firebase/firestore';
+import {
+  doc,
+  updateDoc,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+} from 'firebase/firestore';
 import { db } from '../firebase';
 
 export async function updateUserBadges(userId, badges) {
   if (!userId) return;
   await updateDoc(doc(db, 'users', userId), { badges });
 }
-import { getDoc } from 'firebase/firestore';
 
 export async function getUserSettings(userId) {
   if (!userId) return {};
@@ -51,4 +58,37 @@ export async function setShowRoamioWatermark(userId, value) {
 export async function setSkipSharePrompt(userId, value) {
   if (!userId) return;
   await updateDoc(doc(db, 'users', userId), { skipSharePrompt: value });
+}
+
+export async function setUGCBoostActive(userId, value) {
+  if (!userId) return;
+  await updateDoc(doc(db, 'users', userId), { ugcBoostActive: value });
+}
+
+export async function getCreatorProfile(uid) {
+  if (!uid) return null;
+  const snap = await getDoc(doc(db, 'creators', uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+export async function getUserUGCSubmissions(uid) {
+  if (!uid) return [];
+  const q = query(collection(db, 'ugc_submissions'), where('uid', '==', uid));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export async function setPublicSharingOptIn(uid, val) {
+  if (!uid) return;
+  await updateDoc(doc(db, 'users', uid), { publicSharingOptIn: val });
+}
+
+export async function setShowUsernameOnShare(uid, val) {
+  if (!uid) return;
+  await updateDoc(doc(db, 'users', uid), { showUsernameOnShare: val });
+}
+
+export async function setShowCityOnShare(uid, val) {
+  if (!uid) return;
+  await updateDoc(doc(db, 'users', uid), { showCityOnShare: val });
 }
