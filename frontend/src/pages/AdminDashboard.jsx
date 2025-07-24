@@ -38,7 +38,7 @@ export default function AdminDashboard() {
       const [reportSnap, usersSnap, questsSnap, pendingSnap] = await Promise.all([
         getDocs(reportQuery),
         getCountFromServer(collection(db, 'users')),
-        getCountFromServer(collectionGroup(db, 'quests')),
+        getCountFromServer(collectionGroup(db, 'user_quests')),
         getCountFromServer(reportQuery)
       ]);
       setReports(reportSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
@@ -70,7 +70,7 @@ export default function AdminDashboard() {
       <h1 className="text-2xl font-bold">Admin Dashboard</h1>
       <div className="grid md:grid-cols-3 gap-4">
         <div className="bg-white p-4 rounded shadow">
-          <p className="text-xs text-gray-500">Active Users</p>
+          <p className="text-xs text-gray-500">Total Users</p>
           <p className="text-xl font-bold">{stats.totalUsers}</p>
         </div>
         <div className="bg-white p-4 rounded shadow">
