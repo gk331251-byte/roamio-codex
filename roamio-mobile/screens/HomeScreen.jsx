@@ -14,6 +14,7 @@ export default function HomeScreen({ navigation }) {
   const [statusMsg, setStatusMsg] = useState('');
   const { setQuest, isPremium } = useContext(AppContext);
 
+
   const requestLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
