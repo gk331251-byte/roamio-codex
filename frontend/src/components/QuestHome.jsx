@@ -161,6 +161,11 @@ const QuestHome = () => {
         setError(result.error || 'Something went wrong generating your quest.');
         return;
       }
+      if (result.fallbackCity) {
+        alert(
+          `That location isn\u2019t supported yet. Showing results near ${result.fallbackCity} instead.`
+        );
+      }
       setQuestResult(result);
     } catch (err) {
       console.error('❌ API error:', err);
@@ -267,7 +272,7 @@ const QuestHome = () => {
               Time Limit: {timeLimit} minutes
               <input
                 type="range"
-                min="15"
+                min="30"
                 max="180"
                 step="15"
                 value={timeLimit}
