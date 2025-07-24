@@ -1,4 +1,5 @@
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
+import { getAuth } from 'firebase/auth';
 
 /**
  * Fetches a generated quest from the backend
@@ -7,7 +8,7 @@ const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
  * @param {number} timeLimit - Time limit in minutes
  * @param {string} token - Firebase user token for auth
  */
-export async function generateQuest(city, mood, timeLimit, token, userId) {
+export async function generateQuest(city, mood, timeLimit, token, userId, coords) {
   if (!city || !Array.isArray(mood) || mood.length === 0 || typeof timeLimit !== 'number') {
     throw new Error("Invalid input: city, mood[], and numeric timeLimit are required.");
   }
@@ -25,6 +26,8 @@ export async function generateQuest(city, mood, timeLimit, token, userId) {
       time_limit: timeLimit,
       token,
       user_id: userId,
+      lat: coords?.lat,
+      lng: coords?.lng,
     }),
   });
 
@@ -64,12 +67,22 @@ export async function uploadPostcard(userId, questId, imageUrl) {
 }
 
 export async function validatePremium(userId, sessionId) {
-  const url = new URL(`${BASE_URL}/validate-premium/${userId}`);
-  if (sessionId) url.searchParams.set('session_id', sessionId);
-  const resp = await fetch(url.toString());
-  if (!resp.ok) {
-    throw new Error('Failed to validate premium');
+  if (sessionId && userId) {
+    const url = new URL(`${BASE_URL}/validate-premium/${userId}`);
+    url.searchParams.set('session_id', sessionId);
+    const resp = await fetch(url.toString());
+    if (!resp.ok) throw new Error('Failed to validate premium');
+    return resp.json();
   }
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) return { isPremium: false };
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/validate-premium`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new Error('Failed to validate premium');
   return resp.json();
 }
 
@@ -150,6 +163,14 @@ export async function completeGroupQuest(groupId, userId) {
   });
   if (!resp.ok) {
     throw new Error('Failed to complete group quest');
+  }
+  return resp.json();
+}
+
+export async function getGroupQuest(groupId) {
+  const resp = await fetch(`${BASE_URL}/group-quest/${groupId}`);
+  if (!resp.ok) {
+    throw new Error('Failed to fetch group quest');
   }
   return resp.json();
 }
@@ -247,9 +268,18 @@ export async function updateActiveQuest(userId, data) {
 }
 
 export async function createCustomQuest(payload) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('Auth required');
+  }
+  const token = await user.getIdToken();
   const resp = await fetch(`${BASE_URL}/create-custom-quest`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify(payload)
   });
   if (!resp.ok) {
@@ -259,10 +289,19 @@ export async function createCustomQuest(payload) {
 }
 
 export async function getCustomQuest(id) {
-  const resp = await fetch(`${BASE_URL}/get-custom-quest/${id}`);
+  const resp = await fetch(`${BASE_URL}/custom-quests/${id}`);
   if (!resp.ok) {
     throw new Error('Failed to fetch custom quest');
   }
+  return resp.json();
+}
+
+export async function listCustomQuests(userId, publicOnly = false) {
+  const url = new URL(`${BASE_URL}/custom-quests`);
+  url.searchParams.set('creatorId', userId);
+  url.searchParams.set('publicOnly', publicOnly);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to list custom quests');
   return resp.json();
 }
 
@@ -275,6 +314,32 @@ export async function publishCustomQuest(userId, questId) {
   if (!resp.ok) {
     throw new Error('Failed to publish quest');
   }
+  return resp.json();
+}
+
+export async function unpublishCustomQuest(userId, questId) {
+  const resp = await fetch(`${BASE_URL}/unpublish-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quest_id: questId })
+  });
+  if (!resp.ok) {
+    throw new Error('Failed to unpublish quest');
+  }
+  return resp.json();
+}
+
+export async function updateCustomQuest(payload) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('Auth required');
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/update-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error('Failed to update quest');
   return resp.json();
 }
 
