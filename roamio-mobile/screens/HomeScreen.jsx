@@ -14,12 +14,12 @@ export default function HomeScreen({ navigation }) {
   const [timeLimit, setTimeLimit] = useState(60);
   const [statusMsg, setStatusMsg] = useState('');
   const { setQuest, isPremium } = useContext(AppContext);
-
   const requestLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       setStatusMsg('Permission denied');
       toast('Location not shared — routing may be less accurate');
+
       return;
     }
     const loc = await Location.getCurrentPositionAsync({});
