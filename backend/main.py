@@ -13,6 +13,8 @@ from google.cloud import firestore_v1, storage
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
 from google.oauth2 import id_token
+import firebase_admin
+from firebase_admin import auth as fb_auth
 
 
 from dotenv import load_dotenv
@@ -170,6 +172,10 @@ creds = service_account.Credentials.from_service_account_file(
     scopes=["https://www.googleapis.com/auth/datastore"],
 )
 rest_session = AuthorizedSession(creds)
+
+# Initialize Firebase Admin for user lookups
+if not firebase_admin._apps:
+    firebase_admin.initialize_app()
 
 
 def generate_hash_key(*parts: str) -> str:
@@ -721,7 +727,7 @@ async def check_premium(user_id: str) -> bool:
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
         fields = _decode_document(resp.json())
-        return fields.get("premium") is True
+        return fields.get("isPremium") is True
     return False
 
 
@@ -1810,7 +1816,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
     fields = {}
     if resp.status_code == 200:
         fields = _decode_document(resp.json())
-    premium = fields.get("premium") is True
+    premium = fields.get("isPremium") is True
 
     if not premium and session_id:
         stripe_key = os.getenv("STRIPE_SECRET_KEY")
@@ -1826,11 +1832,11 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
         elif session_id == "mock":
             premium = True
         if premium:
-            fields["premium"] = True
+            fields["isPremium"] = True
             body = {"fields": _encode_fields(fields)}
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
-    return {"premium": premium}
+    return {"isPremium": premium}
 
 
 @app.post("/validate-premium")
@@ -1843,11 +1849,11 @@ async def validate_premium_token(request: Request):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
-    premium = fields.get("premium") is True
+    premium = fields.get("isPremium") is True
     return {"isPremium": premium}
 
 
-@app.post("/stripe-webhook")
+@app.post("/api/stripe-webhook")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events."""
     stripe_key = os.getenv("STRIPE_SECRET_KEY")
@@ -1865,16 +1871,24 @@ async def stripe_webhook(request: Request):
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        uid = session.get("metadata", {}).get("uid") or session.get("client_reference_id")
-        if uid:
-            project_id = creds.project_id
-            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
-            resp = await asyncio.to_thread(rest_session.get, url)
-            fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
-            fields["premium"] = True
-            body = {"fields": _encode_fields(fields)}
-            await asyncio.to_thread(rest_session.patch, url, json=body)
-            await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+        email = session.get("customer_details", {}).get("email") or session.get("customer_email")
+        if email:
+            try:
+                user = await asyncio.to_thread(fb_auth.get_user_by_email, email)
+                uid = user.uid
+                project_id = creds.project_id
+                url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+                resp = await asyncio.to_thread(rest_session.get, url)
+                fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+                if not fields.get("isPremium"):
+                    fields["isPremium"] = True
+                    body = {"fields": _encode_fields(fields)}
+                    await asyncio.to_thread(rest_session.patch, url, json=body)
+                    await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+            except Exception as e:
+                print("User email lookup failed", e)
+        else:
+            print("No email on session")
 
     return {"received": True}
 
