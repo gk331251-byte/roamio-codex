@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import LiveQuestMap from './LiveQuestMap';
 import GroupMemberList from './GroupMemberList';
-import { getGroupQuest, getQuest, trackStopVisit } from '../lib/api';
+import { getQuest, trackStopVisit } from '../lib/api';
 import { decode } from '@googlemaps/polyline-codec';
 import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getAuth } from 'firebase/auth';
 import XPToast from './XPToast';
 import BadgePopup from './BadgePopup';
+import GroupChatBox from './GroupChatBox';
 
 export default function GroupQuestView() {
   const { groupId } = useParams();
@@ -116,6 +117,7 @@ export default function GroupQuestView() {
             <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
           </div>
           <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
+          <GroupChatBox groupId={groupId} />
         </>
       ) : (
         <p>Loading...</p>

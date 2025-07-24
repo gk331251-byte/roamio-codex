@@ -1,5 +1,7 @@
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
 import { getAuth } from 'firebase/auth';
+import { db } from '../firebase';
+import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from 'firebase/firestore';
 
 /**
  * Fetches a generated quest from the backend
@@ -532,4 +534,27 @@ export async function banUser(userId, targetId) {
   if (!resp.ok) throw new Error('Failed to ban user');
   return resp.json();
 }
+
+// ===== Group Chat =====
+
+export async function sendMessage(groupId, senderId, senderName, text) {
+  await addDoc(collection(db, 'group_chats', groupId, 'messages'), {
+    senderId,
+    senderName,
+    text,
+    timestamp: serverTimestamp(),
+  });
+}
+
+export function fetchChatStream(groupId, callback) {
+  const q = query(
+    collection(db, 'group_chats', groupId, 'messages'),
+    orderBy('timestamp', 'asc')
+  );
+  return onSnapshot(q, (snap) => {
+    const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    callback(msgs);
+  });
+}
+
 

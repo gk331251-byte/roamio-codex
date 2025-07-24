@@ -1,6 +1,8 @@
 import Constants from 'expo-constants';
 import { auth } from '../firebase';
 import { getIdToken } from 'firebase/auth';
+import { db } from '../firebase';
+import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from 'firebase/firestore';
 
 const BASE_URL = Constants.expoConfig?.extra?.backendUrl || 'http://localhost:8080';
 
@@ -115,4 +117,23 @@ export async function trackStopVisit(groupId: string, userId: string, placeIndex
   });
   if (!res.ok) throw new Error('Track stop failed');
   return res.json();
+}
+
+// ===== Group Chat (Firestore) =====
+
+export async function sendMessage(groupId: string, senderId: string, senderName: string, text: string) {
+  await addDoc(collection(db, 'group_chats', groupId, 'messages'), {
+    senderId,
+    senderName,
+    text,
+    timestamp: serverTimestamp(),
+  });
+}
+
+export function fetchChatStream(groupId: string, cb: (msgs: any[]) => void) {
+  const q = query(collection(db, 'group_chats', groupId, 'messages'), orderBy('timestamp', 'asc'));
+  return onSnapshot(q, snap => {
+    const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    cb(msgs);
+  });
 }
