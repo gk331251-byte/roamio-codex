@@ -254,6 +254,13 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
 
 app = FastAPI()
 
+# Manual fallbacks for vague regions
+CITY_FALLBACK_MAP = {
+    "hudson valley": "New York",
+    "catskills": "Albany",
+    "poconos": "Philadelphia",
+}
+
 # ✅ Replace this with your actual frontend deployed domain
 allowed_origins = [
     "http://localhost:5173",  # Vite dev server (local)
@@ -282,6 +289,8 @@ async def generate_quest(
     time_limit: int = Body(...),
     token: str = Body(...),
     user_id: str | None = Body(None),
+    lat: float | None = Body(None),
+    lng: float | None = Body(None),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
     if not city or not moods:
@@ -298,11 +307,98 @@ async def generate_quest(
             return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
 
     try:
-        geocode = gmaps.geocode(city)
-        city_location = geocode[0]["geometry"]["location"]
+        if lat is not None and lng is not None:
+            city_location = {"lat": float(lat), "lng": float(lng)}
+        else:
+            geocode = gmaps.geocode(city)
+            city_location = geocode[0]["geometry"]["location"]
     except Exception as e:
         print(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
+
+
+    attempts = 0
+    fallback_city = None
+    selected = []
+    while attempts < 2:
+        try:
+            response = gmaps.places_nearby(
+                location=(city_location["lat"], city_location["lng"]),
+                radius=2000,
+                type="tourist_attraction",
+            )
+            places_results = response.get("results", [])
+        except Exception as e:
+            print(f"Places API error: {e}")
+            return {"error": "Failed to fetch places"}
+
+        candidates = []
+        for place in places_results:
+            try:
+                name = place.get("name")
+                if not name or is_chain(name):
+                    continue
+                pid = place.get("place_id")
+                cached_place = get_cached_place(pid) if pid else None
+                details = None
+                if not cached_place and pid:
+                    try:
+                        details = gmaps.place(pid)
+                    except Exception:
+                        details = None
+                tags = (
+                    cached_place.get("tags") if cached_place else compute_place_tags(place, details)
+                )
+                if not cached_place and pid:
+                    save_place_to_cache(pid, {"tags": tags, "name": name})
+                if preferred:
+                    overlap = len(set(tags) & set(preferred))
+                else:
+                    overlap = 1
+                if overlap <= 0:
+                    continue
+                loc = place["geometry"]["location"]
+                typ = place.get("types", ["Unknown"])[0]
+                candidates.append({
+                    "name": name,
+                    "type": typ,
+                    "lat": float(loc["lat"]),
+                    "lng": float(loc["lng"]),
+                    "tags": tags,
+                    "score": overlap,
+                    "rating": place.get("rating", 0),
+                })
+            except Exception as e:
+                print("Skipping place", e)
+        candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
+
+        selected = []
+        seen_types = set()
+        for c in candidates:
+            if c["type"] in seen_types:
+                continue
+            selected.append(c)
+            seen_types.add(c["type"])
+            if len(selected) >= 5:
+                break
+
+        if len(selected) >= 3:
+            break
+
+        fallback_city = CITY_FALLBACK_MAP.get(city.lower())
+        if not fallback_city:
+            break
+        attempts += 1
+        try:
+            geo = gmaps.geocode(fallback_city)
+            city_location = geo[0]["geometry"]["location"]
+            city = fallback_city
+        except Exception as e:
+            print("Fallback geocode error", e)
+            break
+
+    if len(selected) < 3:
+        return {"error": "Not enough matching places"}
 
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
@@ -310,75 +406,18 @@ async def generate_quest(
     cached = get_cached_quest(hash_key)
     if cached:
         print("Using cached quest")
-        return {"quest": cached}
+        result = {"quest": cached}
+        if fallback_city:
+            result["fallbackCity"] = fallback_city
+        return result
 
-    try:
-        response = gmaps.places_nearby(
-            location=(city_location["lat"], city_location["lng"]),
-            radius=2000,
-            type="tourist_attraction",
-        )
-        places_results = response.get("results", [])
-    except Exception as e:
-        print(f"Places API error: {e}")
-        return {"error": "Failed to fetch places"}
-
-    candidates = []
-    for place in places_results:
-        try:
-            name = place.get("name")
-            if not name or is_chain(name):
-                continue
-            pid = place.get("place_id")
-            cached_place = get_cached_place(pid) if pid else None
-            details = None
-            if not cached_place and pid:
-                try:
-                    details = gmaps.place(pid)
-                except Exception:
-                    details = None
-            tags = (
-                cached_place.get("tags") if cached_place else compute_place_tags(place, details)
-            )
-            if not cached_place and pid:
-                save_place_to_cache(pid, {"tags": tags, "name": name})
-            if preferred:
-                overlap = len(set(tags) & set(preferred))
-            else:
-                overlap = 1
-            if overlap <= 0:
-                continue
-            loc = place["geometry"]["location"]
-            typ = place.get("types", ["Unknown"])[0]
-            candidates.append({
-                "name": name,
-                "type": typ,
-                "lat": float(loc["lat"]),
-                "lng": float(loc["lng"]),
-                "tags": tags,
-                "score": overlap,
-                "rating": place.get("rating", 0),
-            })
-        except Exception as e:
-            print("Skipping place", e)
-    candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
-
-    selected = []
-    seen_types = set()
-    for c in candidates:
-        if c["type"] in seen_types:
-            continue
-        selected.append(c)
-        seen_types.add(c["type"])
-        if len(selected) >= 5:
-            break
-
-    if len(selected) < 3:
-        return {"error": "Not enough matching places"}
-
-    origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+    if lat is not None and lng is not None:
+        origin = f"{lat},{lng}"
+        waypoints = [f"{p['lat']},{p['lng']}" for p in selected[:-1]]
+    else:
+        origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+        waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
     destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
-    waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
 
     try:
         directions = gmaps.directions(
@@ -397,8 +436,16 @@ async def generate_quest(
     legs = route.get("legs", [])
     polyline = route.get("overview_polyline", {}).get("points", "")
 
-    ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
-    place_names = ", ".join([p["name"] for p in ordered])
+    if lat is not None and lng is not None:
+        ordered_waypoints = [selected[i] for i in waypoint_order]
+        ordered = (
+            [{"name": "Your Location", "type": "start", "lat": float(lat), "lng": float(lng), "tags": []}]
+            + ordered_waypoints
+            + [selected[-1]]
+        )
+    else:
+        ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
+    place_names = ", ".join([p["name"] for p in ordered if p.get("type") != "start"])
 
     if openai.api_key:
         prompt = (
@@ -460,7 +507,10 @@ async def generate_quest(
     save_quest_to_firestore(hash_key, quest_obj)
     if user_id:
         await increment_daily_usage(user_id)
-    return {"quest": quest_obj}
+    result = {"quest": quest_obj}
+    if fallback_city:
+        result["fallbackCity"] = fallback_city
+    return result
 
 
 
@@ -963,7 +1013,9 @@ async def reroll_quest(payload: dict = Body(...)):
     time_limit = payload.get("time_limit", 60)
     token = payload.get("token", "")
     # Reuse generate_quest logic
-    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng)
 
 
 @app.post("/get-directions")

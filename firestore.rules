@@ -48,6 +48,17 @@ service cloud.firestore {
       allow read, update, delete: if request.auth != null && request.auth.uid in resource.data.members && !isBanned();
     }
 
+    // ===== Communities =====
+    match /communities/{communityId} {
+      allow read: if true;
+      allow write: if request.auth != null && !isBanned();
+    }
+
+    // ===== Postcards =====
+    match /postcards/{userId}/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId && !isBanned();
+    }
+
     // ===== Admin Config =====
     match /config/admins {
       allow read, write: if isAdmin();
