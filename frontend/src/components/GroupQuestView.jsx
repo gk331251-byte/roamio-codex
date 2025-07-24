@@ -4,9 +4,11 @@ import LiveQuestMap from './LiveQuestMap';
 import GroupMemberList from './GroupMemberList';
 import { getGroupQuest, getQuest, trackStopVisit } from '../lib/api';
 import { decode } from '@googlemaps/polyline-codec';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getAuth } from 'firebase/auth';
+import XPToast from './XPToast';
+import BadgePopup from './BadgePopup';
 
 export default function GroupQuestView() {
   const { groupId } = useParams();
@@ -14,6 +16,9 @@ export default function GroupQuestView() {
   const [group, setGroup] = useState(null);
   const [polyline, setPolyline] = useState([]);
   const [xpMsg, setXpMsg] = useState('');
+  const [userXP, setUserXP] = useState(0);
+  const [badges, setBadges] = useState({});
+  const [newBadge, setNewBadge] = useState('');
 
   useEffect(() => {
     if (!groupId) return;
@@ -47,12 +52,39 @@ export default function GroupQuestView() {
   const auth = getAuth();
   const me = auth.currentUser;
   const visitedIndex = group?.progress?.[me?.uid] ? group.progress[me.uid].length : 0;
+
+  useEffect(() => {
+    if (!me) return;
+    getDoc(doc(db, 'users', me.uid))
+      .then((snap) => {
+        const data = snap.data();
+        if (data) {
+          setUserXP(data.xp || 0);
+          setBadges(data.badges || {});
+        }
+      })
+      .catch((e) => console.error('user fetch error', e));
+  }, [me]);
+
   const handleVisit = async () => {
     if (!group || !quest || !me) return;
     try {
       const res = await trackStopVisit(groupId, me.uid, visitedIndex);
+      if (typeof res.xp === 'number') {
+        const gain = res.xp - userXP;
+        if (gain > 0) {
+          setXpMsg(`+${gain} XP`);
+        }
+        setUserXP(res.xp);
+      }
+      if (res?.badges) {
+        const newKey = Object.keys(res.badges).find(
+          (k) => res.badges[k] && !badges[k]
+        );
+        if (newKey) setNewBadge(newKey);
+        setBadges(res.badges);
+      }
       if (res?.xp) {
-        setXpMsg(`+${res.xp} XP`);
         setTimeout(() => setXpMsg(''), 2000);
       }
     } catch (err) {
@@ -77,12 +109,13 @@ export default function GroupQuestView() {
           <div className="text-center mt-2">
             <button
               onClick={handleVisit}
-              className="px-4 py-2 rounded bg-green-600 text-white"
+              className="px-4 py-2 rounded bg-green-600 text-white transform transition active:scale-95"
             >
               Mark as Visited
             </button>
-            {xpMsg && <div className="mt-1 text-sm text-purple-700">{xpMsg}</div>}
+            <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
           </div>
+          <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
         </>
       ) : (
         <p>Loading...</p>

@@ -5,9 +5,11 @@ import LiveQuestMap from "./LiveQuestMap";
 import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
 import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest, updateActiveQuest } from "../lib/api";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { decode } from "@googlemaps/polyline-codec";
+import XPToast from './XPToast';
+import BadgePopup from './BadgePopup';
 
 
 export default function QuestLivePage() {
@@ -24,6 +26,9 @@ export default function QuestLivePage() {
   const [groupData, setGroupData] = useState(null);
   const [activityMsg, setActivityMsg] = useState("");
   const [xpMsg, setXpMsg] = useState("");
+  const [userXP, setUserXP] = useState(0);
+  const [badges, setBadges] = useState({});
+  const [newBadge, setNewBadge] = useState("");
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [etaText, setEtaText] = useState("");
@@ -32,6 +37,21 @@ export default function QuestLivePage() {
   const [polylinePoints, setPolylinePoints] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completeMsg, setCompleteMsg] = useState("");
+
+  useEffect(() => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return;
+    getDoc(doc(db, 'users', user.uid))
+      .then((snap) => {
+        const data = snap.data();
+        if (data) {
+          setUserXP(data.xp || 0);
+          setBadges(data.badges || {});
+        }
+      })
+      .catch((e) => console.error('user fetch error', e));
+  }, []);
 
   // Watch user GPS
   useEffect(() => {
@@ -282,8 +302,19 @@ export default function QuestLivePage() {
         result = await trackVisit(user.uid, questId, visitedIndices.length);
         setVisitedIndices(result.visitedIndices || []);
       }
+      if (typeof result.xp === "number") {
+        const gain = result.xp - userXP;
+        if (gain > 0) setXpMsg(`+${gain} XP`);
+        setUserXP(result.xp);
+      }
+      if (result?.badges) {
+        const newKey = Object.keys(result.badges).find(
+          (k) => result.badges[k] && !badges[k]
+        );
+        if (newKey) setNewBadge(newKey);
+        setBadges(result.badges);
+      }
       if (result?.xp) {
-        setXpMsg(`+${result.xp} XP`);
         setTimeout(() => setXpMsg(""), 2000);
       }
     } catch (err) {
@@ -466,10 +497,8 @@ export default function QuestLivePage() {
         {activityMsg && (
           <p className="text-xs text-center text-blue-700 mt-1">{activityMsg}</p>
         )}
-        {xpMsg && (
-          <p className="text-xs text-center text-purple-700 mt-1">{xpMsg}</p>
-        )}
-
+        <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
+        <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
           <div className="px-4 py-3">
             <LiveQuestMap
               stops={stops}
@@ -506,7 +535,7 @@ export default function QuestLivePage() {
             <button
               onClick={handleMarkVisited}
               disabled={questComplete}
-              className={`flex-1 h-14 rounded-full text-base font-bold text-[#f8fcf8] ${
+              className={`flex-1 h-14 rounded-full text-base font-bold text-[#f8fcf8] transform transition active:scale-95 ${
                 questComplete
                   ? "bg-gray-400 cursor-not-allowed"
                   : "bg-[#14b714] hover:bg-[#0fa50f]"
