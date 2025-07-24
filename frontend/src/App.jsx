@@ -14,7 +14,7 @@ import Header from "./components/Header";
 import Footer from "./components/Footer";
 import QuestRoute from "./components/QuestRoute";
 import QuestLivePage from "./components/QuestLivePage";
-import QuestPlusPage from "./components/QuestPlusPage";
+import Pricing from "./pages/Pricing";
 import PaymentSuccess from "./components/PaymentSuccess";
 import PaymentFailed from "./components/PaymentFailed";
 import CommunityFeed from "./components/CommunityFeed";
@@ -25,6 +25,7 @@ import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 import TagEditor from "./components/TagEditor";
 import Explore from "./components/Explore";
+import GroupQuestView from "./components/GroupQuestView";
 import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import CookieConsent from "react-cookie-consent";
@@ -70,13 +71,16 @@ function App() {
         <Route path="/history" element={<QuestHistory />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
+        <Route path="/group/:groupId" element={<GroupQuestView />} />
         <Route path="/community" element={<CommunityFeed />} />
         <Route path="/community/new" element={<CreateCommunity />} />
         <Route path="/community/:id" element={<CommunityPage />} />
         <Route path="/explore" element={<Explore />} />
         <Route path="/admin" element={<AdminDashboard />} />
-        <Route path="/quest-plus" element={<QuestPlusPage />} />
+        <Route path="/quest-plus" element={<Pricing />} />
+        <Route path="/pricing" element={<Pricing />} />
         <Route path="/custom" element={<CustomQuestBuilder />} />
+        <Route path="/custom/edit/:questId" element={<CustomQuestBuilder />} />
         <Route path="/q/:questId" element={<PublicQuestPage />} />
         <Route path="/tag-editor/:questId" element={<TagEditor />} />
         <Route path="/terms" element={<Terms />} />
