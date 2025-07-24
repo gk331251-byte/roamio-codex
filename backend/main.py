@@ -870,7 +870,18 @@ async def complete_quest(payload: dict = Body(...)):
         user_data = _decode_document(resp.json())
 
     difficulty = (payload.get("difficulty") or "Easy").title()
-    xp_earned = 25 if difficulty == "Easy" else 50 if difficulty == "Medium" else 75
+    base_xp = 25 if difficulty == "Easy" else 50 if difficulty == "Medium" else 75
+    xp_earned = base_xp
+    bonus_xp = 0
+    if user_data.get("ugcBoostActive"):
+        cfg_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
+        )
+        cfg_resp = await asyncio.to_thread(rest_session.get, cfg_url)
+        cfg = _decode_document(cfg_resp.json()) if cfg_resp.status_code == 200 else {}
+        mult = float(cfg.get("xpMultiplier", 1.2))
+        xp_earned = int(base_xp * mult)
+        bonus_xp = xp_earned - base_xp
     level_before = user_data.get("level", 1)
     total_xp = user_data.get("totalXP", 0) + xp_earned
     level = get_level_from_xp(total_xp)
@@ -894,6 +905,7 @@ async def complete_quest(payload: dict = Body(...)):
         "levelBefore": level_before,
         "levelAfter": level,
         "badgesUnlocked": new_badges,
+        "bonusXP": bonus_xp,
     })
     # Update quest document with summary details
     summary_body = {"fields": _encode_fields({
@@ -901,21 +913,21 @@ async def complete_quest(payload: dict = Body(...)):
         "levelBefore": level_before,
         "levelAfter": level,
         "badgesUnlocked": new_badges,
+        "bonusXP": bonus_xp,
     })}
     await asyncio.to_thread(rest_session.patch, quest_url, json=summary_body)
 
-    user_body = {
-        "fields": _encode_fields(
-            {
-                "totalXP": total_xp,
-                "level": level,
-                "stats": stats,
-                "badges": badges,
-                "badgesUnlocked": badge_list,
-                "lastActive": timestamp,
-            }
-        )
+    user_update = {
+        "totalXP": total_xp,
+        "level": level,
+        "stats": stats,
+        "badges": badges,
+        "badgesUnlocked": badge_list,
+        "lastActive": timestamp,
     }
+    if user_data.get("ugcBoostActive"):
+        user_update["ugcBoostActive"] = False
+    user_body = {"fields": _encode_fields(user_update)}
     resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
@@ -968,6 +980,7 @@ async def complete_quest(payload: dict = Body(...)):
     return {
         "status": "completed",
         "xpEarned": xp_earned,
+        "bonusXP": bonus_xp,
         "newTotal": total_xp,
         "level": level,
         "badgesUnlocked": new_badges,
@@ -1624,6 +1637,62 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
     return {"status": "updated"}
+
+
+@app.post("/ugc-submit")
+async def ugc_submit(request: Request, payload: dict = Body(...)):
+    """Record a user's social media submission for the weekly tag."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid or uid != payload.get("uid"):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    tag = payload.get("tag")
+    platform = payload.get("platform")
+    image_url = payload.get("imageUrl")
+    if not tag or not platform:
+        return {"error": "tag and platform required"}
+    project_id = creds.project_id
+    cfg_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
+    cfg_resp = await asyncio.to_thread(rest_session.get, cfg_url)
+    cfg = _decode_document(cfg_resp.json()) if cfg_resp.status_code == 200 else {}
+    active_tag = cfg.get("activeTag")
+    if tag != active_tag:
+        return {"error": "invalidTag"}
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+    uresp = await asyncio.to_thread(rest_session.get, user_url)
+    ufields = _decode_document(uresp.json()) if uresp.status_code == 200 else {}
+    used = ufields.get("ugcTagsUsed", [])
+    if active_tag in used:
+        return {"error": "duplicate"}
+    doc_id = hashlib.sha1(f"{uid}-{tag}".encode()).hexdigest()[:16]
+    sub_doc = {
+        "uid": uid,
+        "tag": tag,
+        "platform": platform,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if image_url:
+        sub_doc["imageUrl"] = image_url
+    sub_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_submissions/{doc_id}"
+    await asyncio.to_thread(rest_session.patch, sub_url, json={"fields": _encode_fields(sub_doc)})
+    used.append(active_tag)
+    ufields.update({
+        "lastUGCSubmission": datetime.utcnow().isoformat(),
+        "ugcBoostActive": True,
+        "ugcTagsUsed": used,
+    })
+    await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(ufields)})
+    return {"status": "ok", "xpMultiplier": cfg.get("xpMultiplier", 1.0)}
+
+
+@app.get("/config/ugcWeeklyTag")
+async def get_weekly_tag():
+    """Return current UGC weekly tag configuration."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    return _decode_document(resp.json())
 
 
 @app.get("/get-community-quests")
