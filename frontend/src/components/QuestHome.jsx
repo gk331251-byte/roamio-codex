@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium } from "../lib/api.js";
+import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium, getUserXP } from "../lib/api.js";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -45,6 +45,8 @@ const QuestHome = () => {
   const [user, setUser] = useState(null);
   const [premium, setPremium] = useState(false);
   const [resumeData, setResumeData] = useState(null);
+  const [level, setLevel] = useState(1);
+  const [difficulty, setDifficulty] = useState('Easy');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -57,6 +59,12 @@ const QuestHome = () => {
           setPremium(!!res.isPremium);
         } catch (err) {
           console.error('premium check failed', err);
+        }
+        try {
+          const xpData = await getUserXP(firebaseUser.uid);
+          setLevel(xpData.level || 1);
+        } catch (err) {
+          console.error('xp fetch failed', err);
         }
       } else {
         setPremium(false);
@@ -154,7 +162,8 @@ const QuestHome = () => {
         Number(timeLimit),
         token,
         user.uid,
-        coords
+        coords,
+        difficulty
       );
       if (result.error) {
         console.error('❌ API error:', result);
@@ -268,18 +277,35 @@ const QuestHome = () => {
               ))}
             </div>
 
-            <label className="block text-sm font-medium text-[#0e1b0e]">
-              Time Limit: {timeLimit} minutes
-              <input
-                type="range"
-                min="30"
-                max="180"
-                step="15"
-                value={timeLimit}
-                onChange={(e) => setTimeLimit(Number(e.target.value))}
-                className="w-full mt-1"
-              />
-            </label>
+              <label className="block text-sm font-medium text-[#0e1b0e]">
+                Time Limit: {timeLimit} minutes
+                <input
+                  type="range"
+                  min="30"
+                  max="180"
+                  step="15"
+                  value={timeLimit}
+                  onChange={(e) => setTimeLimit(Number(e.target.value))}
+                  className="w-full mt-1"
+                />
+              </label>
+
+              <div className="flex gap-2 text-sm my-2">
+                {['Easy','Medium','Hard'].map((d) => {
+                  const locked = !premium && ((d==='Medium' && level < 3) || (d==='Hard' && level < 6));
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      disabled={locked}
+                      onClick={() => setDifficulty(d)}
+                      className={`px-3 py-1 rounded-full border ${difficulty===d ? 'bg-[#019863] text-white' : 'bg-white'} ${locked ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {locked ? `${d} 🔒` : d}
+                    </button>
+                  );
+                })}
+              </div>
 
             <button
               onClick={handleGenerate}
