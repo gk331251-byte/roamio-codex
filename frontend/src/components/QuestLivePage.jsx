@@ -304,10 +304,10 @@ export default function QuestLivePage() {
         result = await trackVisit(user.uid, questId, visitedIndices.length);
         setVisitedIndices(result.visitedIndices || []);
       }
-      if (typeof result.xp === "number") {
-        const gain = result.xp - userXP;
+      if (typeof result.totalXP === "number") {
+        const gain = result.totalXP - userXP;
         if (gain > 0) setXpMsg(`+${gain} XP`);
-        setUserXP(result.xp);
+        setUserXP(result.totalXP);
       }
       if (result?.badges) {
         const newKey = Object.keys(result.badges).find(
@@ -333,7 +333,7 @@ export default function QuestLivePage() {
     setCompleteMsg("");
     try {
       const share = window.confirm('Share this quest publicly?');
-      await completeQuest(user.uid, questId, {
+      const res = await completeQuest(user.uid, questId, {
         title: quest.title,
         city: quest.city,
         mood: quest.mood,
@@ -349,6 +349,7 @@ export default function QuestLivePage() {
       if (groupId) {
         await completeGroupQuest(groupId, user.uid);
       }
+      if (res?.xpEarned) setXpMsg(`+${res.xpEarned} XP`);
       setCompleteMsg("Quest Saved to Your Profile!");
       window.dispatchEvent(new Event("quest-saved"));
     } catch (err) {

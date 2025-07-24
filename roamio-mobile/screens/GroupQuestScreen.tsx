@@ -35,7 +35,7 @@ export default function GroupQuestScreen({ route }) {
     if (!user) return;
     try {
       const res = await trackStopVisit(groupId, user.uid, step);
-      if (res?.xp) toast(`+${res.xp} XP`);
+      if (res?.totalXP) toast(`+${res.totalXP} XP`);
     } catch (err) {
       console.log('track stop error', err);
     }

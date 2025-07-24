@@ -71,12 +71,12 @@ export default function GroupQuestView() {
     if (!group || !quest || !me) return;
     try {
       const res = await trackStopVisit(groupId, me.uid, visitedIndex);
-      if (typeof res.xp === 'number') {
-        const gain = res.xp - userXP;
+      if (typeof res.totalXP === 'number') {
+        const gain = res.totalXP - userXP;
         if (gain > 0) {
           setXpMsg(`+${gain} XP`);
         }
-        setUserXP(res.xp);
+        setUserXP(res.totalXP);
       }
       if (res?.badges) {
         const newKey = Object.keys(res.badges).find(
