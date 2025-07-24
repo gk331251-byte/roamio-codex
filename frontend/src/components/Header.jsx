@@ -2,17 +2,28 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
 
 const Header = () => {
   const { pathname } = useLocation();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isCreator, setIsCreator] = useState(false);
   const [user, setUser] = useState(null);
 
   useEffect(() => {
     const auth = getAuth();
-    return onAuthStateChanged(auth, (u) => {
+    return onAuthStateChanged(auth, async (u) => {
       setUser(u);
-      setIsAdmin(u?.email === 'admin@roamio.app');
+      if (u) {
+        const snap = await getDoc(doc(db, 'users', u.uid));
+        const data = snap.exists() ? snap.data() : {};
+        setIsAdmin(Boolean(data.isAdmin));
+        setIsCreator(Boolean(data.isCreator));
+      } else {
+        setIsAdmin(false);
+        setIsCreator(false);
+      }
     });
   }, []);
 
@@ -31,13 +42,22 @@ const Header = () => {
         <Link to="/explore" className={linkClass("/explore")}>Explore</Link>
         <Link to="/history" className={linkClass("/history")}>History</Link>
         <Link to="/community" className={linkClass("/community")}>Community</Link>
+        <Link to="/ugc-feed" className={linkClass("/ugc-feed")}>UGC Feed</Link>
+        <Link to="/featured" className={linkClass("/featured")}>Featured</Link>
         <Link to="/community/new" className={linkClass("/community/new")}>New Community</Link>
         {user && (
           <Link to="/custom" className={linkClass("/custom")}>➕ Custom Quest</Link>
         )}
         <Link to="/pricing" className={linkClass("/pricing")}>Quest+</Link>
+        {isCreator && (
+          <Link to="/creator-dashboard" className={linkClass("/creator-dashboard")}>Creator</Link>
+        )}
         {isAdmin && (
-          <Link to="/admin" className={linkClass("/admin")}>Admin</Link>
+          <>
+            <Link to="/admin" className={linkClass("/admin")}>Admin</Link>
+            <Link to="/admin/ugc-analytics" className={linkClass("/admin/ugc-analytics")}>UGC</Link>
+            <Link to="/admin/featured-review" className={linkClass("/admin/featured-review")}>Review</Link>
+          </>
         )}
         {user && (
           <Link to="/profile" className={linkClass("/profile")}>Profile</Link>
