@@ -231,6 +231,17 @@ export async function getCommunityQuests() {
   return resp.json();
 }
 
+export async function getUGCFeed({ mood, city } = {}) {
+  const url = new URL(`${BASE_URL}/ugc-feed`);
+  if (mood) url.searchParams.set('mood', mood);
+  if (city) url.searchParams.set('city', city);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) {
+    throw new Error('Failed to load UGC feed');
+  }
+  return resp.json();
+}
+
 export async function reportQuest(userId, questId, reason, city, mood) {
   const resp = await fetch(`${BASE_URL}/report-quest`, {
     method: 'POST',

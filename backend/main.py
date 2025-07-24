@@ -958,18 +958,20 @@ async def complete_quest(payload: dict = Body(...)):
     if payload.get("public"):
         feed_id = f"{quest_id}_{user_id}"
         feed_doc = {
+            "uid": user_id,
+            "imageUrl": postcard_url,
             "city": payload.get("city"),
-            "mood": payload.get("mood"),
+            "timestamp": timestamp,
+            "badgesUnlocked": new_badges,
+            "xpEarned": xp_earned,
             "displayName": payload.get("displayName"),
-            "imageUrl": payload.get("imageUrl"),
-            "questText": payload.get("questText"),
-            "completedAt": timestamp,
-            "userId": user_id,
-            "questId": quest_id,
-            "title": payload.get("title"),
+            "mood": payload.get("mood"),
+            "questTitle": payload.get("title"),
+            "sharedFromQuestId": quest_id,
+            "isFlagged": False,
         }
         feed_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{feed_id}"
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed/{feed_id}"
         )
         feed_body = {"fields": _encode_fields(feed_doc)}
         fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
@@ -1508,7 +1510,16 @@ async def get_user_xp(user_id: str):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        return {"totalXP": 0, "level": 1, "badgesUnlocked": [], "showRoamioWatermark": True, "skipSharePrompt": False}
+        return {
+            "totalXP": 0,
+            "level": 1,
+            "badgesUnlocked": [],
+            "showRoamioWatermark": True,
+            "skipSharePrompt": False,
+            "publicSharingOptIn": False,
+            "showUsernameOnShare": True,
+            "showCityOnShare": True,
+        }
     data = _decode_document(resp.json())
     return {
         "totalXP": data.get("totalXP", 0),
@@ -1516,6 +1527,9 @@ async def get_user_xp(user_id: str):
         "badgesUnlocked": data.get("badgesUnlocked", []),
         "showRoamioWatermark": data.get("showRoamioWatermark", True),
         "skipSharePrompt": data.get("skipSharePrompt", False),
+        "publicSharingOptIn": data.get("publicSharingOptIn", False),
+        "showUsernameOnShare": data.get("showUsernameOnShare", True),
+        "showCityOnShare": data.get("showCityOnShare", True),
     }
 
 
@@ -1725,6 +1739,44 @@ async def get_community_quests():
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
     return {"quests": results}
+
+
+@app.get("/ugc-feed")
+async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(None)):
+    """Return public UGC feed entries with optional filters."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed:runQuery"
+    filters = []
+    if mood:
+        filters.append({"fieldFilter": {"field": {"fieldPath": "mood"}, "op": "EQUAL", "value": {"stringValue": mood}}})
+    if city:
+        filters.append({"fieldFilter": {"field": {"fieldPath": "city"}, "op": "EQUAL", "value": {"stringValue": city}}})
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "ugc_feed"}],
+            "orderBy": [{"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}],
+            "limit": 20,
+        }
+    }
+    if filters:
+        where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
+        query["structuredQuery"]["where"] = where
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
+    posts = []
+    for item in raw:
+        doc = item.get("document")
+        if not doc:
+            continue
+        obj = _decode_document(doc)
+        if obj.get("isFlagged"):
+            continue
+        obj["id"] = doc["name"].split("/")[-1]
+        posts.append(obj)
+    return {"posts": posts}
 
 @app.post("/create-checkout-session")
 async def create_checkout_session(payload: dict = Body(...)):
@@ -2787,3 +2839,17 @@ async def admin_ban_user(payload: dict = Body(...)):
     patch = {"fields": _encode_fields({"banned": True})}
     await asyncio.to_thread(rest_session.patch, url, json=patch)
     return {"status": "banned"}
+
+
+@app.get("/admin/ugc-analytics")
+async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None)):
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not week:
+        week = datetime.utcnow().strftime("%Y-%W")
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_analytics/{week}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    return _decode_document(resp.json())
