@@ -24,7 +24,7 @@ const MemberMarker = ({ lat, lng, name, color }) => (
   <div
     lat={lat}
     lng={lng}
-    className="text-xs font-bold rounded-full px-1 py-0.5"
+    className="flex items-center justify-center rounded-full h-6 w-6 text-xs font-bold border-2 border-white"
     style={{ backgroundColor: color, color: '#fff' }}
   >
     {name}
