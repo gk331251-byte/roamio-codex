@@ -2,16 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { deleteUser } from 'firebase/auth';
-import { deleteDoc, doc, collection, getDocs, getDoc } from 'firebase/firestore';
+import { deleteDoc, doc, collection, getDocs } from 'firebase/firestore';
 import {
   validatePremium,
   getUserQuests,
   listCustomQuests,
   publishCustomQuest,
   unpublishCustomQuest,
+  getUserXP,
 } from '../lib/api';
-import PostcardGallery from './PostcardGallery';
 import XPProgressBar from './XPProgressBar';
+const LEVEL_THRESHOLDS = [0,50,120,200,300,420,550,700,880,1080];
 
 const Profile = () => {
   const [user, setUser] = useState(null);
@@ -19,6 +20,8 @@ const Profile = () => {
   const [stats, setStats] = useState({ total: 0, mostCity: '', longest: 0 });
   const [customQuests, setCustomQuests] = useState([]);
   const [xp, setXp] = useState(0);
+  const [level, setLevel] = useState(1);
+  const nextThreshold = LEVEL_THRESHOLDS[Math.min(level, LEVEL_THRESHOLDS.length - 1)];
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -31,9 +34,9 @@ const Profile = () => {
           console.error('Failed to validate premium', err);
         }
         try {
-          const snap = await getDoc(doc(db, 'users', u.uid));
-          const ud = snap.data();
-          if (ud) setXp(ud.xp || 0);
+          const xpData = await getUserXP(u.uid);
+          setXp(xpData.totalXP || 0);
+          setLevel(xpData.level || 1);
         } catch (err) {
           console.error('load xp error', err);
         }
@@ -91,21 +94,24 @@ const Profile = () => {
           <span className="bg-yellow-200 text-yellow-800 text-xs px-2 py-1 rounded-full">Quest+ Member</span>
         )}
       </div>
-      <XPProgressBar xp={xp} next={500} />
+      <p className="text-sm font-medium">Level {level} Explorer</p>
+      <XPProgressBar xp={xp} next={nextThreshold} />
       <p className="text-xs text-gray-600 mt-1">{xp} XP</p>
       <div className="mb-8 text-sm space-y-1">
         <p>Total quests: {stats.total}</p>
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
         {stats.longest > 0 && <p>Longest quest: {stats.longest} stops</p>}
       </div>
-      {premium ? (
-        <PostcardGallery />
-      ) : (
-        <div className="text-center space-y-2">
-          <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
-          <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
-        </div>
-      )}
+      <div className="mb-6">
+        {premium ? (
+          <a href="/gallery" className="text-blue-600 underline">View Postcard Gallery</a>
+        ) : (
+          <div className="text-center space-y-2">
+            <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
+            <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
+          </div>
+        )}
+      </div>
 
       <div className="mt-8">
         <h2 className="text-xl font-bold mb-2">My Custom Quests</h2>

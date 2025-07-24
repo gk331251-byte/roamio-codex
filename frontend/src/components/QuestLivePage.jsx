@@ -10,6 +10,9 @@ import { db } from "../firebase";
 import { decode } from "@googlemaps/polyline-codec";
 import XPToast from './XPToast';
 import BadgePopup from './BadgePopup';
+import TooltipManager from './TooltipManager';
+import { toast } from '../lib/toast';
+import QuestCompleteSummary from './QuestCompleteSummary';
 
 
 export default function QuestLivePage() {
@@ -31,6 +34,8 @@ export default function QuestLivePage() {
   const [newBadge, setNewBadge] = useState("");
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryData, setSummaryData] = useState({});
   const [etaText, setEtaText] = useState("");
   const [etaError, setEtaError] = useState("");
   const [etaRefresh, setEtaRefresh] = useState(0);
@@ -302,10 +307,10 @@ export default function QuestLivePage() {
         result = await trackVisit(user.uid, questId, visitedIndices.length);
         setVisitedIndices(result.visitedIndices || []);
       }
-      if (typeof result.xp === "number") {
-        const gain = result.xp - userXP;
+      if (typeof result.totalXP === "number") {
+        const gain = result.totalXP - userXP;
         if (gain > 0) setXpMsg(`+${gain} XP`);
-        setUserXP(result.xp);
+        setUserXP(result.totalXP);
       }
       if (result?.badges) {
         const newKey = Object.keys(result.badges).find(
@@ -331,7 +336,7 @@ export default function QuestLivePage() {
     setCompleteMsg("");
     try {
       const share = window.confirm('Share this quest publicly?');
-      await completeQuest(user.uid, questId, {
+      const res = await completeQuest(user.uid, questId, {
         title: quest.title,
         city: quest.city,
         mood: quest.mood,
@@ -339,14 +344,17 @@ export default function QuestLivePage() {
         questText: quest.questText,
         locationList: quest.places,
         imagePrompt: quest.imagePrompt,
-        imageUrl: quest.imageUrl,
         visitedIndices,
+        isDemo: questId.startsWith('demo_'),
         public: share,
         displayName: user.displayName,
       });
       if (groupId) {
         await completeGroupQuest(groupId, user.uid);
       }
+      if (res?.xpEarned) setXpMsg(`+${res.xpEarned} XP`);
+      setSummaryData(res);
+      setSummaryOpen(true);
       setCompleteMsg("Quest Saved to Your Profile!");
       window.dispatchEvent(new Event("quest-saved"));
     } catch (err) {
@@ -432,6 +440,14 @@ export default function QuestLivePage() {
           </div>
         </header>
 
+        <div
+          id="xpBadge"
+          className="fixed top-4 right-4 bg-purple-600 text-white px-2 py-1 rounded text-sm"
+        >
+          {userXP} XP
+        </div>
+        <TooltipManager />
+
         <main className="px-10 py-5 flex flex-col max-w-4xl mx-auto w-full">
           <div className="flex flex-wrap justify-between gap-3 p-4">
           <div className="flex flex-col gap-3 min-w-72">
@@ -499,16 +515,35 @@ export default function QuestLivePage() {
         )}
         <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
         <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
+        <QuestCompleteSummary
+          open={summaryOpen}
+          xpEarned={summaryData.xpEarned}
+          newTotal={summaryData.newTotal}
+          level={summaryData.level}
+          badgesUnlocked={summaryData.badgesUnlocked || []}
+          nextLevelXP={summaryData.nextLevelXP || 100}
+          imageUrl={summaryData.imageUrl}
+          onClose={() => setSummaryOpen(false)}
+        />
           <div className="px-4 py-3">
-            <LiveQuestMap
-              stops={stops}
-              visitedIndex={currentStopIndex}
-              userLocation={userLocation}
-              polylinePoints={polylinePoints}
-              groupProgress={groupData?.progress || {}}
-              members={groupData?.members || []}
-            />
-          </div>
+          <LiveQuestMap
+            stops={stops}
+            visitedIndex={currentStopIndex}
+            userLocation={userLocation}
+            polylinePoints={polylinePoints}
+            groupProgress={groupData?.progress || {}}
+            members={groupData?.members || []}
+          />
+         </div>
+         <div className="text-center mb-3">
+           <a
+             id="routeToggle"
+             href={`/quest/${quest?.city || ''}/${quest?.mood || ''}/route`}
+             className="text-blue-600 underline text-sm"
+           >
+             View Full Route
+           </a>
+         </div>
 
           <p className="text-sm text-[#4e974e] text-center px-4">
             {etaError
@@ -533,6 +568,7 @@ export default function QuestLivePage() {
 
           <div className="flex px-4 py-3">
             <button
+              id="markVisitedBtn"
               onClick={handleMarkVisited}
               disabled={questComplete}
               className={`flex-1 h-14 rounded-full text-base font-bold text-[#f8fcf8] transform transition active:scale-95 ${
@@ -559,7 +595,17 @@ export default function QuestLivePage() {
           {completeMsg && (
             <p className="text-center text-green-700 mt-2">{completeMsg}</p>
           )}
-          <div className="px-4 py-2">
+          <div className="px-4 py-2 space-y-2 text-center">
+            {!groupId && (
+              <button
+                id="inviteCTA"
+                type="button"
+                onClick={() => toast('Upgrade to Quest+ to invite friends')}
+                className="text-xs text-blue-600 underline"
+              >
+                Invite Friends with Quest+
+              </button>
+            )}
             <button onClick={handleReport} className="text-xs text-red-600 underline">
               Report Quest
             </button>
