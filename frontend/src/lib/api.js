@@ -7,7 +7,7 @@ const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
  * @param {number} timeLimit - Time limit in minutes
  * @param {string} token - Firebase user token for auth
  */
-export async function generateQuest(city, mood, timeLimit, token, userId) {
+export async function generateQuest(city, mood, timeLimit, token, userId, coords) {
   if (!city || !Array.isArray(mood) || mood.length === 0 || typeof timeLimit !== 'number') {
     throw new Error("Invalid input: city, mood[], and numeric timeLimit are required.");
   }
@@ -25,6 +25,8 @@ export async function generateQuest(city, mood, timeLimit, token, userId) {
       time_limit: timeLimit,
       token,
       user_id: userId,
+      lat: coords?.lat,
+      lng: coords?.lng,
     }),
   });
 
