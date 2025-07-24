@@ -577,6 +577,45 @@ export async function submitUGC(payload) {
   if (!resp.ok) throw new Error('Failed to submit');
   return resp.json();
 }
+export async function submitFeaturedQuest(payload) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('Auth required');
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/submit-featured-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error('Failed to submit quest');
+  return resp.json();
+}
+
+export async function getFeaturedQuests(approved = true) {
+  const url = new URL(`${BASE_URL}/featured-quests`);
+  if (approved !== null) url.searchParams.set('approved', approved);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to load featured quests');
+  return resp.json();
+}
+
+export async function listPendingFeatured(userId) {
+  const url = new URL(`${BASE_URL}/admin/featured-pending`);
+  url.searchParams.set('userId', userId);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to load pending quests');
+  return resp.json();
+}
+
+export async function reviewFeaturedQuest(userId, questId, approved = true) {
+  const resp = await fetch(`${BASE_URL}/admin/review-featured-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, approved })
+  });
+  if (!resp.ok) throw new Error('Failed to update quest');
+  return resp.json();
+}
 
 // ===== Group Chat =====
 
