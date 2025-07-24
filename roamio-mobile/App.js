@@ -17,6 +17,7 @@ function AppContent() {
   return <MainNavigator />;
 }
 
+
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

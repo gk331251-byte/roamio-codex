@@ -14,6 +14,7 @@ export function AppProvider({ children }) {
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
 
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);

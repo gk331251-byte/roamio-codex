@@ -5,6 +5,7 @@ import SharedHeader from '../components/SharedHeader';
 import { AppContext } from '../context/AppContext';
 import * as Notifications from 'expo-notifications';
 
+
 export default function QuestLiveScreen() {
   const { quest } = useContext(AppContext);
   const [step, setStep] = useState(0);
