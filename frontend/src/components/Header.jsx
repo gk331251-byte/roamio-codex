@@ -24,7 +24,7 @@ const Header = () => {
   return (
     <header className="flex items-center justify-between px-6 py-4 border-b border-[#e6f4ef] bg-[#f8fcf8]">
       <Link to="/" className="text-xl font-bold text-[#0e1b0e]">
-        WanderQuest
+        Roamio
       </Link>
       <nav className="flex gap-4">
         <Link to="/home" className={linkClass("/home")}>Home</Link>
@@ -35,7 +35,7 @@ const Header = () => {
         {user && (
           <Link to="/custom" className={linkClass("/custom")}>➕ Custom Quest</Link>
         )}
-        <Link to="/quest-plus" className={linkClass("/quest-plus")}>Quest+</Link>
+        <Link to="/pricing" className={linkClass("/pricing")}>Quest+</Link>
         {isAdmin && (
           <Link to="/admin" className={linkClass("/admin")}>Admin</Link>
         )}
