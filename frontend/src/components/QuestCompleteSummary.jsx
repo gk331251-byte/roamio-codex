@@ -45,15 +45,19 @@ export default function QuestCompleteSummary({
         <XPProgressBar xp={newTotal} next={nextLevelXP} />
         <p className="text-sm mt-1">Level {level}</p>
         {badgesUnlocked.length > 0 && (
-          <div className="flex flex-wrap justify-center gap-2 mt-3">
-            {badgesUnlocked.map((key) => (
-              <div
-                key={key}
-                className="px-2 py-1 bg-yellow-200 text-sm rounded animate-bounce"
-              >
-                {BADGE_CATALOG[key]?.name || key}
-              </div>
-            ))}
+          <div className="mt-4">
+            <p className="text-sm font-medium mb-1">🏆 New Badges</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {badgesUnlocked.map((key) => (
+                <div
+                  key={key}
+                  className="px-2 py-1 bg-yellow-200 text-sm rounded animate-bounce flex items-center gap-1"
+                >
+                  <span>{BADGE_CATALOG[key]?.icon}</span>
+                  <span>{BADGE_CATALOG[key]?.name || key}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         <div className="mt-5 space-y-2">
