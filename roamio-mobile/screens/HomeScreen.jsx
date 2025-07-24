@@ -14,7 +14,6 @@ export default function HomeScreen({ navigation }) {
   const [timeLimit, setTimeLimit] = useState(60);
   const [statusMsg, setStatusMsg] = useState('');
   const { setQuest, isPremium } = useContext(AppContext);
-
   const openCustomQuest = () => {
     if (!isPremium) {
       toast('Custom quests are a Roamio+ feature. Upgrade to plan your own adventures.');
