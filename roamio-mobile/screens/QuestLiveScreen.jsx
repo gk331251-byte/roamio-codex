@@ -7,11 +7,16 @@ import { saveQuestProgress, completeQuest } from '../lib/progress';
 import { trackVisit, trackStopVisit } from '../lib/api';
 import { toast } from '../lib/toast';
 import * as Notifications from 'expo-notifications';
+import TooltipManager from '../components/TooltipManager';
 
 export default function QuestLiveScreen({ navigation }) {
   const { quest, setQuest } = useContext(AppContext);
   const [step, setStep] = useState(quest?.visitedIndices?.length || 0);
   const mapRef = useRef(null);
+  const visitedBtnRef = useRef(null);
+  const xpRef = useRef(null);
+  const routeRef = useRef(null);
+  const inviteRef = useRef(null);
 
   useEffect(() => {
     if (step === 1) {
@@ -80,6 +85,9 @@ export default function QuestLiveScreen({ navigation }) {
   return (
     <View className="flex-1">
       <SharedHeader title="Quest" />
+      <Text ref={xpRef} className="absolute top-2 right-2 bg-purple-600 text-white px-2 py-1 rounded text-xs">
+        XP
+      </Text>
       <MapView ref={mapRef} style={{ flex: 1 }} initialRegion={region}>
         {quest.places.map((p, idx) => (
           <Marker
@@ -108,12 +116,29 @@ export default function QuestLiveScreen({ navigation }) {
             <Text className={index === step ? 'font-bold' : ''}>{item.name}</Text>
           )}
         />
+        <Text
+          ref={routeRef}
+          onPress={() => navigation.navigate('Route', { questId: quest.id })}
+          className="text-blue-600 underline text-xs my-2"
+        >
+          View Full Route
+        </Text>
         {step < quest.places.length - 1 ? (
-          <Button title="Mark as Visited" onPress={handleVisit} />
+          <Button ref={visitedBtnRef} title="Mark as Visited" onPress={handleVisit} />
         ) : (
           <Button title="Complete Quest" onPress={handleComplete} />
         )}
+        <Text
+          ref={inviteRef}
+          onPress={() => toast('Upgrade to Quest+ to invite friends')}
+          className="text-blue-600 underline text-xs mt-2 text-center"
+        >
+          Invite Friends with Quest+
+        </Text>
       </View>
+      <TooltipManager
+        refs={{ visitedBtn: visitedBtnRef, xpBadge: xpRef, routeBtn: routeRef, inviteBtn: inviteRef }}
+      />
     </View>
   );
 }
