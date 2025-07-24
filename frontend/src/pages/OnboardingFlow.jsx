@@ -4,6 +4,7 @@ import { getAuth } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { generateDemoQuest } from '../lib/api';
+import { calculateAge } from '../utils/dateHelpers';
 
 const moodOptions = ['Adventure', 'Romantic', 'Weird', 'Nature', 'Foodie', 'Cozy'];
 
@@ -16,6 +17,7 @@ export default function OnboardingFlow() {
   const [useGPS, setUseGPS] = useState(false);
   const [coords, setCoords] = useState(null);
   const [city, setCity] = useState('');
+  const [dob, setDob] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,6 +48,10 @@ export default function OnboardingFlow() {
       setError('City is required');
       return;
     }
+    if (!dob) {
+      setError('Date of birth required');
+      return;
+    }
     if (!user) return navigate('/');
     setError('');
     setLoading(true);
@@ -59,7 +65,11 @@ export default function OnboardingFlow() {
       );
       await setDoc(
         doc(db, 'users', user.uid),
-        { onboarding: { mood: selected, timeLimit: Number(time), useGPS } },
+        {
+          onboarding: { mood: selected, timeLimit: Number(time), useGPS },
+          dateOfBirth: dob,
+          age: calculateAge(dob),
+        },
         { merge: true }
       );
       navigate('/live', { state: { quest: result.quest, questId: result.questId, timeLimit: Number(time) } });
@@ -117,6 +127,16 @@ export default function OnboardingFlow() {
               required
             />
           )}
+          <div className="pt-2">
+            <label className="block mb-1">Date of Birth</label>
+            <input
+              type="date"
+              value={dob}
+              onChange={(e) => setDob(e.target.value)}
+              className="w-full border rounded px-3 py-2"
+              required
+            />
+          </div>
         </div>
         {error && <div className="text-red-600 text-sm text-center">{error}</div>}
         <button

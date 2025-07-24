@@ -60,6 +60,16 @@ def get_level_from_xp(xp: int) -> int:
             break
     return level
 
+def calculate_age(dob_str: str) -> int:
+    """Return age in years from YYYY-MM-DD string."""
+    try:
+        dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
+        today = datetime.utcnow().date()
+        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        return age
+    except Exception:
+        return 0
+
 # === Load .env variables (if running locally) ===
 load_dotenv()
 
@@ -345,6 +355,8 @@ async def generate_quest(
     usage_count = 0
     user_is_premium = False
     user_level = 1
+    user_age = 0
+    prefers_clean = False
     if user_id:
         usage_count = await get_daily_usage(user_id)
         user_is_premium = await check_premium(user_id)
@@ -356,6 +368,12 @@ async def generate_quest(
             if resp.status_code == 200:
                 user_doc = _decode_document(resp.json())
                 user_level = int(user_doc.get("level", 1))
+                dob = user_doc.get("dateOfBirth")
+                if dob:
+                    user_age = calculate_age(dob)
+                else:
+                    user_age = int(user_doc.get("age", 0))
+                prefers_clean = bool(user_doc.get("prefersCleanMode", False))
             if usage_count >= 3:
                 return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
             # difficulty gating
@@ -407,6 +425,12 @@ async def generate_quest(
                 tags = (
                     cached_place.get("tags") if cached_place else compute_place_tags(place, details)
                 )
+                is_restricted = (
+                    "bar" in tags or "night-club" in tags or "liquor-store" in tags or typ in ["bar", "night_club"]
+                )
+                if (user_age and user_age < 21) or prefers_clean:
+                    if is_restricted:
+                        continue
                 if not cached_place and pid:
                     save_place_to_cache(pid, {"tags": tags, "name": name})
                 if preferred:
@@ -423,6 +447,7 @@ async def generate_quest(
                     "lat": float(loc["lat"]),
                     "lng": float(loc["lng"]),
                     "tags": tags,
+                    "isAgeRestricted": is_restricted,
                     "score": overlap,
                     "rating": place.get("rating", 0),
                 })
@@ -463,6 +488,9 @@ async def generate_quest(
     hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
     cached = get_cached_quest(hash_key)
     if cached:
+        if ((user_age and user_age < 21) or prefers_clean) and "age21+" in cached.get("tags", []):
+            cached = None
+    if cached:
         print("Using cached quest")
         result = {"quest": cached}
         if fallback_city:
@@ -497,7 +525,7 @@ async def generate_quest(
     if lat is not None and lng is not None:
         ordered_waypoints = [selected[i] for i in waypoint_order]
         ordered = (
-            [{"name": "Your Location", "type": "start", "lat": float(lat), "lng": float(lng), "tags": []}]
+            [{"name": "Your Location", "type": "start", "lat": float(lat), "lng": float(lng), "tags": [], "isAgeRestricted": False}]
             + ordered_waypoints
             + [selected[-1]]
         )
@@ -540,6 +568,8 @@ async def generate_quest(
     tag_set = set()
     for p in ordered:
         tag_set.update(p.get("tags", []))
+    if any(p.get("isAgeRestricted") for p in ordered):
+        tag_set.add("age21+")
 
     gen_method = "gpt" if openai.api_key else "template"
 
