@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { createCustomQuest, createGroupQuest, validatePremium, publishCustomQuest } from '../lib/api';
+import { createCustomQuest, createGroupQuest, validatePremium, publishCustomQuest, getCustomQuest } from '../lib/api';
 import PremiumGuard from './PremiumGuard';
 
 const moodOptions = [
@@ -98,7 +98,6 @@ export default function CustomQuestBuilder() {
     if (!premium) return navigate('/pricing');
     if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
-      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
       const res = await createCustomQuest({
         user_id: user.uid,
         title,
@@ -114,9 +113,9 @@ export default function CustomQuestBuilder() {
         custom_prompt: prompt,
         status: 'draft',
       });
-      const { questId, quest } = res;
-      const group = await createGroupQuest(user.uid, questId, user.displayName);
-      navigate('/live', { state: { quest, questId, groupId: group.groupId, timeLimit } });
+      const quest = await getCustomQuest(res.questId);
+      const group = await createGroupQuest(user.uid, res.questId, user.displayName);
+      navigate('/live', { state: { quest, questId: res.questId, groupId: group.groupId, timeLimit } });
     } catch (err) {
       console.error('❌ API error:', err);
       setError('Something went wrong starting custom quest.');
@@ -125,8 +124,9 @@ export default function CustomQuestBuilder() {
 
   const handleSaveDraft = async () => {
     if (!user) return alert('Login required');
+    if (!premium) return navigate('/pricing');
+    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
-      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
       await createCustomQuest({
         user_id: user.uid,
         title,
@@ -152,8 +152,8 @@ export default function CustomQuestBuilder() {
   const handlePublish = async () => {
     if (!user) return alert('Login required');
     if (!premium) return navigate('/pricing');
+    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
-      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
       const res = await createCustomQuest({
         user_id: user.uid,
         title,

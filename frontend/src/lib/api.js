@@ -260,9 +260,18 @@ export async function updateActiveQuest(userId, data) {
 }
 
 export async function createCustomQuest(payload) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('Auth required');
+  }
+  const token = await user.getIdToken();
   const resp = await fetch(`${BASE_URL}/create-custom-quest`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify(payload)
   });
   if (!resp.ok) {
@@ -272,7 +281,7 @@ export async function createCustomQuest(payload) {
 }
 
 export async function getCustomQuest(id) {
-  const resp = await fetch(`${BASE_URL}/get-custom-quest/${id}`);
+  const resp = await fetch(`${BASE_URL}/custom-quests/${id}`);
   if (!resp.ok) {
     throw new Error('Failed to fetch custom quest');
   }
