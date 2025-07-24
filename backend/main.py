@@ -18,6 +18,8 @@ from google.oauth2 import id_token
 from dotenv import load_dotenv
 from emotion_utils import generate_filtered_quest_payload
 from stripe_utils import create_subscription_session, verify_webhook
+from auth_utils import is_premium_user
+from firestore_utils import write_custom_quest, get_custom_quest as fs_get_custom_quest, query_custom_quests_by_creator
 
 # === Load .env variables (if running locally) ===
 load_dotenv()
@@ -1541,86 +1543,51 @@ async def update_active_quest(payload: dict = Body(...)):
 
 
 @app.post("/create-custom-quest")
-async def create_custom_quest(payload: dict = Body(...)):
-    """Store a manually crafted quest."""
-    user_id = payload.get("user_id")
-    places = payload.get("places", [])
-    print(f"🛠️ Received custom quest request from {user_id}")
-    print(f"📦 Payload: {payload}")
-    if not user_id or len(places) < 2:
-        return {"error": "user_id and at least 2 places required"}
-
-    is_premium = await check_premium(user_id)
-    if not is_premium:
+async def create_custom_quest(request: Request, payload: dict = Body(...)):
+    """Create a custom quest for the authenticated premium user."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    if not await is_premium_user(uid):
         return JSONResponse(status_code=403, content={"error": "Premium required"})
 
+    location_list = payload.get("locationList", [])
+    if len(location_list) < 2:
+        return JSONResponse(status_code=400, content={"error": "locationList must have at least 2 entries"})
+
+    data = {
+        "title": payload.get("title") or "Custom Quest",
+        "questText": payload.get("questText", ""),
+        "locationList": location_list,
+        "mood": payload.get("mood", []),
+        "isPublic": payload.get("isPublic", False),
+    }
+    if payload.get("remixedFrom"):
+        data["remixedFrom"] = payload["remixedFrom"]
+
     try:
-        project_id = creds.project_id
-        quest_id = hashlib.sha1(
-            f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
-        ).hexdigest()[:12]
-
-        status = payload.get("status", "draft")
-        public = payload.get("public", False)
-
-        quest_doc = {
-            "title": payload.get("title") or "Custom Quest",
-            "moodTags": payload.get("mood_tags", []),
-            "places": places,
-            "timeLimit": payload.get("time_limit", 60),
-            "customPrompt": payload.get("custom_prompt") or "",
-            "createdBy": user_id,
-            "createdAt": datetime.utcnow().isoformat(),
-            "type": "custom",
-            "status": status,
-            "public": public,
-            "likesCount": 0,
-            "viewsCount": 0,
-            "replaysCount": 0,
-        }
-        if status == "published" or public:
-            quest_doc["publishedAt"] = datetime.utcnow().isoformat()
-
-        body = {"fields": _encode_fields(quest_doc)}
-
-        user_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-        )
-        resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
-        if resp.status_code != 200:
-            print("Firestore REST error", resp.text)
-            resp.raise_for_status()
-
-        global_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-        )
-        await asyncio.to_thread(rest_session.patch, global_url, json=body)
-
-        group_id = payload.get("group_id")
-        if group_id:
-            g_url = (
-                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
-            )
-            await asyncio.to_thread(rest_session.patch, g_url, json=body)
-
-        return {"questId": quest_id, "quest": quest_doc}
+        quest_id = await write_custom_quest(data, uid)
+        return {"questId": quest_id}
     except Exception as e:
         print("create_custom_quest error", e)
         return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
 
 
-@app.get("/get-custom-quest/{quest_id}")
-async def get_custom_quest(quest_id: str):
-    """Fetch a custom quest by ID."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
-    resp = await asyncio.to_thread(rest_session.get, url)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
-    return resp.json()
+@app.get("/custom-quests/{quest_id}")
+async def get_custom_quest_endpoint(quest_id: str):
+    """Publicly fetch a custom quest by its ID."""
+    quest = await fs_get_custom_quest(quest_id)
+    if not quest:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    quest["id"] = quest_id
+    return quest
+
+
+@app.get("/custom-quests")
+async def list_custom_quests(creatorId: str = Query(...), publicOnly: bool = Query(False)):
+    """Return custom quests filtered by creator ID."""
+    quests = await query_custom_quests_by_creator(creatorId, public_only=publicOnly)
+    return {"quests": quests}
 
 
 @app.post("/publish-custom-quest")
