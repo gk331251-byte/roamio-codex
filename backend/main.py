@@ -2877,6 +2877,150 @@ async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None))
         return {}
     return _decode_document(resp.json())
 
+
+@app.get("/admin/analytics")
+async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
+    """Return aggregate product metrics for admins."""
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+
+    days = int(days or 0)
+    start = None
+    if days > 0:
+        start = (datetime.utcnow() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+
+    project_id = creds.project_id
+    run_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+
+    # ===== Users =====
+    users_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users:runQuery"
+    all_users = await asyncio.to_thread(rest_session.post, users_url, json={"structuredQuery": {"from": [{"collectionId": "users"}]}})
+    total_users = sum(1 for i in all_users.json() if i.get("document"))
+
+    growth = {}
+    if start:
+        new_query = {
+            "structuredQuery": {
+                "from": [{"collectionId": "users"}],
+                "where": {
+                    "fieldFilter": {
+                        "field": {"fieldPath": "createdAt"},
+                        "op": "GREATER_THAN_OR_EQUAL",
+                        "value": {"stringValue": start},
+                    }
+                },
+            }
+        }
+        new_resp = await asyncio.to_thread(rest_session.post, users_url, json=new_query)
+        for item in new_resp.json():
+            doc = item.get("document")
+            if not doc:
+                continue
+            data = _decode_document(doc)
+            day = data.get("createdAt", "")[:10]
+            growth[day] = growth.get(day, 0) + 1
+        new_users = sum(growth.values())
+    else:
+        new_users = total_users
+
+    # ===== Quests Generated =====
+    q_query = {"structuredQuery": {"from": [{"collectionId": "user_quests", "allDescendants": True}]}}
+    if start:
+        q_query["structuredQuery"]["where"] = {
+            "fieldFilter": {
+                "field": {"fieldPath": "generatedAt"},
+                "op": "GREATER_THAN_OR_EQUAL",
+                "value": {"stringValue": start},
+            }
+        }
+    q_resp = await asyncio.to_thread(rest_session.post, run_url, json=q_query)
+    quest_docs = [i for i in q_resp.json() if i.get("document")]
+    quests_count = len(quest_docs)
+
+    moods = {}
+    diff = {}
+    for item in quest_docs:
+        data = _decode_document(item["document"])
+        m = data.get("mood")
+        d = data.get("difficulty")
+        if m:
+            for mpart in str(m).split(','):
+                moods[mpart] = moods.get(mpart, 0) + 1
+        if d:
+            diff[d] = diff.get(d, 0) + 1
+
+    # ===== Completed Quests =====
+    comp_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "user_quests", "allDescendants": True}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "completedAt"},
+                    "op": "GREATER_THAN_OR_EQUAL",
+                    "value": {"stringValue": start or "1970-01-01"},
+                }
+            },
+        }
+    }
+    if not start:
+        comp_query["structuredQuery"]["where"] = {
+            "unaryFilter": {"field": {"fieldPath": "completedAt"}, "op": "IS_NOT_NULL"}
+        }
+    comp_resp = await asyncio.to_thread(rest_session.post, run_url, json=comp_query)
+    completed_count = sum(1 for i in comp_resp.json() if i.get("document"))
+    completion_rate = (completed_count / quests_count) if quests_count else 0
+
+    # ===== Group Quests =====
+    group_query = {"structuredQuery": {"from": [{"collectionId": "group_quests"}]}}
+    if start:
+        group_query["structuredQuery"]["where"] = {
+            "fieldFilter": {
+                "field": {"fieldPath": "createdAt"},
+                "op": "GREATER_THAN_OR_EQUAL",
+                "value": {"stringValue": start},
+            }
+        }
+    g_resp = await asyncio.to_thread(rest_session.post, run_url, json=group_query)
+    group_total = 0
+    member_total = 0
+    for item in g_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        group_total += 1
+        member_total += len(data.get("members", []))
+    avg_group_size = (member_total / group_total) if group_total else 0
+
+    # ===== Promo Codes =====
+    promo_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes:runQuery"
+    promo_resp = await asyncio.to_thread(rest_session.post, promo_url, json={"structuredQuery": {"from": [{"collectionId": "promo_codes"}]}})
+    promo_counts = {}
+    for item in promo_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        key = data.get("code", doc["name"].split("/")[-1])
+        promo_counts[key] = data.get("usageCount", 0)
+
+    top_promo = max(promo_counts.items(), key=lambda x: x[1]) if promo_counts else (None, 0)
+
+    return {
+        "totalUsers": total_users,
+        "newUsers": new_users,
+        "userGrowth": growth,
+        "questsGenerated": quests_count,
+        "moodBreakdown": moods,
+        "difficultyBreakdown": diff,
+        "completedQuests": completed_count,
+        "completionRate": completion_rate,
+        "groupQuests": group_total,
+        "avgGroupSize": avg_group_size,
+        "promoUsage": promo_counts,
+        "topPromo": list(top_promo),
+    }
+
 @app.post("/submit-featured-quest")
 async def submit_featured_quest(request: Request, payload: dict = Body(...)):
     """Allow approved creators to submit a featured quest draft."""

@@ -665,3 +665,12 @@ export async function redeemPromoCode(uid, code) {
   return resp.json();
 }
 
+export async function fetchAnalytics(userId, days = 30) {
+  const url = new URL(`${BASE_URL}/admin/analytics`);
+  url.searchParams.set('userId', userId);
+  if (days) url.searchParams.set('days', days);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to load analytics');
+  return resp.json();
+}
+
