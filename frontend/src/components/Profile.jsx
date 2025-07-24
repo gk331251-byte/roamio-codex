@@ -16,8 +16,8 @@ const Profile = () => {
       setUser(u);
       if (u) {
         try {
-          const data = await validatePremium(u.uid);
-          setPremium(!!data.premium);
+          const data = await validatePremium();
+          setPremium(!!data.isPremium);
         } catch (err) {
           console.error('Failed to validate premium', err);
         }
@@ -79,7 +79,7 @@ const Profile = () => {
       ) : (
         <div className="text-center space-y-2">
           <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
-          <a href="/quest-plus" className="text-blue-600 underline">Upgrade to Quest+</a>
+          <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
         </div>
       )}
       <div className="mt-8">
