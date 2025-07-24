@@ -35,3 +35,20 @@ export async function updateUserBadges(userId, badges) {
   if (!userId) return;
   await updateDoc(doc(db, 'users', userId), { badges });
 }
+import { getDoc } from 'firebase/firestore';
+
+export async function getUserSettings(userId) {
+  if (!userId) return {};
+  const snap = await getDoc(doc(db, 'users', userId));
+  return snap.exists() ? snap.data() : {};
+}
+
+export async function setShowRoamioWatermark(userId, value) {
+  if (!userId) return;
+  await updateDoc(doc(db, 'users', userId), { showRoamioWatermark: value });
+}
+
+export async function setSkipSharePrompt(userId, value) {
+  if (!userId) return;
+  await updateDoc(doc(db, 'users', userId), { skipSharePrompt: value });
+}
