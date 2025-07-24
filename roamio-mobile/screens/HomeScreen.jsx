@@ -14,6 +14,14 @@ export default function HomeScreen({ navigation }) {
   const [timeLimit, setTimeLimit] = useState(60);
   const [statusMsg, setStatusMsg] = useState('');
   const { setQuest, isPremium } = useContext(AppContext);
+  const openCustomQuest = () => {
+    if (!isPremium) {
+      toast('Custom quests are a Roamio+ feature. Upgrade to plan your own adventures.');
+      return;
+    }
+    navigation.navigate('CustomQuest');
+  };
+
   const requestLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
@@ -73,7 +81,7 @@ export default function HomeScreen({ navigation }) {
       <Button title="Use GPS" onPress={requestLocation} />
       {statusMsg ? <Text>{statusMsg}</Text> : null}
       <Button title="Generate Quest" onPress={handleGenerate} className="mt-4" />
-      <Button title="Custom Quest (Quest+)" disabled={!isPremium} className="mt-2" />
+      <Button title="Custom Quest (Quest+)" onPress={openCustomQuest} className="mt-2" />
     </View>
   );
 }

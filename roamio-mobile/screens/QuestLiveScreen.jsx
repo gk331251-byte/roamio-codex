@@ -5,6 +5,7 @@ import SharedHeader from '../components/SharedHeader';
 import { AppContext } from '../context/AppContext';
 import { saveQuestProgress, completeQuest } from '../lib/progress';
 import * as Notifications from 'expo-notifications';
+
 export default function QuestLiveScreen({ navigation }) {
   const { quest, setQuest } = useContext(AppContext);
   const [step, setStep] = useState(quest?.visitedIndices?.length || 0);
@@ -38,6 +39,7 @@ export default function QuestLiveScreen({ navigation }) {
       500
     );
   }, [step, quest]);
+
   if (!quest) {
     return (
       <View className="flex-1 items-center justify-center">

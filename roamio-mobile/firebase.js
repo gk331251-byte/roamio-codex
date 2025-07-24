@@ -10,6 +10,7 @@ import {
   persistentLocalCache,
   persistentSingleTabManager,
 } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 
 // Values are pulled from native config via process.env or expo-config
 const firebaseConfig = {
@@ -30,3 +31,16 @@ const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 
 export { app, db, auth, provider };
+
+export async function submitCustomQuest(data) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
+  const payload = {
+    ...data,
+    creatorId: user.uid,
+    createdAt: serverTimestamp(),
+    isPublic: false,
+  };
+  const ref = await addDoc(collection(db, 'custom_quests'), payload);
+  return ref.id;
+}
