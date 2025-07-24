@@ -640,3 +640,65 @@ export function fetchChatStream(groupId, callback) {
 }
 
 
+
+export async function createPromoCode(userId, data) {
+  const resp = await fetch(`${BASE_URL}/create-promo-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, ...data })
+  });
+  if (!resp.ok) throw new Error('Failed to create code');
+  return resp.json();
+}
+
+export async function redeemPromoCode(uid, code) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) throw new Error('Auth required');
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/redeem-promo-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ uid, code })
+  });
+  if (!resp.ok) throw new Error('Failed to redeem code');
+  return resp.json();
+}
+
+export async function fetchAnalytics(userId, days = 30) {
+  const url = new URL(`${BASE_URL}/admin/analytics`);
+  url.searchParams.set('userId', userId);
+  if (days) url.searchParams.set('days', days);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to load analytics');
+  return resp.json();
+}
+
+export async function adminCreateCustomQuest(userId, quest) {
+  const resp = await fetch(`${BASE_URL}/admin/create-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, quest })
+  });
+  if (!resp.ok) throw new Error('Failed to create quest');
+  return resp.json();
+}
+
+export async function adminEditCustomQuest(userId, questId, data) {
+  const resp = await fetch(`${BASE_URL}/admin/edit-custom-quest`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, data })
+  });
+  if (!resp.ok) throw new Error('Failed to update quest');
+  return resp.json();
+}
+
+export async function adminDeleteCustomQuest(userId, questId) {
+  const url = new URL(`${BASE_URL}/admin/delete-custom-quest`);
+  url.searchParams.set('userId', userId);
+  url.searchParams.set('questId', questId);
+  const resp = await fetch(url.toString(), { method: 'DELETE' });
+  if (!resp.ok) throw new Error('Failed to delete quest');
+  return resp.json();
+}
