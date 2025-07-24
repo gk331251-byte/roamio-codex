@@ -28,3 +28,10 @@ export async function guestLogin() {
   const res = await signInAnonymously(auth);
   return res.user;
 }
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+
+export async function updateUserBadges(userId, badges) {
+  if (!userId) return;
+  await updateDoc(doc(db, 'users', userId), { badges });
+}

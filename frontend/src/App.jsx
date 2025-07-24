@@ -12,6 +12,7 @@ import QuestHome from "./components/QuestHome";
 import QuestDetails from "./components/QuestDetails";
 import QuestHistory from "./components/QuestHistory";
 import Profile from "./components/Profile";
+import PostcardGalleryPage from "./pages/PostcardGalleryPage";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import QuestRoute from "./components/QuestRoute";
@@ -80,6 +81,7 @@ function App() {
         <Route path="/quest/:city/:mood/route" element={<QuestRoute />} />
         <Route path="/history" element={<QuestHistory />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/gallery" element={<PostcardGalleryPage />} />
         <Route path="/live" element={<QuestLivePage />} />
         <Route path="/group/:groupId" element={<GroupQuestView />} />
         <Route path="/community" element={<CommunityFeed />} />

@@ -11,7 +11,6 @@ import {
   unpublishCustomQuest,
   getUserXP,
 } from '../lib/api';
-import PostcardGallery from './PostcardGallery';
 import XPProgressBar from './XPProgressBar';
 const LEVEL_THRESHOLDS = [0,50,120,200,300,420,550,700,880,1080];
 
@@ -103,14 +102,16 @@ const Profile = () => {
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
         {stats.longest > 0 && <p>Longest quest: {stats.longest} stops</p>}
       </div>
-      {premium ? (
-        <PostcardGallery />
-      ) : (
-        <div className="text-center space-y-2">
-          <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
-          <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
-        </div>
-      )}
+      <div className="mb-6">
+        {premium ? (
+          <a href="/gallery" className="text-blue-600 underline">View Postcard Gallery</a>
+        ) : (
+          <div className="text-center space-y-2">
+            <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
+            <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
+          </div>
+        )}
+      </div>
 
       <div className="mt-8">
         <h2 className="text-xl font-bold mb-2">My Custom Quests</h2>
