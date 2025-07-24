@@ -2,24 +2,40 @@ import React, { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { deleteUser } from 'firebase/auth';
-import { deleteDoc, doc, collection, getDocs } from 'firebase/firestore';
-import { validatePremium, getUserQuests } from '../lib/api';
+import { deleteDoc, doc, collection, getDocs, getDoc } from 'firebase/firestore';
+import {
+  validatePremium,
+  getUserQuests,
+  listCustomQuests,
+  publishCustomQuest,
+  unpublishCustomQuest,
+} from '../lib/api';
 import PostcardGallery from './PostcardGallery';
+import XPProgressBar from './XPProgressBar';
 
 const Profile = () => {
   const [user, setUser] = useState(null);
   const [premium, setPremium] = useState(false);
   const [stats, setStats] = useState({ total: 0, mostCity: '', longest: 0 });
+  const [customQuests, setCustomQuests] = useState([]);
+  const [xp, setXp] = useState(0);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
         try {
-          const data = await validatePremium(u.uid);
-          setPremium(!!data.premium);
+          const data = await validatePremium();
+          setPremium(!!data.isPremium);
         } catch (err) {
           console.error('Failed to validate premium', err);
+        }
+        try {
+          const snap = await getDoc(doc(db, 'users', u.uid));
+          const ud = snap.data();
+          if (ud) setXp(ud.xp || 0);
+        } catch (err) {
+          console.error('load xp error', err);
         }
         try {
           const q = await getUserQuests(u.uid);
@@ -37,6 +53,12 @@ const Profile = () => {
           setStats({ total, mostCity, longest });
         } catch (err) {
           console.error('Failed to load quest stats', err);
+        }
+        try {
+          const res = await listCustomQuests(u.uid, false);
+          setCustomQuests(res.quests || []);
+        } catch (err) {
+          console.error('load custom quests', err);
         }
       }
     });
@@ -69,6 +91,8 @@ const Profile = () => {
           <span className="bg-yellow-200 text-yellow-800 text-xs px-2 py-1 rounded-full">Quest+ Member</span>
         )}
       </div>
+      <XPProgressBar xp={xp} next={500} />
+      <p className="text-xs text-gray-600 mt-1">{xp} XP</p>
       <div className="mb-8 text-sm space-y-1">
         <p>Total quests: {stats.total}</p>
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
@@ -79,9 +103,50 @@ const Profile = () => {
       ) : (
         <div className="text-center space-y-2">
           <p className="text-sm">Quest+ membership required to view your full postcard history.</p>
-          <a href="/quest-plus" className="text-blue-600 underline">Upgrade to Quest+</a>
+          <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
         </div>
       )}
+
+      <div className="mt-8">
+        <h2 className="text-xl font-bold mb-2">My Custom Quests</h2>
+        {customQuests.map((cq) => (
+          <div key={cq.id} className="border p-2 mb-2 flex items-center justify-between">
+            <div>
+              <p className="font-medium">{cq.title}</p>
+              <p className="text-xs">Status: {cq.status || (cq.public ? 'published' : 'draft')}</p>
+            </div>
+            <div className="space-x-2">
+              <button
+                onClick={() => (window.location.href = `/custom/edit/${cq.id}`)}
+                className="text-blue-600 underline text-sm"
+              >
+                Edit
+              </button>
+              {premium && (
+                <button
+                  onClick={async () => {
+                    try {
+                      if (cq.status === 'published' || cq.public) {
+                        await unpublishCustomQuest(user.uid, cq.id);
+                        setCustomQuests((prev) => prev.map((q) => (q.id === cq.id ? { ...q, status: 'draft', public: false } : q)));
+                      } else {
+                        await publishCustomQuest(user.uid, cq.id);
+                        setCustomQuests((prev) => prev.map((q) => (q.id === cq.id ? { ...q, status: 'published', public: true } : q)));
+                      }
+                    } catch (err) {
+                      console.error('toggle publish', err);
+                    }
+                  }}
+                  className="text-sm underline"
+                >
+                  {cq.status === 'published' || cq.public ? 'Unpublish' : 'Publish'}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {customQuests.length === 0 && <p className="text-sm">No custom quests yet</p>}
+      </div>
       <div className="mt-8">
         <button
           onClick={handleDeleteAccount}

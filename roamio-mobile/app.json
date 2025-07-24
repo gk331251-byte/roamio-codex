@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Roamio",
+    "slug": "roamio",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "jsEngine": "hermes",
+    "sdkVersion": "49.0.0",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#FFFFFF"
+      }
+    },
+    "extra": {
+      "backendUrl": "http://localhost:8080",
+      "googlePlacesApiKey": "YOUR_GOOGLE_PLACES_API_KEY"
+    }
+  }
+}
