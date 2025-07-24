@@ -5,9 +5,11 @@ import LiveQuestMap from "./LiveQuestMap";
 import GroupMemberList from "./GroupMemberList";
 import { getAuth } from "firebase/auth";
 import { trackVisit, getUserQuests, completeQuest, joinGroup, trackStopVisit, completeGroupQuest, leaveGroup, reportQuest, updateActiveQuest } from "../lib/api";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { decode } from "@googlemaps/polyline-codec";
+import XPToast from './XPToast';
+import BadgePopup from './BadgePopup';
 
 
 export default function QuestLivePage() {
@@ -23,6 +25,10 @@ export default function QuestLivePage() {
   const [visitedIndices, setVisitedIndices] = useState([]);
   const [groupData, setGroupData] = useState(null);
   const [activityMsg, setActivityMsg] = useState("");
+  const [xpMsg, setXpMsg] = useState("");
+  const [userXP, setUserXP] = useState(0);
+  const [badges, setBadges] = useState({});
+  const [newBadge, setNewBadge] = useState("");
   const [copied, setCopied] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [etaText, setEtaText] = useState("");
@@ -31,6 +37,21 @@ export default function QuestLivePage() {
   const [polylinePoints, setPolylinePoints] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completeMsg, setCompleteMsg] = useState("");
+
+  useEffect(() => {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) return;
+    getDoc(doc(db, 'users', user.uid))
+      .then((snap) => {
+        const data = snap.data();
+        if (data) {
+          setUserXP(data.xp || 0);
+          setBadges(data.badges || {});
+        }
+      })
+      .catch((e) => console.error('user fetch error', e));
+  }, []);
 
   // Watch user GPS
   useEffect(() => {
@@ -132,7 +153,7 @@ export default function QuestLivePage() {
     if (!user || !groupId) return;
     joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
     let prev = null;
-    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+    const unsub = onSnapshot(doc(db, 'group_quests', groupId), (snap) => {
       const data = snap.data();
       if (!data) return;
       setGroupData(data);
@@ -164,7 +185,7 @@ export default function QuestLivePage() {
     if (!user || !groupId) return;
     joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
     let prev = null;
-    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+    const unsub = onSnapshot(doc(db, 'group_quests', groupId), (snap) => {
       const data = snap.data();
       if (!data) return;
       setGroupData(data);
@@ -234,6 +255,9 @@ export default function QuestLivePage() {
         .map((p) => `${p.lat},${p.lng}`)
         .join('|');
 
+      console.log('Waypoints', waypoints);
+      console.log('Remaining stops', remaining);
+
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking` +
         (waypoints ? `&waypoints=${waypoints}` : '') +
         `&key=${key}`;
@@ -246,6 +270,7 @@ export default function QuestLivePage() {
         const sec = legs.reduce((s, l) => s + (l.duration?.value || 0), 0);
         const mins = Math.round(sec / 60);
         setEtaText(`${mins} min`);
+        console.log('ETA legs', legs.map((l) => l.duration?.text));
         const poly = data?.routes?.[0]?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
@@ -269,12 +294,28 @@ export default function QuestLivePage() {
 
     if (!questId || questComplete) return;
     try {
+      let result;
       if (groupId) {
-        const res = await trackStopVisit(groupId, user.uid, visitedIndices.length);
-        setVisitedIndices(res.visitedStops || res.visitedIndices || []);
+        result = await trackStopVisit(groupId, user.uid, visitedIndices.length);
+        setVisitedIndices(result.visitedStops || result.visitedIndices || []);
       } else {
-        const res = await trackVisit(user.uid, questId, visitedIndices.length);
-        setVisitedIndices(res.visitedIndices || []);
+        result = await trackVisit(user.uid, questId, visitedIndices.length);
+        setVisitedIndices(result.visitedIndices || []);
+      }
+      if (typeof result.xp === "number") {
+        const gain = result.xp - userXP;
+        if (gain > 0) setXpMsg(`+${gain} XP`);
+        setUserXP(result.xp);
+      }
+      if (result?.badges) {
+        const newKey = Object.keys(result.badges).find(
+          (k) => result.badges[k] && !badges[k]
+        );
+        if (newKey) setNewBadge(newKey);
+        setBadges(result.badges);
+      }
+      if (result?.xp) {
+        setTimeout(() => setXpMsg(""), 2000);
       }
     } catch (err) {
       console.error('Failed to track visit', err);
@@ -456,6 +497,8 @@ export default function QuestLivePage() {
         {activityMsg && (
           <p className="text-xs text-center text-blue-700 mt-1">{activityMsg}</p>
         )}
+        <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
+        <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
 
           <div className="px-4 py-3">
             <LiveQuestMap
@@ -463,6 +506,8 @@ export default function QuestLivePage() {
               visitedIndex={currentStopIndex}
               userLocation={userLocation}
               polylinePoints={polylinePoints}
+              groupProgress={groupData?.progress || {}}
+              members={groupData?.members || []}
             />
           </div>
 
@@ -491,7 +536,7 @@ export default function QuestLivePage() {
             <button
               onClick={handleMarkVisited}
               disabled={questComplete}
-              className={`flex-1 h-14 rounded-full text-base font-bold text-[#f8fcf8] ${
+              className={`flex-1 h-14 rounded-full text-base font-bold text-[#f8fcf8] transform transition active:scale-95 ${
                 questComplete
                   ? "bg-gray-400 cursor-not-allowed"
                   : "bg-[#14b714] hover:bg-[#0fa50f]"
