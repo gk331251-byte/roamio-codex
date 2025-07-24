@@ -11,11 +11,13 @@ import openai
 import certifi
 from google.cloud import firestore_v1, storage
 from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession
+from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
+from google.oauth2 import id_token
 
 
 from dotenv import load_dotenv
 from emotion_utils import generate_filtered_quest_payload
+from stripe_utils import create_subscription_session, verify_webhook
 
 # === Load .env variables (if running locally) ===
 load_dotenv()
@@ -571,6 +573,28 @@ async def check_premium(user_id: str) -> bool:
         fields = _decode_document(resp.json())
         return fields.get("premium") is True
     return False
+
+
+async def _verify_token(auth_header: str | None) -> str | None:
+    """Return user ID if bearer token is valid."""
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ", 1)[1]
+    try:
+        info = id_token.verify_oauth2_token(token, GoogleRequest())
+        return info.get("uid") or info.get("sub")
+    except Exception as e:
+        print("Token verify failed", e)
+        return None
+
+
+async def log_admin_event(event: str, payload: dict):
+    """Write a simple event document to admin_logs."""
+    doc_id = hashlib.sha1(f"{event}-{datetime.utcnow()}".encode()).hexdigest()[:12]
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/admin_logs/{doc_id}"
+    body = {"fields": _encode_fields({"event": event, "payload": payload, "created": datetime.utcnow().isoformat()})}
+    await asyncio.to_thread(rest_session.patch, url, json=body)
 
 
 async def get_daily_usage(user_id: str) -> int:
@@ -1406,17 +1430,7 @@ async def create_checkout_session(payload: dict = Body(...)):
     stripe_key = os.getenv("STRIPE_SECRET_KEY")
     if stripe_key:
         try:
-            import stripe
-            stripe.api_key = stripe_key
-            session = await asyncio.to_thread(
-                stripe.checkout.Session.create,
-                payment_method_types=["card"],
-                mode="payment",
-                line_items=[{"price": os.getenv("STRIPE_PRICE_ID", "price_123"), "quantity": 1}],
-                customer_email=email,
-                success_url=success,
-                cancel_url=cancel,
-            )
+            session = await create_subscription_session(user_id, email, success, cancel)
             return {"url": session.url}
         except Exception as e:
             print("Stripe error", e)
@@ -1455,6 +1469,52 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"premium": premium}
+
+
+@app.post("/validate-premium")
+async def validate_premium_token(request: Request):
+    """Return premium status for the authenticated user."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+    premium = fields.get("premium") is True
+    return {"isPremium": premium}
+
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events."""
+    stripe_key = os.getenv("STRIPE_SECRET_KEY")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    if not stripe_key or not webhook_secret:
+        return {"status": "disabled"}
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = verify_webhook(payload, sig)
+    except Exception as e:
+        print("Webhook verify error", e)
+        return JSONResponse(status_code=400, content={"error": "invalid"})
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        uid = session.get("metadata", {}).get("uid") or session.get("client_reference_id")
+        if uid:
+            project_id = creds.project_id
+            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+            resp = await asyncio.to_thread(rest_session.get, url)
+            fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+            fields["premium"] = True
+            body = {"fields": _encode_fields(fields)}
+            await asyncio.to_thread(rest_session.patch, url, json=body)
+            await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+
+    return {"received": True}
 
 
 @app.post("/update-active-quest")

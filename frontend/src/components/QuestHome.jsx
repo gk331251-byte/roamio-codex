@@ -53,8 +53,8 @@ const QuestHome = () => {
       setUser(firebaseUser);
       if (firebaseUser) {
         try {
-          const res = await validatePremium(firebaseUser.uid);
-          setPremium(!!res.premium);
+          const res = await validatePremium();
+          setPremium(!!res.isPremium);
         } catch (err) {
           console.error('premium check failed', err);
         }
@@ -177,7 +177,7 @@ const QuestHome = () => {
 
   const handleStartQuest = async () => {
     if (!premium) {
-      navigate('/quest-plus');
+      navigate('/pricing');
       return;
     }
     if (!questResult) return;
@@ -323,7 +323,7 @@ const QuestHome = () => {
               {!premium && (
                 <p className="text-center text-xs mt-1">
                   Quest+ required to start quests.{' '}
-                  <a href="/quest-plus" className="text-blue-600 underline">Upgrade</a>
+                  <a href="/pricing" className="text-blue-600 underline">Upgrade</a>
                 </p>
               )}
               {resumeData && (

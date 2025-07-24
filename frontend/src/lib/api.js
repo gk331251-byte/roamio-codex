@@ -1,4 +1,5 @@
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
+import { getAuth } from 'firebase/auth';
 
 /**
  * Fetches a generated quest from the backend
@@ -66,12 +67,22 @@ export async function uploadPostcard(userId, questId, imageUrl) {
 }
 
 export async function validatePremium(userId, sessionId) {
-  const url = new URL(`${BASE_URL}/validate-premium/${userId}`);
-  if (sessionId) url.searchParams.set('session_id', sessionId);
-  const resp = await fetch(url.toString());
-  if (!resp.ok) {
-    throw new Error('Failed to validate premium');
+  if (sessionId && userId) {
+    const url = new URL(`${BASE_URL}/validate-premium/${userId}`);
+    url.searchParams.set('session_id', sessionId);
+    const resp = await fetch(url.toString());
+    if (!resp.ok) throw new Error('Failed to validate premium');
+    return resp.json();
   }
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) return { isPremium: false };
+  const token = await user.getIdToken();
+  const resp = await fetch(`${BASE_URL}/validate-premium`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new Error('Failed to validate premium');
   return resp.json();
 }
 
