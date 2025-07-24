@@ -24,7 +24,7 @@ from firestore_utils import (
     get_custom_quest as fs_get_custom_quest,
     query_custom_quests_by_creator,
 )
-from group_utils import create_group_document
+from group_utils import create_group_document, add_user_to_group
 
 # === Load .env variables (if running locally) ===
 load_dotenv()
@@ -1123,46 +1123,31 @@ async def join_group(payload: dict = Body(...)):
         return {"error": "userId and groupId required"}
 
     project_id = creds.project_id
-    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    )
     active_resp = await asyncio.to_thread(rest_session.get, active_url)
     if active_resp.status_code == 200:
         active_fields = _decode_document(active_resp.json())
         if active_fields.get("status") != "completed" and active_fields.get("groupId") not in (None, group_id):
             return {"error": "active quest already"}
-    group_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/"
-        f"databases/(default)/documents/group_quests/{group_id}"
-    )
-    resp = await asyncio.to_thread(rest_session.get, group_url)
-    if resp.status_code != 200:
-        return {"error": "Group not found"}
-    fields = _decode_document(resp.json())
-    if fields.get("completed"):
-        return {"error": "Group completed"}
 
-    members = fields.get("members", [])
-    if not any(m.get("userId") == user_id for m in members):
-        members.append({"userId": user_id, "displayName": display_name or user_id})
-    progress = fields.get("progress", {})
-    if user_id not in progress:
-        progress[user_id] = []
-
-    fields.update({"members": members, "progress": progress})
-    body = {"fields": _encode_fields(fields)}
-    await asyncio.to_thread(rest_session.patch, group_url, json=body)
+    try:
+        group_doc = await add_user_to_group(user_id, group_id, display_name)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
 
     active_doc = {
         "groupId": group_id,
-        "questId": fields.get("questId"),
+        "questId": group_doc.get("questId"),
         "status": "active",
-        "visitedStops": progress[user_id],
+        "visitedStops": group_doc.get("progress", {}).get(user_id, []),
         "startedAt": datetime.utcnow().isoformat(),
     }
-    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_body = {"fields": _encode_fields(active_doc)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
-    return {"status": "joined", "questId": fields.get("questId")}
+    return {"status": "joined", "questId": group_doc.get("questId")}
 
 
 @app.post("/track-stop-visit")
