@@ -90,3 +90,9 @@ export async function createGroupQuest(userId: string, questId: string, displayN
   if (!res.ok) throw new Error('Group quest create failed');
   return res.json();
 }
+
+export async function getGroupQuest(groupId: string) {
+  const res = await fetch(`${BASE_URL}/group-quest/${groupId}`);
+  if (!res.ok) throw new Error('Fetch group quest failed');
+  return res.json();
+}

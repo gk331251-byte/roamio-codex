@@ -25,6 +25,7 @@ import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 import TagEditor from "./components/TagEditor";
 import Explore from "./components/Explore";
+import GroupQuestView from "./components/GroupQuestView";
 import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import CookieConsent from "react-cookie-consent";
@@ -70,6 +71,7 @@ function App() {
         <Route path="/history" element={<QuestHistory />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/live" element={<QuestLivePage />} />
+        <Route path="/group/:groupId" element={<GroupQuestView />} />
         <Route path="/community" element={<CommunityFeed />} />
         <Route path="/community/new" element={<CreateCommunity />} />
         <Route path="/community/:id" element={<CommunityPage />} />
