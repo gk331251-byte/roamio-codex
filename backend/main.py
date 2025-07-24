@@ -19,7 +19,12 @@ from dotenv import load_dotenv
 from emotion_utils import generate_filtered_quest_payload
 from stripe_utils import create_subscription_session, verify_webhook
 from auth_utils import is_premium_user
-from firestore_utils import write_custom_quest, get_custom_quest as fs_get_custom_quest, query_custom_quests_by_creator
+from firestore_utils import (
+    write_custom_quest,
+    get_custom_quest as fs_get_custom_quest,
+    query_custom_quests_by_creator,
+)
+from group_utils import create_group_document
 
 # === Load .env variables (if running locally) ===
 load_dotenv()
@@ -1082,30 +1087,17 @@ async def create_group_quest(payload: dict = Body(...)):
         return {"error": "userId and questId required"}
 
     project_id = creds.project_id
-    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    active_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/"
+        f"databases/(default)/documents/user_active_quest/{user_id}"
+    )
     active_resp = await asyncio.to_thread(rest_session.get, active_url)
     if active_resp.status_code == 200:
         active_fields = _decode_document(active_resp.json())
         if active_fields.get("status") != "completed":
             return {"error": "active quest already"}
 
-    group_id = hashlib.sha1(f"{user_id}-{quest_id}-{datetime.utcnow()}".encode()).hexdigest()[:8]
-
-    member_entry = {"userId": user_id, "displayName": display_name or user_id}
-    group_doc = {
-        "questId": quest_id,
-        "members": [member_entry],
-        "progress": {user_id: []},
-        "invitedBy": user_id,
-        "completed": False,
-        "createdAt": datetime.utcnow().isoformat(),
-    }
-    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
-    body = {"fields": _encode_fields(group_doc)}
-    resp = await asyncio.to_thread(rest_session.patch, group_url, json=body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+    group_id, _ = await create_group_document(user_id, quest_id, display_name)
 
     active_doc = {
         "groupId": group_id,
@@ -1137,7 +1129,10 @@ async def join_group(payload: dict = Body(...)):
         active_fields = _decode_document(active_resp.json())
         if active_fields.get("status") != "completed" and active_fields.get("groupId") not in (None, group_id):
             return {"error": "active quest already"}
-    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    group_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/"
+        f"databases/(default)/documents/group_quests/{group_id}"
+    )
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
         return {"error": "Group not found"}
@@ -1180,7 +1175,10 @@ async def track_stop_visit(payload: dict = Body(...)):
         return {"error": "groupId, userId and placeIndex required"}
 
     project_id = creds.project_id
-    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    group_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/"
+        f"databases/(default)/documents/group_quests/{group_id}"
+    )
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
         return {"error": "Group not found"}
@@ -1226,7 +1224,10 @@ async def complete_group_quest(payload: dict = Body(...)):
         return {"error": "groupId and userId required"}
 
     project_id = creds.project_id
-    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    group_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/"
+        f"databases/(default)/documents/group_quests/{group_id}"
+    )
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
         return {"error": "Group not found"}
@@ -1269,7 +1270,10 @@ async def get_active_quest(user_id: str):
 
     group_ok = True
     if active.get("groupId"):
-        gurl = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{active['groupId']}"
+        gurl = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/"
+            f"databases/(default)/documents/group_quests/{active['groupId']}"
+        )
         gresp = await asyncio.to_thread(rest_session.get, gurl)
         if gresp.status_code != 200:
             group_ok = False
@@ -1293,7 +1297,10 @@ async def leave_group(payload: dict = Body(...)):
         return {"error": "userId and groupId required"}
 
     project_id = creds.project_id
-    group_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/groups/{group_id}"
+    group_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/"
+        f"databases/(default)/documents/group_quests/{group_id}"
+    )
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code == 200:
         fields = _decode_document(resp.json())
