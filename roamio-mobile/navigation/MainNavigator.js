@@ -1,14 +1,16 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
 import QuestLiveScreen from '../screens/QuestLiveScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import { AppContext } from '../context/AppContext';
 
 const Stack = createNativeStackNavigator();
 
-export default function MainNavigator({ user }) {
+export default function MainNavigator() {
+  const { user } = useContext(AppContext);
   return (
     <Stack.Navigator>
       {user ? (
