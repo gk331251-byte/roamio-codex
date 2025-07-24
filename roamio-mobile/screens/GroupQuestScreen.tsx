@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef, useContext } from 'react';
-import { View, Text, FlatList, Button } from 'react-native';
+import { View, Text, FlatList, Button, TouchableOpacity } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { AppContext } from '../context/AppContext';
 import { db } from '../firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { decode } from '@googlemaps/polyline-codec';
 import { trackStopVisit } from '../lib/api';
+import GroupChat from '../components/GroupChat';
 import { toast } from '../lib/toast';
 export default function GroupQuestScreen({ route }) {
   const { groupId, quest } = route.params;
@@ -13,6 +14,7 @@ export default function GroupQuestScreen({ route }) {
   const [group, setGroup] = useState<any>(null);
   const [poly, setPoly] = useState<{lat:number,lng:number}[]>([]);
   const mapRef = useRef<MapView>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'group_quests', groupId), snap => {
@@ -81,6 +83,12 @@ export default function GroupQuestScreen({ route }) {
           );
         })}
       </MapView>
+      <TouchableOpacity
+        onPress={() => setChatOpen(true)}
+        className="absolute bottom-20 right-4 bg-white px-3 py-1 rounded-full border"
+      >
+        <Text>Chat</Text>
+      </TouchableOpacity>
       <View className="p-2">
         <FlatList
           data={quest.places}
@@ -93,6 +101,7 @@ export default function GroupQuestScreen({ route }) {
           <Button title="Mark as Visited" onPress={handleVisit} />
         )}
       </View>
+      <GroupChat visible={chatOpen} onClose={() => setChatOpen(false)} groupId={groupId} />
     </View>
   );
 }

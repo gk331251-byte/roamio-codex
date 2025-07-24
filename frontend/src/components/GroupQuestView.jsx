@@ -9,6 +9,7 @@ import { db } from '../firebase';
 import { getAuth } from 'firebase/auth';
 import XPToast from './XPToast';
 import BadgePopup from './BadgePopup';
+import GroupChatBox from './GroupChatBox';
 
 export default function GroupQuestView() {
   const { groupId } = useParams();
@@ -116,6 +117,7 @@ export default function GroupQuestView() {
             <XPToast message={xpMsg} onHide={() => setXpMsg('')} />
           </div>
           <BadgePopup badge={newBadge} onClose={() => setNewBadge('')} />
+          <GroupChatBox groupId={groupId} />
         </>
       ) : (
         <p>Loading...</p>
