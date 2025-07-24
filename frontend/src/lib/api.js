@@ -674,3 +674,31 @@ export async function fetchAnalytics(userId, days = 30) {
   return resp.json();
 }
 
+export async function adminCreateCustomQuest(userId, quest) {
+  const resp = await fetch(`${BASE_URL}/admin/create-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, quest })
+  });
+  if (!resp.ok) throw new Error('Failed to create quest');
+  return resp.json();
+}
+
+export async function adminEditCustomQuest(userId, questId, data) {
+  const resp = await fetch(`${BASE_URL}/admin/edit-custom-quest`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, questId, data })
+  });
+  if (!resp.ok) throw new Error('Failed to update quest');
+  return resp.json();
+}
+
+export async function adminDeleteCustomQuest(userId, questId) {
+  const url = new URL(`${BASE_URL}/admin/delete-custom-quest`);
+  url.searchParams.set('userId', userId);
+  url.searchParams.set('questId', questId);
+  const resp = await fetch(url.toString(), { method: 'DELETE' });
+  if (!resp.ok) throw new Error('Failed to delete quest');
+  return resp.json();
+}

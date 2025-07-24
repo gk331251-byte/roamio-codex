@@ -26,6 +26,7 @@ import CommunityPage from "./components/CommunityPage";
 import CreateCommunity from "./components/CreateCommunity";
 import AdminDashboard from "./pages/AdminDashboard";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
+import AdminQuestEditor from "./pages/AdminQuestEditor";
 import CustomQuestBuilder from "./components/CustomQuestBuilder";
 import PublicQuestPage from "./components/PublicQuestPage";
 import TagEditor from "./components/TagEditor";
@@ -99,6 +100,7 @@ function App() {
         <Route path="/explore" element={<Explore />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/admin/analytics" element={<AnalyticsDashboard />} />
+        <Route path="/admin/quest-editor" element={<AdminQuestEditor />} />
         <Route path="/quest-plus" element={<Pricing />} />
         <Route path="/pricing" element={<Pricing />} />
         <Route path="/custom" element={<CustomQuestBuilder />} />

@@ -3218,3 +3218,52 @@ async def redeem_promo_code(request: Request, payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, code_url, json={"fields": _encode_fields(code_data)})
     return {"status": "redeemed", **effects}
 
+
+@app.post("/admin/create-custom-quest")
+async def admin_create_custom_quest(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest = payload.get("quest")
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not isinstance(quest, dict):
+        return {"error": "quest required"}
+    try:
+        quest_id = await write_custom_quest(quest, user_id)
+        await log_admin_event("admin_create_custom", {"admin": user_id, "questId": quest_id})
+        return {"questId": quest_id}
+    except Exception as e:
+        print("admin_create_custom_quest", e)
+        return JSONResponse(status_code=500, content={"error": "failed"})
+
+
+@app.patch("/admin/edit-custom-quest")
+async def admin_edit_custom_quest(payload: dict = Body(...)):
+    user_id = payload.get("userId")
+    quest_id = payload.get("questId")
+    data = payload.get("data", {})
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not quest_id:
+        return {"error": "questId required"}
+    data["updatedAt"] = datetime.utcnow().isoformat()
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    body = {"fields": _encode_fields(data)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    await log_admin_event("admin_edit_custom", {"admin": user_id, "questId": quest_id})
+    return {"status": "updated"}
+
+
+@app.delete("/admin/delete-custom-quest")
+async def admin_delete_custom_quest(userId: str = Query(...), questId: str = Query(...)):
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{questId}"
+    await asyncio.to_thread(rest_session.delete, url)
+    await log_admin_event("admin_delete_custom", {"admin": userId, "questId": questId})
+    return {"status": "deleted"}
+
