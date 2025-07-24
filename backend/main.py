@@ -26,6 +26,31 @@ from firestore_utils import (
 )
 from group_utils import create_group_document, add_user_to_group
 
+# ----- XP & Level Helpers -----
+LEVEL_THRESHOLDS = [
+    0,   # Level 1
+    50,  # Level 2
+    120, # Level 3
+    200, # Level 4
+    300, # Level 5
+    420, # Level 6
+    550, # Level 7
+    700, # Level 8
+    880, # Level 9
+    1080 # Level 10
+]
+
+
+def get_level_from_xp(xp: int) -> int:
+    """Return user level based on total XP."""
+    level = 1
+    for idx, threshold in enumerate(LEVEL_THRESHOLDS, start=1):
+        if xp >= threshold:
+            level = idx
+        else:
+            break
+    return level
+
 # === Load .env variables (if running locally) ===
 load_dotenv()
 
@@ -298,6 +323,7 @@ async def generate_quest(
     time_limit: int = Body(...),
     token: str = Body(...),
     user_id: str | None = Body(None),
+    difficulty: str = Body("Easy"),
     lat: float | None = Body(None),
     lng: float | None = Body(None),
 ):
@@ -309,11 +335,25 @@ async def generate_quest(
 
     usage_count = 0
     user_is_premium = False
+    user_level = 1
     if user_id:
         usage_count = await get_daily_usage(user_id)
         user_is_premium = await check_premium(user_id)
-        if not user_is_premium and usage_count >= 3:
-            return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
+        if not user_is_premium:
+            # fetch level from Firestore
+            project_id = creds.project_id
+            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+            resp = await asyncio.to_thread(rest_session.get, url)
+            if resp.status_code == 200:
+                user_doc = _decode_document(resp.json())
+                user_level = int(user_doc.get("level", 1))
+            if usage_count >= 3:
+                return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
+            # difficulty gating
+            req_diff = difficulty.title()
+            required_level = 1 if req_diff == "Easy" else 3 if req_diff == "Medium" else 6
+            if user_level < required_level:
+                raise HTTPException(status_code=403, detail="You haven't unlocked {} quests yet.".format(req_diff))
 
     try:
         if lat is not None and lng is not None:
@@ -497,7 +537,7 @@ async def generate_quest(
     quest_obj = {
         "questText": quest_text,
         "places": ordered,
-        "difficulty": "Easy",
+        "difficulty": difficulty.title(),
         "route": {
             "legs": route_legs,
             "polyline": polyline,
@@ -680,11 +720,14 @@ async def complete_quest(payload: dict = Body(...)):
     if resp.status_code == 200:
         user_data = _decode_document(resp.json())
 
-    xp = user_data.get("xp", 0) + 50
+    difficulty = (payload.get("difficulty") or "Easy").title()
+    xp_earned = 25 if difficulty == "Easy" else 50 if difficulty == "Medium" else 75
+    total_xp = user_data.get("totalXP", 0) + xp_earned
+    level = get_level_from_xp(total_xp)
     stats = user_data.get("stats", {})
     badges = user_data.get("badges", {})
     stats["totalQuestsCompleted"] = stats.get("totalQuestsCompleted", 0) + 1
-    stats["totalXP"] = stats.get("totalXP", 0) + 50
+    stats["totalXP"] = total_xp
 
     if stats.get("totalQuestsCompleted", 0) >= 5:
         badges["explorer"] = True
@@ -692,7 +735,8 @@ async def complete_quest(payload: dict = Body(...)):
     user_body = {
         "fields": _encode_fields(
             {
-                "xp": xp,
+                "totalXP": total_xp,
+                "level": level,
                 "stats": stats,
                 "badges": badges,
                 "lastActive": timestamp,
@@ -726,7 +770,13 @@ async def complete_quest(payload: dict = Body(...)):
             print("Firestore REST error", fr.text)
             fr.raise_for_status()
 
-    return {"status": "completed", "newXP": xp, "badges": badges}
+    return {
+        "status": "completed",
+        "xpEarned": xp_earned,
+        "newTotal": total_xp,
+        "level": level,
+        "badges": badges,
+    }
 
 
     if not all([user_id, quest_id, quest_data]):
@@ -993,27 +1043,42 @@ async def track_visit(payload: dict = Body(...)):
     if resp.status_code == 200:
         user_data = _decode_document(resp.json())
 
-    xp = user_data.get("xp", 0)
+    total_xp = user_data.get("totalXP", 0)
+    level = user_data.get("level", 1)
     stats = user_data.get("stats", {})
     badges = user_data.get("badges", {})
 
     if new_visit:
-        xp += 10
+        total_xp += 10
+        level = get_level_from_xp(total_xp)
         stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
-        stats["totalXP"] = stats.get("totalXP", 0) + 10
+        stats["totalXP"] = total_xp
 
     if len(visited) == 10:
         badges["adventurer"] = True
     if stats.get("totalQuestsCompleted", 0) >= 5:
         badges["explorer"] = True
 
-    user_body = {"fields": _encode_fields({"xp": xp, "stats": stats, "badges": badges})}
+    user_body = {
+        "fields": _encode_fields({
+            "totalXP": total_xp,
+            "level": level,
+            "stats": stats,
+            "badges": badges,
+        })
+    }
     resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
 
-    return {"status": "ok", "visitedIndices": visited, "xp": xp, "badges": badges}
+    return {
+        "status": "ok",
+        "visitedIndices": visited,
+        "totalXP": total_xp,
+        "level": level,
+        "badges": badges,
+    }
 
 
 @app.post("/upload-postcard")
@@ -1207,24 +1272,26 @@ async def track_stop_visit(payload: dict = Body(...)):
     if resp.status_code == 200:
         user_data = _decode_document(resp.json())
 
-    xp = user_data.get("xp", 0)
+    total_xp = user_data.get("totalXP", 0)
+    level = user_data.get("level", 1)
     stats = user_data.get("stats", {})
     badges = user_data.get("badges", {})
 
     if new_visit:
-        xp += 10
+        total_xp += 10
+        level = get_level_from_xp(total_xp)
         stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
-        stats["totalXP"] = stats.get("totalXP", 0) + 10
+        stats["totalXP"] = total_xp
 
     if stats.get("totalStopsVisited", 0) >= 10:
         badges["adventurer"] = True
     if stats.get("totalQuestsCompleted", 0) >= 5:
         badges["explorer"] = True
 
-    user_body = {"fields": _encode_fields({"xp": xp, "stats": stats, "badges": badges})}
+    user_body = {"fields": _encode_fields({"totalXP": total_xp, "level": level, "stats": stats, "badges": badges})}
     await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
 
-    return {"visitedStops": user_progress, "xp": xp, "badges": badges}
+    return {"visitedStops": user_progress, "totalXP": total_xp, "level": level, "badges": badges}
 
 
 @app.post("/complete-group-quest")
@@ -1298,6 +1365,18 @@ async def get_active_quest(user_id: str):
         return {}
 
     return active
+
+
+@app.get("/user-xp/{user_id}")
+async def get_user_xp(user_id: str):
+    """Return XP and level for the given user."""
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {"totalXP": 0, "level": 1}
+    data = _decode_document(resp.json())
+    return {"totalXP": data.get("totalXP", 0), "level": data.get("level", 1)}
 
 
 @app.post("/leave-group")

@@ -53,6 +53,13 @@ service cloud.firestore {
       allow read, update, delete: if request.auth != null && request.auth.uid in resource.data.members && !isBanned();
     }
 
+    match /group_chats/{groupId}/messages/{msgId} {
+      let group = get(/databases/$(database)/documents/group_quests/$(groupId)).data;
+      let members = group.progress.keys();
+      allow read: if request.auth != null && request.auth.uid in members && !isBanned();
+      allow write: if request.auth != null && request.auth.uid in members && isPremium(request.auth.uid) && !isBanned();
+    }
+
     // ===== Communities =====
     match /communities/{communityId} {
       allow read: if true;

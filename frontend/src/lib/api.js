@@ -1,5 +1,7 @@
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8080";
 import { getAuth } from 'firebase/auth';
+import { db } from '../firebase';
+import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from 'firebase/firestore';
 
 /**
  * Fetches a generated quest from the backend
@@ -8,7 +10,7 @@ import { getAuth } from 'firebase/auth';
  * @param {number} timeLimit - Time limit in minutes
  * @param {string} token - Firebase user token for auth
  */
-export async function generateQuest(city, mood, timeLimit, token, userId, coords) {
+export async function generateQuest(city, mood, timeLimit, token, userId, coords, difficulty = 'Easy') {
   if (!city || !Array.isArray(mood) || mood.length === 0 || typeof timeLimit !== 'number') {
     throw new Error("Invalid input: city, mood[], and numeric timeLimit are required.");
   }
@@ -28,6 +30,7 @@ export async function generateQuest(city, mood, timeLimit, token, userId, coords
       user_id: userId,
       lat: coords?.lat,
       lng: coords?.lng,
+      difficulty,
     }),
   });
 
@@ -91,6 +94,12 @@ export async function getUserQuests(userId) {
   if (!resp.ok) {
     throw new Error('Failed to load quests');
   }
+  return resp.json();
+}
+
+export async function getUserXP(userId) {
+  const resp = await fetch(`${BASE_URL}/user-xp/${userId}`);
+  if (!resp.ok) throw new Error('Failed to fetch XP');
   return resp.json();
 }
 
@@ -532,4 +541,27 @@ export async function banUser(userId, targetId) {
   if (!resp.ok) throw new Error('Failed to ban user');
   return resp.json();
 }
+
+// ===== Group Chat =====
+
+export async function sendMessage(groupId, senderId, senderName, text) {
+  await addDoc(collection(db, 'group_chats', groupId, 'messages'), {
+    senderId,
+    senderName,
+    text,
+    timestamp: serverTimestamp(),
+  });
+}
+
+export function fetchChatStream(groupId, callback) {
+  const q = query(
+    collection(db, 'group_chats', groupId, 'messages'),
+    orderBy('timestamp', 'asc')
+  );
+  return onSnapshot(q, (snap) => {
+    const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    callback(msgs);
+  });
+}
+
 
