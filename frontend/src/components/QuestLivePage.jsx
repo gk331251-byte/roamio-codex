@@ -40,6 +40,9 @@ export default function QuestLivePage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [skipSharePrompt, setSkipSharePromptState] = useState(false);
   const [showWatermark, setShowWatermark] = useState(true);
+  const [publicOptIn, setPublicOptIn] = useState(false);
+  const [showName, setShowName] = useState(true);
+  const [showCity, setShowCity] = useState(true);
   const [etaText, setEtaText] = useState("");
   const [etaError, setEtaError] = useState("");
   const [etaRefresh, setEtaRefresh] = useState(0);
@@ -59,6 +62,9 @@ export default function QuestLivePage() {
           setBadges(data.badges || {});
           setSkipSharePromptState(!!data.skipSharePrompt);
           setShowWatermark(data.showRoamioWatermark !== false);
+          setPublicOptIn(!!data.publicSharingOptIn);
+          setShowName(data.showUsernameOnShare !== false);
+          setShowCity(data.showCityOnShare !== false);
         }
       })
       .catch((e) => console.error('user fetch error', e));
@@ -341,10 +347,13 @@ export default function QuestLivePage() {
     setSaving(true);
     setCompleteMsg("");
     try {
-      const share = window.confirm('Share this quest publicly?');
+      let share = publicOptIn;
+      if (!publicOptIn) {
+        share = window.confirm('Share this quest publicly?');
+      }
       const res = await completeQuest(user.uid, questId, {
         title: quest.title,
-        city: quest.city,
+        city: showCity ? quest.city : null,
         mood: quest.mood,
         difficulty: quest.difficulty,
         questText: quest.questText,
@@ -353,7 +362,9 @@ export default function QuestLivePage() {
         visitedIndices,
         isDemo: questId.startsWith('demo_'),
         public: share,
-        displayName: user.displayName,
+        displayName: showName ? user.displayName : null,
+        shareName: showName,
+        shareCity: showCity,
       });
       if (groupId) {
         await completeGroupQuest(groupId, user.uid);
