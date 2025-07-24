@@ -11,11 +11,15 @@ import openai
 import certifi
 from google.cloud import firestore_v1, storage
 from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession
+from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
+from google.oauth2 import id_token
 
 
 from dotenv import load_dotenv
 from emotion_utils import generate_filtered_quest_payload
+from stripe_utils import create_subscription_session, verify_webhook
+from auth_utils import is_premium_user
+from firestore_utils import write_custom_quest, get_custom_quest as fs_get_custom_quest, query_custom_quests_by_creator
 
 # === Load .env variables (if running locally) ===
 load_dotenv()
@@ -254,6 +258,13 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
 
 app = FastAPI()
 
+# Manual fallbacks for vague regions
+CITY_FALLBACK_MAP = {
+    "hudson valley": "New York",
+    "catskills": "Albany",
+    "poconos": "Philadelphia",
+}
+
 # ✅ Replace this with your actual frontend deployed domain
 allowed_origins = [
     "http://localhost:5173",  # Vite dev server (local)
@@ -282,6 +293,8 @@ async def generate_quest(
     time_limit: int = Body(...),
     token: str = Body(...),
     user_id: str | None = Body(None),
+    lat: float | None = Body(None),
+    lng: float | None = Body(None),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
     if not city or not moods:
@@ -298,11 +311,98 @@ async def generate_quest(
             return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
 
     try:
-        geocode = gmaps.geocode(city)
-        city_location = geocode[0]["geometry"]["location"]
+        if lat is not None and lng is not None:
+            city_location = {"lat": float(lat), "lng": float(lng)}
+        else:
+            geocode = gmaps.geocode(city)
+            city_location = geocode[0]["geometry"]["location"]
     except Exception as e:
         print(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
+
+
+    attempts = 0
+    fallback_city = None
+    selected = []
+    while attempts < 2:
+        try:
+            response = gmaps.places_nearby(
+                location=(city_location["lat"], city_location["lng"]),
+                radius=2000,
+                type="tourist_attraction",
+            )
+            places_results = response.get("results", [])
+        except Exception as e:
+            print(f"Places API error: {e}")
+            return {"error": "Failed to fetch places"}
+
+        candidates = []
+        for place in places_results:
+            try:
+                name = place.get("name")
+                if not name or is_chain(name):
+                    continue
+                pid = place.get("place_id")
+                cached_place = get_cached_place(pid) if pid else None
+                details = None
+                if not cached_place and pid:
+                    try:
+                        details = gmaps.place(pid)
+                    except Exception:
+                        details = None
+                tags = (
+                    cached_place.get("tags") if cached_place else compute_place_tags(place, details)
+                )
+                if not cached_place and pid:
+                    save_place_to_cache(pid, {"tags": tags, "name": name})
+                if preferred:
+                    overlap = len(set(tags) & set(preferred))
+                else:
+                    overlap = 1
+                if overlap <= 0:
+                    continue
+                loc = place["geometry"]["location"]
+                typ = place.get("types", ["Unknown"])[0]
+                candidates.append({
+                    "name": name,
+                    "type": typ,
+                    "lat": float(loc["lat"]),
+                    "lng": float(loc["lng"]),
+                    "tags": tags,
+                    "score": overlap,
+                    "rating": place.get("rating", 0),
+                })
+            except Exception as e:
+                print("Skipping place", e)
+        candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
+
+        selected = []
+        seen_types = set()
+        for c in candidates:
+            if c["type"] in seen_types:
+                continue
+            selected.append(c)
+            seen_types.add(c["type"])
+            if len(selected) >= 5:
+                break
+
+        if len(selected) >= 3:
+            break
+
+        fallback_city = CITY_FALLBACK_MAP.get(city.lower())
+        if not fallback_city:
+            break
+        attempts += 1
+        try:
+            geo = gmaps.geocode(fallback_city)
+            city_location = geo[0]["geometry"]["location"]
+            city = fallback_city
+        except Exception as e:
+            print("Fallback geocode error", e)
+            break
+
+    if len(selected) < 3:
+        return {"error": "Not enough matching places"}
 
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
@@ -310,75 +410,18 @@ async def generate_quest(
     cached = get_cached_quest(hash_key)
     if cached:
         print("Using cached quest")
-        return {"quest": cached}
+        result = {"quest": cached}
+        if fallback_city:
+            result["fallbackCity"] = fallback_city
+        return result
 
-    try:
-        response = gmaps.places_nearby(
-            location=(city_location["lat"], city_location["lng"]),
-            radius=2000,
-            type="tourist_attraction",
-        )
-        places_results = response.get("results", [])
-    except Exception as e:
-        print(f"Places API error: {e}")
-        return {"error": "Failed to fetch places"}
-
-    candidates = []
-    for place in places_results:
-        try:
-            name = place.get("name")
-            if not name or is_chain(name):
-                continue
-            pid = place.get("place_id")
-            cached_place = get_cached_place(pid) if pid else None
-            details = None
-            if not cached_place and pid:
-                try:
-                    details = gmaps.place(pid)
-                except Exception:
-                    details = None
-            tags = (
-                cached_place.get("tags") if cached_place else compute_place_tags(place, details)
-            )
-            if not cached_place and pid:
-                save_place_to_cache(pid, {"tags": tags, "name": name})
-            if preferred:
-                overlap = len(set(tags) & set(preferred))
-            else:
-                overlap = 1
-            if overlap <= 0:
-                continue
-            loc = place["geometry"]["location"]
-            typ = place.get("types", ["Unknown"])[0]
-            candidates.append({
-                "name": name,
-                "type": typ,
-                "lat": float(loc["lat"]),
-                "lng": float(loc["lng"]),
-                "tags": tags,
-                "score": overlap,
-                "rating": place.get("rating", 0),
-            })
-        except Exception as e:
-            print("Skipping place", e)
-    candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
-
-    selected = []
-    seen_types = set()
-    for c in candidates:
-        if c["type"] in seen_types:
-            continue
-        selected.append(c)
-        seen_types.add(c["type"])
-        if len(selected) >= 5:
-            break
-
-    if len(selected) < 3:
-        return {"error": "Not enough matching places"}
-
-    origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+    if lat is not None and lng is not None:
+        origin = f"{lat},{lng}"
+        waypoints = [f"{p['lat']},{p['lng']}" for p in selected[:-1]]
+    else:
+        origin = f"{selected[0]['lat']},{selected[0]['lng']}"
+        waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
     destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
-    waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
 
     try:
         directions = gmaps.directions(
@@ -397,8 +440,16 @@ async def generate_quest(
     legs = route.get("legs", [])
     polyline = route.get("overview_polyline", {}).get("points", "")
 
-    ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
-    place_names = ", ".join([p["name"] for p in ordered])
+    if lat is not None and lng is not None:
+        ordered_waypoints = [selected[i] for i in waypoint_order]
+        ordered = (
+            [{"name": "Your Location", "type": "start", "lat": float(lat), "lng": float(lng), "tags": []}]
+            + ordered_waypoints
+            + [selected[-1]]
+        )
+    else:
+        ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
+    place_names = ", ".join([p["name"] for p in ordered if p.get("type") != "start"])
 
     if openai.api_key:
         prompt = (
@@ -460,7 +511,10 @@ async def generate_quest(
     save_quest_to_firestore(hash_key, quest_obj)
     if user_id:
         await increment_daily_usage(user_id)
-    return {"quest": quest_obj}
+    result = {"quest": quest_obj}
+    if fallback_city:
+        result["fallbackCity"] = fallback_city
+    return result
 
 
 
@@ -521,6 +575,28 @@ async def check_premium(user_id: str) -> bool:
         fields = _decode_document(resp.json())
         return fields.get("premium") is True
     return False
+
+
+async def _verify_token(auth_header: str | None) -> str | None:
+    """Return user ID if bearer token is valid."""
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ", 1)[1]
+    try:
+        info = id_token.verify_oauth2_token(token, GoogleRequest())
+        return info.get("uid") or info.get("sub")
+    except Exception as e:
+        print("Token verify failed", e)
+        return None
+
+
+async def log_admin_event(event: str, payload: dict):
+    """Write a simple event document to admin_logs."""
+    doc_id = hashlib.sha1(f"{event}-{datetime.utcnow()}".encode()).hexdigest()[:12]
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/admin_logs/{doc_id}"
+    body = {"fields": _encode_fields({"event": event, "payload": payload, "created": datetime.utcnow().isoformat()})}
+    await asyncio.to_thread(rest_session.patch, url, json=body)
 
 
 async def get_daily_usage(user_id: str) -> int:
@@ -963,7 +1039,9 @@ async def reroll_quest(payload: dict = Body(...)):
     time_limit = payload.get("time_limit", 60)
     token = payload.get("token", "")
     # Reuse generate_quest logic
-    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng)
 
 
 @app.post("/get-directions")
@@ -1354,17 +1432,7 @@ async def create_checkout_session(payload: dict = Body(...)):
     stripe_key = os.getenv("STRIPE_SECRET_KEY")
     if stripe_key:
         try:
-            import stripe
-            stripe.api_key = stripe_key
-            session = await asyncio.to_thread(
-                stripe.checkout.Session.create,
-                payment_method_types=["card"],
-                mode="payment",
-                line_items=[{"price": os.getenv("STRIPE_PRICE_ID", "price_123"), "quantity": 1}],
-                customer_email=email,
-                success_url=success,
-                cancel_url=cancel,
-            )
+            session = await create_subscription_session(user_id, email, success, cancel)
             return {"url": session.url}
         except Exception as e:
             print("Stripe error", e)
@@ -1405,6 +1473,52 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
     return {"premium": premium}
 
 
+@app.post("/validate-premium")
+async def validate_premium_token(request: Request):
+    """Return premium status for the authenticated user."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+    premium = fields.get("premium") is True
+    return {"isPremium": premium}
+
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events."""
+    stripe_key = os.getenv("STRIPE_SECRET_KEY")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    if not stripe_key or not webhook_secret:
+        return {"status": "disabled"}
+
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = verify_webhook(payload, sig)
+    except Exception as e:
+        print("Webhook verify error", e)
+        return JSONResponse(status_code=400, content={"error": "invalid"})
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        uid = session.get("metadata", {}).get("uid") or session.get("client_reference_id")
+        if uid:
+            project_id = creds.project_id
+            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+            resp = await asyncio.to_thread(rest_session.get, url)
+            fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+            fields["premium"] = True
+            body = {"fields": _encode_fields(fields)}
+            await asyncio.to_thread(rest_session.patch, url, json=body)
+            await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+
+    return {"received": True}
+
+
 @app.post("/update-active-quest")
 async def update_active_quest(payload: dict = Body(...)):
     """Patch the user's active quest document with extra data."""
@@ -1429,86 +1543,51 @@ async def update_active_quest(payload: dict = Body(...)):
 
 
 @app.post("/create-custom-quest")
-async def create_custom_quest(payload: dict = Body(...)):
-    """Store a manually crafted quest."""
-    user_id = payload.get("user_id")
-    places = payload.get("places", [])
-    print(f"🛠️ Received custom quest request from {user_id}")
-    print(f"📦 Payload: {payload}")
-    if not user_id or len(places) < 2:
-        return {"error": "user_id and at least 2 places required"}
-
-    is_premium = await check_premium(user_id)
-    if not is_premium:
+async def create_custom_quest(request: Request, payload: dict = Body(...)):
+    """Create a custom quest for the authenticated premium user."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    if not await is_premium_user(uid):
         return JSONResponse(status_code=403, content={"error": "Premium required"})
 
+    location_list = payload.get("locationList", [])
+    if len(location_list) < 2:
+        return JSONResponse(status_code=400, content={"error": "locationList must have at least 2 entries"})
+
+    data = {
+        "title": payload.get("title") or "Custom Quest",
+        "questText": payload.get("questText", ""),
+        "locationList": location_list,
+        "mood": payload.get("mood", []),
+        "isPublic": payload.get("isPublic", False),
+    }
+    if payload.get("remixedFrom"):
+        data["remixedFrom"] = payload["remixedFrom"]
+
     try:
-        project_id = creds.project_id
-        quest_id = hashlib.sha1(
-            f"{user_id}-{datetime.utcnow()}-{payload.get('title','custom')}".encode()
-        ).hexdigest()[:12]
-
-        status = payload.get("status", "draft")
-        public = payload.get("public", False)
-
-        quest_doc = {
-            "title": payload.get("title") or "Custom Quest",
-            "moodTags": payload.get("mood_tags", []),
-            "places": places,
-            "timeLimit": payload.get("time_limit", 60),
-            "customPrompt": payload.get("custom_prompt") or "",
-            "createdBy": user_id,
-            "createdAt": datetime.utcnow().isoformat(),
-            "type": "custom",
-            "status": status,
-            "public": public,
-            "likesCount": 0,
-            "viewsCount": 0,
-            "replaysCount": 0,
-        }
-        if status == "published" or public:
-            quest_doc["publishedAt"] = datetime.utcnow().isoformat()
-
-        body = {"fields": _encode_fields(quest_doc)}
-
-        user_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-        )
-        resp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
-        if resp.status_code != 200:
-            print("Firestore REST error", resp.text)
-            resp.raise_for_status()
-
-        global_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-        )
-        await asyncio.to_thread(rest_session.patch, global_url, json=body)
-
-        group_id = payload.get("group_id")
-        if group_id:
-            g_url = (
-                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}/{quest_id}"
-            )
-            await asyncio.to_thread(rest_session.patch, g_url, json=body)
-
-        return {"questId": quest_id, "quest": quest_doc}
+        quest_id = await write_custom_quest(data, uid)
+        return {"questId": quest_id}
     except Exception as e:
         print("create_custom_quest error", e)
         return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
 
 
-@app.get("/get-custom-quest/{quest_id}")
-async def get_custom_quest(quest_id: str):
-    """Fetch a custom quest by ID."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
-    resp = await asyncio.to_thread(rest_session.get, url)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
-    return resp.json()
+@app.get("/custom-quests/{quest_id}")
+async def get_custom_quest_endpoint(quest_id: str):
+    """Publicly fetch a custom quest by its ID."""
+    quest = await fs_get_custom_quest(quest_id)
+    if not quest:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    quest["id"] = quest_id
+    return quest
+
+
+@app.get("/custom-quests")
+async def list_custom_quests(creatorId: str = Query(...), publicOnly: bool = Query(False)):
+    """Return custom quests filtered by creator ID."""
+    quests = await query_custom_quests_by_creator(creatorId, public_only=publicOnly)
+    return {"quests": quests}
 
 
 @app.post("/publish-custom-quest")
