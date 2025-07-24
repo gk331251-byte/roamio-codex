@@ -1301,6 +1301,20 @@ async def leave_group(payload: dict = Body(...)):
     return {"status": "left"}
 
 
+@app.get("/group-quest/{group_id}")
+async def get_group_quest(group_id: str):
+    """Fetch a group quest document via Firestore REST."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    return resp.json()
+
+
 @app.post("/report-quest")
 async def report_quest(payload: dict = Body(...)):
     """Receive a quest report and store in Firestore."""

@@ -167,6 +167,14 @@ export async function completeGroupQuest(groupId, userId) {
   return resp.json();
 }
 
+export async function getGroupQuest(groupId) {
+  const resp = await fetch(`${BASE_URL}/group-quest/${groupId}`);
+  if (!resp.ok) {
+    throw new Error('Failed to fetch group quest');
+  }
+  return resp.json();
+}
+
 export async function leaveGroup(groupId, userId) {
   const resp = await fetch(`${BASE_URL}/leave-group`, {
     method: 'POST',

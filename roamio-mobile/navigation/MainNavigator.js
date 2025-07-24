@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
 import QuestLiveScreen from '../screens/QuestLiveScreen';
+import GroupQuestScreen from '../screens/GroupQuestScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import CustomQuestScreen from '../screens/CustomQuestScreen';
@@ -20,6 +21,7 @@ export default function MainNavigator() {
         <>
           <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
           <Stack.Screen name="QuestLive" component={QuestLiveScreen} options={{ title: 'Quest' }} />
+          <Stack.Screen name="GroupQuest" component={GroupQuestScreen} options={{ title: 'Group Quest' }} />
           <Stack.Screen name="CustomQuest" component={CustomQuestScreen} options={{ title: 'Custom Quest' }} />
           <Stack.Screen name="CustomQuestBuilder" component={CustomQuestBuilderScreen} options={{ title: 'Build Quest' }} />
           <Stack.Screen name="MyQuests" component={MyQuestsScreen} options={{ title: 'My Quests' }} />

@@ -132,7 +132,7 @@ export default function QuestLivePage() {
     if (!user || !groupId) return;
     joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
     let prev = null;
-    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+    const unsub = onSnapshot(doc(db, 'group_quests', groupId), (snap) => {
       const data = snap.data();
       if (!data) return;
       setGroupData(data);
@@ -164,7 +164,7 @@ export default function QuestLivePage() {
     if (!user || !groupId) return;
     joinGroup(user.uid, groupId, user.displayName).catch((e) => console.error('join failed', e));
     let prev = null;
-    const unsub = onSnapshot(doc(db, 'groups', groupId), (snap) => {
+    const unsub = onSnapshot(doc(db, 'group_quests', groupId), (snap) => {
       const data = snap.data();
       if (!data) return;
       setGroupData(data);
@@ -467,6 +467,8 @@ export default function QuestLivePage() {
               visitedIndex={currentStopIndex}
               userLocation={userLocation}
               polylinePoints={polylinePoints}
+              groupProgress={groupData?.progress || {}}
+              members={groupData?.members || []}
             />
           </div>
 
