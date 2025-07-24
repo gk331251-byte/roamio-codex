@@ -32,6 +32,8 @@ import GroupQuestView from "./components/GroupQuestView";
 import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import UGCSubmitForm from "./components/UGCSubmitForm";
+import CreatorDashboard from "./pages/CreatorDashboard";
+import UGCAnalytics from "./pages/admin/UGCAnalytics";
 import CookieConsent from "react-cookie-consent";
 
 
@@ -98,6 +100,8 @@ function App() {
         <Route path="/tag-editor/:questId" element={<TagEditor />} />
         <Route path="/terms" element={<Terms />} />
         <Route path="/privacy" element={<Privacy />} />
+        <Route path="/creator-dashboard" element={<CreatorDashboard />} />
+        <Route path="/admin/ugc-analytics" element={<UGCAnalytics />} />
         <Route path="/ugc-submit" element={<UGCSubmitForm />} />
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />

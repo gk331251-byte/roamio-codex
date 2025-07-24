@@ -2787,3 +2787,17 @@ async def admin_ban_user(payload: dict = Body(...)):
     patch = {"fields": _encode_fields({"banned": True})}
     await asyncio.to_thread(rest_session.patch, url, json=patch)
     return {"status": "banned"}
+
+
+@app.get("/admin/ugc-analytics")
+async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None)):
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not week:
+        week = datetime.utcnow().strftime("%Y-%W")
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_analytics/{week}"
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    return _decode_document(resp.json())
