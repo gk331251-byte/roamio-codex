@@ -7,6 +7,7 @@ import { db } from "./firebase";
 import { getActiveQuest, getQuest, leaveGroup } from "./lib/api";
 import LandingPage from "./components/LandingPage";
 import WelcomePage from "./pages/WelcomePage";
+import OnboardingFlow from "./pages/OnboardingFlow";
 import QuestHome from "./components/QuestHome";
 import QuestDetails from "./components/QuestDetails";
 import QuestHistory from "./components/QuestHistory";
@@ -40,6 +41,12 @@ function App() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) return;
       try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        const onboarded = snap.exists() && snap.data().onboarding;
+        if (!onboarded && location.pathname !== '/onboarding') {
+          navigate('/onboarding');
+          return;
+        }
         const data = await getActiveQuest(user.uid);
         if (data && data.questId && data.status !== 'completed') {
           const quest = await getQuest(data.questId).catch(() => null);
@@ -63,11 +70,12 @@ function App() {
 
   return (
     <>
-      {location.pathname !== '/' && <Header />}
+      {location.pathname !== '/' && location.pathname !== '/onboarding' && <Header />}
       <Routes>
         <Route path="/" element={<WelcomePage />} />
         <Route path="/landing" element={<LandingPage />} />
         <Route path="/home" element={<QuestHome />} />
+        <Route path="/onboarding" element={<OnboardingFlow />} />
         <Route path="/details" element={<QuestDetails />} />
         <Route path="/quest/:city/:mood/route" element={<QuestRoute />} />
         <Route path="/history" element={<QuestHistory />} />
@@ -90,7 +98,7 @@ function App() {
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>
-      {location.pathname !== '/' && <Footer />}
+      {location.pathname !== '/' && location.pathname !== '/onboarding' && <Footer />}
       <CookieConsent
         location="bottom"
         buttonText="I Agree"
