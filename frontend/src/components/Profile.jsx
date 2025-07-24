@@ -3,13 +3,20 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { deleteUser } from 'firebase/auth';
 import { deleteDoc, doc, collection, getDocs } from 'firebase/firestore';
-import { validatePremium, getUserQuests } from '../lib/api';
+import {
+  validatePremium,
+  getUserQuests,
+  listCustomQuests,
+  publishCustomQuest,
+  unpublishCustomQuest,
+} from '../lib/api';
 import PostcardGallery from './PostcardGallery';
 
 const Profile = () => {
   const [user, setUser] = useState(null);
   const [premium, setPremium] = useState(false);
   const [stats, setStats] = useState({ total: 0, mostCity: '', longest: 0 });
+  const [customQuests, setCustomQuests] = useState([]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -37,6 +44,12 @@ const Profile = () => {
           setStats({ total, mostCity, longest });
         } catch (err) {
           console.error('Failed to load quest stats', err);
+        }
+        try {
+          const res = await listCustomQuests(u.uid, false);
+          setCustomQuests(res.quests || []);
+        } catch (err) {
+          console.error('load custom quests', err);
         }
       }
     });
@@ -82,6 +95,47 @@ const Profile = () => {
           <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
         </div>
       )}
+
+      <div className="mt-8">
+        <h2 className="text-xl font-bold mb-2">My Custom Quests</h2>
+        {customQuests.map((cq) => (
+          <div key={cq.id} className="border p-2 mb-2 flex items-center justify-between">
+            <div>
+              <p className="font-medium">{cq.title}</p>
+              <p className="text-xs">Status: {cq.status || (cq.public ? 'published' : 'draft')}</p>
+            </div>
+            <div className="space-x-2">
+              <button
+                onClick={() => (window.location.href = `/custom/edit/${cq.id}`)}
+                className="text-blue-600 underline text-sm"
+              >
+                Edit
+              </button>
+              {premium && (
+                <button
+                  onClick={async () => {
+                    try {
+                      if (cq.status === 'published' || cq.public) {
+                        await unpublishCustomQuest(user.uid, cq.id);
+                        setCustomQuests((prev) => prev.map((q) => (q.id === cq.id ? { ...q, status: 'draft', public: false } : q)));
+                      } else {
+                        await publishCustomQuest(user.uid, cq.id);
+                        setCustomQuests((prev) => prev.map((q) => (q.id === cq.id ? { ...q, status: 'published', public: true } : q)));
+                      }
+                    } catch (err) {
+                      console.error('toggle publish', err);
+                    }
+                  }}
+                  className="text-sm underline"
+                >
+                  {cq.status === 'published' || cq.public ? 'Unpublish' : 'Publish'}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {customQuests.length === 0 && <p className="text-sm">No custom quests yet</p>}
+      </div>
       <div className="mt-8">
         <button
           onClick={handleDeleteAccount}

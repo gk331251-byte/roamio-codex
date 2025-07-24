@@ -51,6 +51,36 @@ export async function publishCustomQuest(userId: string, questId: string) {
   return res.json();
 }
 
+export async function unpublishCustomQuest(userId: string, questId: string) {
+  const res = await fetch(`${BASE_URL}/unpublish-custom-quest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quest_id: questId }),
+  });
+  if (!res.ok) throw new Error('Unpublish failed');
+  return res.json();
+}
+
+export async function updateCustomQuest(payload: any) {
+  const headers = await authHeaders();
+  const res = await fetch(`${BASE_URL}/update-custom-quest`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Update failed');
+  return res.json();
+}
+
+export async function listCustomQuests(userId: string) {
+  const url = new URL(`${BASE_URL}/custom-quests`);
+  url.searchParams.set('creatorId', userId);
+  url.searchParams.set('publicOnly', 'false');
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error('List failed');
+  return res.json();
+}
+
 export async function createGroupQuest(userId: string, questId: string, displayName: string) {
   const res = await fetch(`${BASE_URL}/create-group-quest`, {
     method: 'POST',
