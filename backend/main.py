@@ -282,6 +282,8 @@ async def generate_quest(
     time_limit: int = Body(...),
     token: str = Body(...),
     user_id: str | None = Body(None),
+    lat: float | None = Body(None),
+    lng: float | None = Body(None),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
     if not city or not moods:
@@ -298,8 +300,11 @@ async def generate_quest(
             return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
 
     try:
-        geocode = gmaps.geocode(city)
-        city_location = geocode[0]["geometry"]["location"]
+        if lat is not None and lng is not None:
+            city_location = {"lat": float(lat), "lng": float(lng)}
+        else:
+            geocode = gmaps.geocode(city)
+            city_location = geocode[0]["geometry"]["location"]
     except Exception as e:
         print(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
@@ -963,7 +968,9 @@ async def reroll_quest(payload: dict = Body(...)):
     time_limit = payload.get("time_limit", 60)
     token = payload.get("token", "")
     # Reuse generate_quest logic
-    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token)
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng)
 
 
 @app.post("/get-directions")
