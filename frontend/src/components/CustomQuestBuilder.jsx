@@ -1,7 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { createCustomQuest, createGroupQuest, validatePremium, publishCustomQuest } from '../lib/api';
+import {
+  createCustomQuest,
+  createGroupQuest,
+  validatePremium,
+  publishCustomQuest,
+  unpublishCustomQuest,
+  getCustomQuest,
+  updateCustomQuest,
+} from '../lib/api';
+import { toast } from '../lib/toast';
+import PremiumGuard from './PremiumGuard';
 
 const moodOptions = [
   'romantic',
@@ -21,6 +31,7 @@ const templates = [
 ];
 
 export default function CustomQuestBuilder() {
+  const { questId } = useParams();
   const [user, setUser] = useState(null);
   const [premium, setPremium] = useState(false);
   const [title, setTitle] = useState('');
@@ -31,6 +42,7 @@ export default function CustomQuestBuilder() {
     { name: '', placeId: '', lat: null, lng: null, duration: 10 },
     { name: '', placeId: '', lat: null, lng: null, duration: 10 },
   ]);
+  const [status, setStatus] = useState('draft');
   const [publishLink, setPublishLink] = useState('');
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -41,8 +53,30 @@ export default function CustomQuestBuilder() {
       setUser(u);
       if (u) {
         try {
-          const r = await validatePremium(u.uid);
-          setPremium(!!r.premium);
+          const r = await validatePremium();
+          setPremium(!!r.isPremium);
+          if (questId) {
+            try {
+              const q = await getCustomQuest(questId);
+              setTitle(q.title || '');
+              setMoods(q.mood_tags || q.mood || []);
+              setTimeLimit(q.time_limit || 60);
+              setPrompt(q.custom_prompt || q.questText || '');
+              if (Array.isArray(q.places || q.locationList)) {
+                const list = (q.places || q.locationList).map((p) => ({
+                  name: p.name,
+                  placeId: p.place_id || p.placeId,
+                  lat: p.lat,
+                  lng: p.lng,
+                  duration: p.duration_minutes || p.duration || 10,
+                }));
+                setLocations(list);
+              }
+              setStatus(q.status || (q.public ? 'published' : 'draft'));
+            } catch (err) {
+              console.error('quest load failed', err);
+            }
+          }
         } catch (err) {
           console.error('premium check failed', err);
           setPremium(false);
@@ -94,11 +128,10 @@ export default function CustomQuestBuilder() {
 
   const handleStart = async () => {
     if (!user) return alert('Login required');
-    if (!premium) return navigate('/quest-plus');
+    if (!premium) return navigate('/pricing');
     if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
-      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
-      const res = await createCustomQuest({
+      const payload = {
         user_id: user.uid,
         title,
         mood_tags: moods,
@@ -112,10 +145,18 @@ export default function CustomQuestBuilder() {
         time_limit: timeLimit,
         custom_prompt: prompt,
         status: 'draft',
-      });
-      const { questId, quest } = res;
-      const group = await createGroupQuest(user.uid, questId, user.displayName);
-      navigate('/live', { state: { quest, questId, groupId: group.groupId, timeLimit } });
+      };
+      let id = questId;
+      if (questId) {
+        await updateCustomQuest({ quest_id: questId, data: payload });
+        id = questId;
+      } else {
+        const res = await createCustomQuest(payload);
+        id = res.questId;
+      }
+      const quest = await getCustomQuest(id);
+      const group = await createGroupQuest(user.uid, id, user.displayName);
+      navigate('/live', { state: { quest, questId: id, groupId: group.groupId, timeLimit } });
     } catch (err) {
       console.error('❌ API error:', err);
       setError('Something went wrong starting custom quest.');
@@ -124,9 +165,10 @@ export default function CustomQuestBuilder() {
 
   const handleSaveDraft = async () => {
     if (!user) return alert('Login required');
+    if (!premium) return navigate('/pricing');
+    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
-      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
-      await createCustomQuest({
+      const payload = {
         user_id: user.uid,
         title,
         mood_tags: moods,
@@ -140,7 +182,12 @@ export default function CustomQuestBuilder() {
         time_limit: timeLimit,
         custom_prompt: prompt,
         status: 'draft',
-      });
+      };
+      if (questId) {
+        await updateCustomQuest({ quest_id: questId, data: payload });
+      } else {
+        await createCustomQuest(payload);
+      }
       alert('Draft saved!');
     } catch (err) {
       console.error('❌ API error:', err);
@@ -150,10 +197,10 @@ export default function CustomQuestBuilder() {
 
   const handlePublish = async () => {
     if (!user) return alert('Login required');
-    if (!premium) return navigate('/quest-plus');
+    if (!premium) return navigate('/pricing');
+    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
     try {
-      console.log('Submitting custom quest with:', { title, moods, locationList: locations });
-      const res = await createCustomQuest({
+      const payload = {
         user_id: user.uid,
         title,
         mood_tags: moods,
@@ -167,9 +214,18 @@ export default function CustomQuestBuilder() {
         time_limit: timeLimit,
         custom_prompt: prompt,
         status: 'draft',
-      });
-      await publishCustomQuest(user.uid, res.questId);
-      setPublishLink(`${window.location.origin}/q/${res.questId}`);
+      };
+      let id = questId;
+      if (questId) {
+        await updateCustomQuest({ quest_id: questId, data: payload });
+        id = questId;
+      } else {
+        const res = await createCustomQuest(payload);
+        id = res.questId;
+      }
+      await publishCustomQuest(user.uid, id);
+      setStatus('published');
+      setPublishLink(`${window.location.origin}/q/${id}`);
     } catch (err) {
       console.error('❌ API error:', err);
       setError('Failed to publish quest');
@@ -177,6 +233,7 @@ export default function CustomQuestBuilder() {
   };
 
   return (
+    <PremiumGuard>
     <div className="min-h-screen bg-[#f8fcf8] px-6 py-8 text-[#0e1b0e] font-sans">
       <h1 className="text-2xl font-bold mb-6 text-center">Build a Custom Quest</h1>
 
@@ -296,6 +353,22 @@ export default function CustomQuestBuilder() {
           >
             Publish Quest
           </button>
+          {questId && status === 'published' && (
+            <button
+              onClick={async () => {
+                try {
+                  await unpublishCustomQuest(user.uid, questId);
+                  setStatus('draft');
+                  toast('Unpublished');
+                } catch (err) {
+                  console.error('unpublish error', err);
+                }
+              }}
+              className="flex-1 py-2 rounded-lg border"
+            >
+              Unpublish
+            </button>
+          )}
         </div>
         {publishLink && (
           <div className="text-center text-sm">
@@ -311,7 +384,7 @@ export default function CustomQuestBuilder() {
         {!premium && (
           <p className="text-center text-sm">
             Custom quests are a Quest+ feature.{' '}
-            <a href="/quest-plus" className="text-blue-600 underline">
+            <a href="/pricing" className="text-blue-600 underline">
               Upgrade to Quest+
             </a>
           </p>
@@ -319,6 +392,7 @@ export default function CustomQuestBuilder() {
         {error && <p className="text-red-600 text-sm text-center">{error}</p>}
       </div>
     </div>
+    </PremiumGuard>
   );
 }
 
