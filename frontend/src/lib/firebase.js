@@ -52,3 +52,8 @@ export async function setSkipSharePrompt(userId, value) {
   if (!userId) return;
   await updateDoc(doc(db, 'users', userId), { skipSharePrompt: value });
 }
+
+export async function setUGCBoostActive(userId, value) {
+  if (!userId) return;
+  await updateDoc(doc(db, 'users', userId), { ugcBoostActive: value });
+}
