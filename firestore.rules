@@ -10,6 +10,10 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.banned == true;
     }
 
+    function isPremium(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.isPremium == true;
+    }
+
     // ===== User Profiles =====
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId && !isBanned();
@@ -28,6 +32,7 @@ service cloud.firestore {
                    isAdmin();
       allow create: if request.auth != null &&
                      request.auth.uid == request.resource.data.creatorId &&
+                     isPremium(request.auth.uid) &&
                      !isBanned();
       allow update, delete: if (request.auth != null && request.auth.uid == resource.data.creatorId && !isBanned()) || isAdmin();
     }
