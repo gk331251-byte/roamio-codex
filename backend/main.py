@@ -13,6 +13,8 @@ from google.cloud import firestore_v1, storage
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
 from google.oauth2 import id_token
+import firebase_admin
+from firebase_admin import auth as fb_auth
 
 
 from dotenv import load_dotenv
@@ -170,6 +172,10 @@ creds = service_account.Credentials.from_service_account_file(
     scopes=["https://www.googleapis.com/auth/datastore"],
 )
 rest_session = AuthorizedSession(creds)
+
+# Initialize Firebase Admin for user lookups
+if not firebase_admin._apps:
+    firebase_admin.initialize_app()
 
 
 def generate_hash_key(*parts: str) -> str:
@@ -721,7 +727,7 @@ async def check_premium(user_id: str) -> bool:
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
         fields = _decode_document(resp.json())
-        return fields.get("premium") is True
+        return fields.get("isPremium") is True
     return False
 
 
@@ -1810,7 +1816,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
     fields = {}
     if resp.status_code == 200:
         fields = _decode_document(resp.json())
-    premium = fields.get("premium") is True
+    premium = fields.get("isPremium") is True
 
     if not premium and session_id:
         stripe_key = os.getenv("STRIPE_SECRET_KEY")
@@ -1826,11 +1832,11 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
         elif session_id == "mock":
             premium = True
         if premium:
-            fields["premium"] = True
+            fields["isPremium"] = True
             body = {"fields": _encode_fields(fields)}
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
-    return {"premium": premium}
+    return {"isPremium": premium}
 
 
 @app.post("/validate-premium")
@@ -1843,11 +1849,11 @@ async def validate_premium_token(request: Request):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
-    premium = fields.get("premium") is True
+    premium = fields.get("isPremium") is True
     return {"isPremium": premium}
 
 
-@app.post("/stripe-webhook")
+@app.post("/api/stripe-webhook")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events."""
     stripe_key = os.getenv("STRIPE_SECRET_KEY")
@@ -1865,16 +1871,24 @@ async def stripe_webhook(request: Request):
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        uid = session.get("metadata", {}).get("uid") or session.get("client_reference_id")
-        if uid:
-            project_id = creds.project_id
-            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
-            resp = await asyncio.to_thread(rest_session.get, url)
-            fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
-            fields["premium"] = True
-            body = {"fields": _encode_fields(fields)}
-            await asyncio.to_thread(rest_session.patch, url, json=body)
-            await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+        email = session.get("customer_details", {}).get("email") or session.get("customer_email")
+        if email:
+            try:
+                user = await asyncio.to_thread(fb_auth.get_user_by_email, email)
+                uid = user.uid
+                project_id = creds.project_id
+                url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+                resp = await asyncio.to_thread(rest_session.get, url)
+                fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+                if not fields.get("isPremium"):
+                    fields["isPremium"] = True
+                    body = {"fields": _encode_fields(fields)}
+                    await asyncio.to_thread(rest_session.patch, url, json=body)
+                    await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+            except Exception as e:
+                print("User email lookup failed", e)
+        else:
+            print("No email on session")
 
     return {"received": True}
 
@@ -2863,6 +2877,150 @@ async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None))
         return {}
     return _decode_document(resp.json())
 
+
+@app.get("/admin/analytics")
+async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
+    """Return aggregate product metrics for admins."""
+    if not await _verify_admin(userId):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+
+    days = int(days or 0)
+    start = None
+    if days > 0:
+        start = (datetime.utcnow() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+
+    project_id = creds.project_id
+    run_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+
+    # ===== Users =====
+    users_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users:runQuery"
+    all_users = await asyncio.to_thread(rest_session.post, users_url, json={"structuredQuery": {"from": [{"collectionId": "users"}]}})
+    total_users = sum(1 for i in all_users.json() if i.get("document"))
+
+    growth = {}
+    if start:
+        new_query = {
+            "structuredQuery": {
+                "from": [{"collectionId": "users"}],
+                "where": {
+                    "fieldFilter": {
+                        "field": {"fieldPath": "createdAt"},
+                        "op": "GREATER_THAN_OR_EQUAL",
+                        "value": {"stringValue": start},
+                    }
+                },
+            }
+        }
+        new_resp = await asyncio.to_thread(rest_session.post, users_url, json=new_query)
+        for item in new_resp.json():
+            doc = item.get("document")
+            if not doc:
+                continue
+            data = _decode_document(doc)
+            day = data.get("createdAt", "")[:10]
+            growth[day] = growth.get(day, 0) + 1
+        new_users = sum(growth.values())
+    else:
+        new_users = total_users
+
+    # ===== Quests Generated =====
+    q_query = {"structuredQuery": {"from": [{"collectionId": "user_quests", "allDescendants": True}]}}
+    if start:
+        q_query["structuredQuery"]["where"] = {
+            "fieldFilter": {
+                "field": {"fieldPath": "generatedAt"},
+                "op": "GREATER_THAN_OR_EQUAL",
+                "value": {"stringValue": start},
+            }
+        }
+    q_resp = await asyncio.to_thread(rest_session.post, run_url, json=q_query)
+    quest_docs = [i for i in q_resp.json() if i.get("document")]
+    quests_count = len(quest_docs)
+
+    moods = {}
+    diff = {}
+    for item in quest_docs:
+        data = _decode_document(item["document"])
+        m = data.get("mood")
+        d = data.get("difficulty")
+        if m:
+            for mpart in str(m).split(','):
+                moods[mpart] = moods.get(mpart, 0) + 1
+        if d:
+            diff[d] = diff.get(d, 0) + 1
+
+    # ===== Completed Quests =====
+    comp_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "user_quests", "allDescendants": True}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "completedAt"},
+                    "op": "GREATER_THAN_OR_EQUAL",
+                    "value": {"stringValue": start or "1970-01-01"},
+                }
+            },
+        }
+    }
+    if not start:
+        comp_query["structuredQuery"]["where"] = {
+            "unaryFilter": {"field": {"fieldPath": "completedAt"}, "op": "IS_NOT_NULL"}
+        }
+    comp_resp = await asyncio.to_thread(rest_session.post, run_url, json=comp_query)
+    completed_count = sum(1 for i in comp_resp.json() if i.get("document"))
+    completion_rate = (completed_count / quests_count) if quests_count else 0
+
+    # ===== Group Quests =====
+    group_query = {"structuredQuery": {"from": [{"collectionId": "group_quests"}]}}
+    if start:
+        group_query["structuredQuery"]["where"] = {
+            "fieldFilter": {
+                "field": {"fieldPath": "createdAt"},
+                "op": "GREATER_THAN_OR_EQUAL",
+                "value": {"stringValue": start},
+            }
+        }
+    g_resp = await asyncio.to_thread(rest_session.post, run_url, json=group_query)
+    group_total = 0
+    member_total = 0
+    for item in g_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        group_total += 1
+        member_total += len(data.get("members", []))
+    avg_group_size = (member_total / group_total) if group_total else 0
+
+    # ===== Promo Codes =====
+    promo_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes:runQuery"
+    promo_resp = await asyncio.to_thread(rest_session.post, promo_url, json={"structuredQuery": {"from": [{"collectionId": "promo_codes"}]}})
+    promo_counts = {}
+    for item in promo_resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        key = data.get("code", doc["name"].split("/")[-1])
+        promo_counts[key] = data.get("usageCount", 0)
+
+    top_promo = max(promo_counts.items(), key=lambda x: x[1]) if promo_counts else (None, 0)
+
+    return {
+        "totalUsers": total_users,
+        "newUsers": new_users,
+        "userGrowth": growth,
+        "questsGenerated": quests_count,
+        "moodBreakdown": moods,
+        "difficultyBreakdown": diff,
+        "completedQuests": completed_count,
+        "completionRate": completion_rate,
+        "groupQuests": group_total,
+        "avgGroupSize": avg_group_size,
+        "promoUsage": promo_counts,
+        "topPromo": list(top_promo),
+    }
+
 @app.post("/submit-featured-quest")
 async def submit_featured_quest(request: Request, payload: dict = Body(...)):
     """Allow approved creators to submit a featured quest draft."""
@@ -2969,3 +3127,94 @@ async def admin_review_featured(payload: dict = Body(...)):
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
     return {"status": "updated"}
+
+@app.post("/create-promo-code")
+async def create_promo_code(payload: dict = Body(...)):
+    """Create a new promo code (admin only)."""
+    user_id = payload.get("userId")
+    code = str(payload.get("code", "")).strip()
+    ptype = payload.get("type")
+    if not await _verify_admin(user_id):
+        return JSONResponse(status_code=403, content={"error": "Access denied"})
+    if not code or ptype not in ("premium", "xp"):
+        return {"error": "invalid"}
+    data = {
+        "type": ptype,
+        "createdAt": datetime.utcnow().isoformat(),
+        "isActive": True,
+        "usageCount": 0,
+    }
+    if payload.get("expiresAt"):
+        data["expiresAt"] = payload["expiresAt"]
+    if payload.get("maxUses") is not None:
+        data["maxUses"] = int(payload["maxUses"])
+    if payload.get("xpAmount") is not None:
+        data["xpAmount"] = int(payload["xpAmount"])
+    project_id = creds.project_id
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes/{code}"
+    body = {"fields": _encode_fields(data)}
+    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    await log_admin_event("create_promo", {"code": code, "admin": user_id})
+    return {"status": "created"}
+
+
+@app.post("/redeem-promo-code")
+async def redeem_promo_code(request: Request, payload: dict = Body(...)):
+    """Redeem a promo code for the authenticated user."""
+    uid = await _verify_token(request.headers.get("Authorization"))
+    if not uid or uid != payload.get("uid"):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        return {"error": "code required"}
+
+    project_id = creds.project_id
+    code_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes/{code}"
+    resp = await asyncio.to_thread(rest_session.get, code_url)
+    if resp.status_code != 200:
+        return JSONResponse(status_code=404, content={"error": "invalid_code"})
+    code_data = _decode_document(resp.json())
+    if not code_data.get("isActive", True):
+        return JSONResponse(status_code=400, content={"error": "inactive"})
+    if code_data.get("expiresAt"):
+        try:
+            if datetime.fromisoformat(code_data["expiresAt"]) < datetime.utcnow():
+                return JSONResponse(status_code=400, content={"error": "expired"})
+        except Exception:
+            pass
+    if code_data.get("maxUses") is not None and code_data.get("usageCount", 0) >= int(code_data.get("maxUses")):
+        return JSONResponse(status_code=400, content={"error": "maxed"})
+
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+    uresp = await asyncio.to_thread(rest_session.get, user_url)
+    user_fields = _decode_document(uresp.json()) if uresp.status_code == 200 else {}
+    redeemed = user_fields.get("redeemedCodes", [])
+    if code in redeemed:
+        return JSONResponse(status_code=400, content={"error": "duplicate"})
+    redeemed.append(code)
+    updates = {"redeemedCodes": redeemed}
+    effects = {}
+    if code_data.get("type") == "premium":
+        if not user_fields.get("isPremium"):
+            updates["isPremium"] = True
+            effects["isPremium"] = True
+    elif code_data.get("type") == "xp":
+        amt = int(code_data.get("xpAmount", 0))
+        total_xp = user_fields.get("totalXP", 0) + amt
+        level = get_level_from_xp(total_xp)
+        stats = user_fields.get("stats", {})
+        stats["totalXP"] = total_xp
+        updates.update({"totalXP": total_xp, "level": level, "stats": stats})
+        effects["xpAdded"] = amt
+    body = {"fields": _encode_fields(updates)}
+    presp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
+    if presp.status_code != 200:
+        print("Firestore REST error", presp.text)
+        presp.raise_for_status()
+    code_data["usageCount"] = code_data.get("usageCount", 0) + 1
+    await asyncio.to_thread(rest_session.patch, code_url, json={"fields": _encode_fields(code_data)})
+    return {"status": "redeemed", **effects}
+
