@@ -13,7 +13,12 @@ import {
 } from '../lib/api';
 import XPProgressBar from './XPProgressBar';
 import BadgeGallery from './BadgeGallery';
-import { setShowRoamioWatermark } from '../lib/firebase';
+import {
+  setShowRoamioWatermark,
+  setPublicSharingOptIn,
+  setShowUsernameOnShare,
+  setShowCityOnShare,
+} from '../lib/firebase';
 const LEVEL_THRESHOLDS = [0,50,120,200,300,420,550,700,880,1080];
 
 const Profile = () => {
@@ -25,6 +30,9 @@ const Profile = () => {
   const [level, setLevel] = useState(1);
   const [badges, setBadges] = useState([]);
   const [showWatermark, setShowWatermark] = useState(true);
+  const [publicOptIn, setPublicOptIn] = useState(false);
+  const [showName, setShowName] = useState(true);
+  const [showCity, setShowCity] = useState(true);
   const nextThreshold = LEVEL_THRESHOLDS[Math.min(level, LEVEL_THRESHOLDS.length - 1)];
 
   useEffect(() => {
@@ -43,6 +51,9 @@ const Profile = () => {
           setLevel(xpData.level || 1);
           setBadges(xpData.badgesUnlocked || []);
           setShowWatermark(xpData.showRoamioWatermark !== false);
+          setPublicOptIn(xpData.publicSharingOptIn === true);
+          setShowName(xpData.showUsernameOnShare !== false);
+          setShowCity(xpData.showCityOnShare !== false);
         } catch (err) {
           console.error('load xp error', err);
         }
@@ -135,6 +146,43 @@ const Profile = () => {
             }}
           />
           Watermark shared postcards with "Made with Roamio"
+        </label>
+      </div>
+
+      <div className="mb-8 space-y-2">
+        <h2 className="text-xl font-bold mb-1">Sharing Preferences</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={publicOptIn}
+            onChange={async (e) => {
+              setPublicOptIn(e.target.checked);
+              if (user) await setPublicSharingOptIn(user.uid, e.target.checked);
+            }}
+          />
+          Allow others to see my shared quests
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showName}
+            onChange={async (e) => {
+              setShowName(e.target.checked);
+              if (user) await setShowUsernameOnShare(user.uid, e.target.checked);
+            }}
+          />
+          Display my name on public shares
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showCity}
+            onChange={async (e) => {
+              setShowCity(e.target.checked);
+              if (user) await setShowCityOnShare(user.uid, e.target.checked);
+            }}
+          />
+          Display my city/location on public shares
         </label>
       </div>
 
