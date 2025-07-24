@@ -19,7 +19,6 @@ export default function HomeScreen({ navigation }) {
     if (status !== 'granted') {
       setStatusMsg('Permission denied');
       toast('Location not shared — routing may be less accurate');
-
       return;
     }
     const loc = await Location.getCurrentPositionAsync({});
@@ -35,7 +34,7 @@ export default function HomeScreen({ navigation }) {
         timeLimit,
         coords: location ? { lat: location.latitude, lng: location.longitude } : undefined,
       });
-      setQuest(questData.quest);
+      setQuest({ ...questData.quest, id: questData.hash, visitedIndices: [] });
       navigation.navigate('QuestLive');
       if (questData.fallbackCity) {
         toast(`Showing results near ${questData.fallbackCity}`);
