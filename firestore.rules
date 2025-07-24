@@ -10,6 +10,10 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.banned == true;
     }
 
+    function isPremium(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.isPremium == true;
+    }
+
     // ===== User Profiles =====
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId && !isBanned();
@@ -28,6 +32,7 @@ service cloud.firestore {
                    isAdmin();
       allow create: if request.auth != null &&
                      request.auth.uid == request.resource.data.creatorId &&
+                     isPremium(request.auth.uid) &&
                      !isBanned();
       allow update, delete: if (request.auth != null && request.auth.uid == resource.data.creatorId && !isBanned()) || isAdmin();
     }
@@ -46,6 +51,17 @@ service cloud.firestore {
     match /group_quests/{groupQuestId} {
       allow create: if request.auth != null && request.auth.uid in request.resource.data.members && !isBanned();
       allow read, update, delete: if request.auth != null && request.auth.uid in resource.data.members && !isBanned();
+    }
+
+    // ===== Communities =====
+    match /communities/{communityId} {
+      allow read: if true;
+      allow write: if request.auth != null && !isBanned();
+    }
+
+    // ===== Postcards =====
+    match /postcards/{userId}/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId && !isBanned();
     }
 
     // ===== Admin Config =====
