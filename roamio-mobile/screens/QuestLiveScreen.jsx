@@ -68,7 +68,7 @@ export default function QuestLiveScreen({ navigation }) {
     setQuest(updated);
     try {
       const res = await trackVisit(quest.userId || '', quest.id, step);
-      if (res?.xp) toast(`+${res.xp} XP`);
+      if (res?.totalXP) toast(`+${res.totalXP} XP`);
     } catch (err) {
       console.log('track visit error', err);
     }
