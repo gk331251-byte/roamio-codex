@@ -6,6 +6,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "./firebase";
 import { getActiveQuest, getQuest, leaveGroup } from "./lib/api";
 import LandingPage from "./components/LandingPage";
+import WelcomePage from "./pages/WelcomePage";
 import QuestHome from "./components/QuestHome";
 import QuestDetails from "./components/QuestDetails";
 import QuestHistory from "./components/QuestHistory";
@@ -62,9 +63,10 @@ function App() {
 
   return (
     <>
-      <Header />
+      {location.pathname !== '/' && <Header />}
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route path="/" element={<WelcomePage />} />
+        <Route path="/landing" element={<LandingPage />} />
         <Route path="/home" element={<QuestHome />} />
         <Route path="/details" element={<QuestDetails />} />
         <Route path="/quest/:city/:mood/route" element={<QuestRoute />} />
@@ -88,7 +90,7 @@ function App() {
         <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/payment-failed" element={<PaymentFailed />} />
       </Routes>
-      <Footer />
+      {location.pathname !== '/' && <Footer />}
       <CookieConsent
         location="bottom"
         buttonText="I Agree"
