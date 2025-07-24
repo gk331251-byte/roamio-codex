@@ -41,12 +41,48 @@ LEVEL_THRESHOLDS = [
 ]
 
 BADGE_CATALOG = {
-    "first_quest": {"name": "First Explorer"},
-    "level_3": {"name": "Level 3 Achieved"},
-    "level_6": {"name": "Level 6 Achieved"},
-    "foodie": {"name": "Foodie Path"},
-    "explorer": {"name": "Explorer"},
-    "adventurer": {"name": "Adventurer"},
+    "first_quest": {
+        "id": "first_quest",
+        "name": "First Explorer",
+        "description": "Complete your first quest",
+        "icon": "🗺️",
+        "criteria": {"type": "questCount", "value": 1},
+    },
+    "level_3": {
+        "id": "level_3",
+        "name": "Bronze Path",
+        "description": "Reach Level 3",
+        "icon": "🥉",
+        "criteria": {"type": "level", "value": 3},
+    },
+    "level_6": {
+        "id": "level_6",
+        "name": "Silver Path",
+        "description": "Reach Level 6",
+        "icon": "🥈",
+        "criteria": {"type": "level", "value": 6},
+    },
+    "foodie": {
+        "id": "foodie",
+        "name": "Foodie Crawl",
+        "description": "Complete 3 food-themed quests",
+        "icon": "🍜",
+        "criteria": {"type": "moodCount", "mood": "Foodie", "value": 3},
+    },
+    "explorer": {
+        "id": "explorer",
+        "name": "Explorer",
+        "description": "Complete 5 quests",
+        "icon": "🧭",
+        "criteria": {"type": "questCount", "value": 5},
+    },
+    "adventurer": {
+        "id": "adventurer",
+        "name": "Adventurer",
+        "description": "Visit 10 stops",
+        "icon": "🎒",
+        "criteria": {"type": "stopCount", "value": 10},
+    },
 }
 
 
@@ -69,6 +105,34 @@ def calculate_age(dob_str: str) -> int:
         return age
     except Exception:
         return 0
+
+
+def compute_badge_unlocks(stats: dict, level: int, existing: list) -> list:
+    """Return list of newly unlocked badge IDs."""
+    unlocked = set(existing or [])
+    new = []
+    for badge in BADGE_CATALOG.values():
+        bid = badge["id"]
+        if bid in unlocked:
+            continue
+        crit = badge.get("criteria", {})
+        btype = crit.get("type")
+        val = crit.get("value", 0)
+        if btype == "questCount" and stats.get("totalQuestsCompleted", 0) >= val:
+            unlocked.add(bid)
+            new.append(bid)
+        elif btype == "level" and level >= val:
+            unlocked.add(bid)
+            new.append(bid)
+        elif btype == "moodCount":
+            key = f"{crit.get('mood','').lower()}Quests"
+            if stats.get(key, 0) >= val:
+                unlocked.add(bid)
+                new.append(bid)
+        elif btype == "stopCount" and stats.get("totalStopsVisited", 0) >= val:
+            unlocked.add(bid)
+            new.append(bid)
+    return new
 
 # === Load .env variables (if running locally) ===
 load_dotenv()
@@ -812,27 +876,18 @@ async def complete_quest(payload: dict = Body(...)):
     level = get_level_from_xp(total_xp)
     stats = user_data.get("stats", {})
     badges = user_data.get("badges", {})
+    badge_list = user_data.get("badgesUnlocked", [])
+    badge_list = user_data.get("badgesUnlocked", [])
     stats["totalQuestsCompleted"] = stats.get("totalQuestsCompleted", 0) + 1
     stats["totalXP"] = total_xp
     if quest_doc.get("mood") == "Foodie":
         stats["foodieQuests"] = stats.get("foodieQuests", 0) + 1
 
-    new_badges = []
-    if stats["totalQuestsCompleted"] == 1 and not badges.get("first_quest"):
-        badges["first_quest"] = True
-        new_badges.append("first_quest")
-    if stats["totalQuestsCompleted"] >= 5 and not badges.get("explorer"):
-        badges["explorer"] = True
-        new_badges.append("explorer")
-    if level >= 3 and not badges.get("level_3"):
-        badges["level_3"] = True
-        new_badges.append("level_3")
-    if level >= 6 and not badges.get("level_6"):
-        badges["level_6"] = True
-        new_badges.append("level_6")
-    if stats.get("foodieQuests", 0) >= 3 and not badges.get("foodie"):
-        badges["foodie"] = True
-        new_badges.append("foodie")
+    new_badges = compute_badge_unlocks(stats, level, badge_list)
+    for b in new_badges:
+        badges[b] = True
+        if b not in badge_list:
+            badge_list.append(b)
 
     quest_doc.update({
         "xpEarned": xp_earned,
@@ -856,6 +911,7 @@ async def complete_quest(payload: dict = Body(...)):
                 "level": level,
                 "stats": stats,
                 "badges": badges,
+                "badgesUnlocked": badge_list,
                 "lastActive": timestamp,
             }
         )
@@ -1096,6 +1152,7 @@ async def track_visit(payload: dict = Body(...)):
     level = user_data.get("level", 1)
     stats = user_data.get("stats", {})
     badges = user_data.get("badges", {})
+    badge_list = user_data.get("badgesUnlocked", [])
 
     if new_visit:
         total_xp += 10
@@ -1103,10 +1160,17 @@ async def track_visit(payload: dict = Body(...)):
         stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
         stats["totalXP"] = total_xp
 
-    if len(visited) == 10:
-        badges["adventurer"] = True
+    new_badges = []
+    if len(visited) >= 10:
+        new_badges.append("adventurer")
     if stats.get("totalQuestsCompleted", 0) >= 5:
-        badges["explorer"] = True
+        new_badges.append("explorer")
+    unlocked_now = compute_badge_unlocks(stats, level, badge_list)
+    new_badges.extend([b for b in unlocked_now if b not in new_badges])
+    for b in new_badges:
+        badges[b] = True
+        if b not in badge_list:
+            badge_list.append(b)
 
     user_body = {
         "fields": _encode_fields({
@@ -1114,6 +1178,7 @@ async def track_visit(payload: dict = Body(...)):
             "level": level,
             "stats": stats,
             "badges": badges,
+            "badgesUnlocked": badge_list,
         })
     }
     resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
@@ -1332,12 +1397,19 @@ async def track_stop_visit(payload: dict = Body(...)):
         stats["totalStopsVisited"] = stats.get("totalStopsVisited", 0) + 1
         stats["totalXP"] = total_xp
 
+    new_badges = []
     if stats.get("totalStopsVisited", 0) >= 10:
-        badges["adventurer"] = True
+        new_badges.append("adventurer")
     if stats.get("totalQuestsCompleted", 0) >= 5:
-        badges["explorer"] = True
+        new_badges.append("explorer")
+    unlocked_now = compute_badge_unlocks(stats, level, badge_list)
+    new_badges.extend([b for b in unlocked_now if b not in new_badges])
+    for b in new_badges:
+        badges[b] = True
+        if b not in badge_list:
+            badge_list.append(b)
 
-    user_body = {"fields": _encode_fields({"totalXP": total_xp, "level": level, "stats": stats, "badges": badges})}
+    user_body = {"fields": _encode_fields({"totalXP": total_xp, "level": level, "stats": stats, "badges": badges, "badgesUnlocked": badge_list})}
     await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
 
     return {"visitedStops": user_progress, "totalXP": total_xp, "level": level, "badges": badges}
@@ -1423,9 +1495,13 @@ async def get_user_xp(user_id: str):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        return {"totalXP": 0, "level": 1}
+        return {"totalXP": 0, "level": 1, "badgesUnlocked": []}
     data = _decode_document(resp.json())
-    return {"totalXP": data.get("totalXP", 0), "level": data.get("level", 1)}
+    return {
+        "totalXP": data.get("totalXP", 0),
+        "level": data.get("level", 1),
+        "badgesUnlocked": data.get("badgesUnlocked", []),
+    }
 
 
 @app.post("/leave-group")

@@ -12,6 +12,7 @@ import {
   getUserXP,
 } from '../lib/api';
 import XPProgressBar from './XPProgressBar';
+import BadgeGallery from './BadgeGallery';
 const LEVEL_THRESHOLDS = [0,50,120,200,300,420,550,700,880,1080];
 
 const Profile = () => {
@@ -21,6 +22,7 @@ const Profile = () => {
   const [customQuests, setCustomQuests] = useState([]);
   const [xp, setXp] = useState(0);
   const [level, setLevel] = useState(1);
+  const [badges, setBadges] = useState([]);
   const nextThreshold = LEVEL_THRESHOLDS[Math.min(level, LEVEL_THRESHOLDS.length - 1)];
 
   useEffect(() => {
@@ -37,6 +39,7 @@ const Profile = () => {
           const xpData = await getUserXP(u.uid);
           setXp(xpData.totalXP || 0);
           setLevel(xpData.level || 1);
+          setBadges(xpData.badgesUnlocked || []);
         } catch (err) {
           console.error('load xp error', err);
         }
@@ -111,6 +114,11 @@ const Profile = () => {
             <a href="/pricing" className="text-blue-600 underline">Upgrade to Quest+</a>
           </div>
         )}
+      </div>
+
+      <div className="mb-8">
+        <h2 className="text-xl font-bold mb-2">Badges</h2>
+        <BadgeGallery unlocked={badges} />
       </div>
 
       <div className="mt-8">
