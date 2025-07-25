@@ -44,6 +44,7 @@ const Header = () => {
         <Link to="/community" className={linkClass("/community")}>Community</Link>
         <Link to="/ugc-feed" className={linkClass("/ugc-feed")}>UGC Feed</Link>
         <Link to="/featured" className={linkClass("/featured")}>Featured</Link>
+        <Link to="/leaderboard" className={linkClass("/leaderboard")}>Leaderboard</Link>
         <Link to="/community/new" className={linkClass("/community/new")}>New Community</Link>
         {user && (
           <Link to="/custom" className={linkClass("/custom")}>➕ Custom Quest</Link>
