@@ -120,6 +120,17 @@ export async function getUserBadges(userId) {
   return resp.json();
 }
 
+export async function getLeaderboard({ field = 'xp', city, timeframe = 'all', limit = 50 } = {}) {
+  const url = new URL(`${BASE_URL}/leaderboard`);
+  url.searchParams.set('field', field);
+  url.searchParams.set('limit', limit);
+  if (city) url.searchParams.set('city', city);
+  if (timeframe) url.searchParams.set('timeframe', timeframe);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to fetch leaderboard');
+  return resp.json();
+}
+
 export async function getDirections(places) {
   const resp = await fetch(`${BASE_URL}/get-directions`, {
     method: 'POST',

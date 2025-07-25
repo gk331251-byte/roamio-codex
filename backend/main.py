@@ -912,6 +912,7 @@ async def complete_quest(payload: dict = Body(...)):
     total_xp = user_data.get("xp", user_data.get("totalXP", 0))
     quests_completed = user_data.get("questsCompleted", 0)
     streak = user_data.get("streakCount", 0)
+    group_completions = user_data.get("groupCompletions", 0)
     if xp_earned:
         total_xp += xp_earned
         quests_completed += 1
@@ -922,6 +923,8 @@ async def complete_quest(payload: dict = Body(...)):
         else:
             streak = 1
         user_data["lastCompleted"] = timestamp
+        if payload.get("groupQuest"):
+            group_completions += 1
     level = get_level_from_xp(total_xp)
 
     badge_set = set(user_data.get("badgesUnlocked", []))
@@ -974,7 +977,12 @@ async def complete_quest(payload: dict = Body(...)):
         "lastCompleted": user_data.get("lastCompleted"),
         "questsCompleted": quests_completed,
         "streakCount": streak,
+        "groupCompletions": group_completions,
+        "badgesUnlocked": list(badge_set),
+        "badgeCount": len(badge_set),
     }
+    if payload.get("city") and not user_data.get("city"):
+        user_update["city"] = payload.get("city")
     await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
 
     for badge_id in new_badges:
@@ -1582,6 +1590,8 @@ async def get_user_xp(user_id: str):
         "publicSharingOptIn": data.get("publicSharingOptIn", False),
         "showUsernameOnShare": data.get("showUsernameOnShare", True),
         "showCityOnShare": data.get("showCityOnShare", True),
+        "showOnLeaderboard": data.get("showOnLeaderboard", True),
+        "nickname": data.get("nickname"),
     }
 
 
@@ -1601,6 +1611,77 @@ async def get_user_badges(user_id: str):
             obj["id"] = doc["name"].split("/")[-1]
             badges.append(obj)
     return {"badges": badges}
+
+
+@app.get("/leaderboard")
+async def get_leaderboard(
+    field: str = Query("xp"),
+    limit: int = Query(50),
+    city: str | None = Query(None),
+    timeframe: str = Query("all"),
+):
+    """Return leaderboard entries sorted by the chosen field."""
+    project_id = creds.project_id
+    filters = [
+        {
+            "fieldFilter": {
+                "field": {"fieldPath": "showOnLeaderboard"},
+                "op": "EQUAL",
+                "value": {"booleanValue": True},
+            }
+        }
+    ]
+    if city:
+        filters.append(
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "city"},
+                    "op": "EQUAL",
+                    "value": {"stringValue": city},
+                }
+            }
+        )
+    if timeframe == "week":
+        since = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        filters.append(
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "lastCompleted"},
+                    "op": "GREATER_THAN_OR_EQUAL",
+                    "value": {"stringValue": since},
+                }
+            }
+        )
+    if len(filters) == 1:
+        where = filters[0]
+    else:
+        where = {"compositeFilter": {"op": "AND", "filters": filters}}
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "users"}],
+            "where": where,
+            "orderBy": [
+                {"field": {"fieldPath": field}, "direction": "DESCENDING"}
+            ],
+            "limit": limit,
+        }
+    }
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+    )
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    results = []
+    for item in resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        data["id"] = doc["name"].split("/")[-1]
+        results.append(data)
+    return {"users": results}
 
 
 @app.post("/leave-group")

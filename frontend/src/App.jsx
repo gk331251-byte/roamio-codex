@@ -38,6 +38,7 @@ import UGCSubmitForm from "./components/UGCSubmitForm";
 import CreatorDashboard from "./pages/CreatorDashboard";
 import CreatorSubmitQuest from "./pages/CreatorSubmitQuest";
 import Featured from "./pages/Featured";
+import LeaderboardPage from "./pages/LeaderboardPage";
 import UGCAnalytics from "./pages/admin/UGCAnalytics";
 import FeaturedReview from "./pages/admin/FeaturedReview";
 import CookieConsent from "react-cookie-consent";
@@ -112,6 +113,7 @@ function App() {
         <Route path="/creator-dashboard" element={<CreatorDashboard />} />
         <Route path="/creator-dashboard/submit-quest" element={<CreatorSubmitQuest />} />
         <Route path="/featured" element={<Featured />} />
+        <Route path="/leaderboard" element={<LeaderboardPage />} />
         <Route path="/admin/ugc-analytics" element={<UGCAnalytics />} />
         <Route path="/admin/featured-review" element={<FeaturedReview />} />
         <Route path="/ugc-submit" element={<UGCSubmitForm />} />

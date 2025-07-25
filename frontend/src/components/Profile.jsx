@@ -19,6 +19,8 @@ import {
   setPublicSharingOptIn,
   setShowUsernameOnShare,
   setShowCityOnShare,
+  setShowOnLeaderboard,
+  setNickname,
 } from '../lib/firebase';
 
 const Profile = () => {
@@ -34,6 +36,8 @@ const Profile = () => {
   const [showName, setShowName] = useState(true);
   const [showCity, setShowCity] = useState(true);
   const [streak, setStreak] = useState(0);
+  const [showLb, setShowLb] = useState(true);
+  const [nickname, setNicknameState] = useState('');
   const nextThreshold = (level + 1) * 1000;
 
   useEffect(() => {
@@ -52,11 +56,12 @@ const Profile = () => {
           setXp(xpVal);
           setLevel(xpData.level ?? Math.floor(xpVal / 1000));
           setStreak(xpData.streakCount || 0);
-          setBadges(xpData.badgesUnlocked || []);
           setShowWatermark(xpData.showRoamioWatermark !== false);
           setPublicOptIn(xpData.publicSharingOptIn === true);
           setShowName(xpData.showUsernameOnShare !== false);
           setShowCity(xpData.showCityOnShare !== false);
+          setShowLb(xpData.showOnLeaderboard !== false);
+          setNicknameState(xpData.nickname || '');
         } catch (err) {
           console.error('load xp error', err);
         }
@@ -193,6 +198,31 @@ const Profile = () => {
           />
           Display my city/location on public shares
         </label>
+      </div>
+
+      <div className="mb-8 space-y-2">
+        <h2 className="text-xl font-bold mb-1">Leaderboard Settings</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showLb}
+            onChange={async (e) => {
+              setShowLb(e.target.checked);
+              if (user) await setShowOnLeaderboard(user.uid, e.target.checked);
+            }}
+          />
+          Show me on public leaderboards
+        </label>
+        <input
+          type="text"
+          value={nickname}
+          onChange={(e) => setNicknameState(e.target.value)}
+          onBlur={async () => {
+            if (user) await setNickname(user.uid, nickname);
+          }}
+          placeholder="Nickname (optional)"
+          className="border rounded px-2 py-1 text-sm w-full"
+        />
       </div>
 
       <div className="mt-8">
