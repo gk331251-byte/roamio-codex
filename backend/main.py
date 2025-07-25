@@ -12,7 +12,6 @@ import certifi
 from google.cloud import firestore_v1, storage
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
-from google.oauth2 import id_token
 import firebase_admin
 from firebase_admin import auth as fb_auth
 
@@ -20,7 +19,14 @@ from firebase_admin import auth as fb_auth
 from dotenv import load_dotenv
 from emotion_utils import generate_filtered_quest_payload
 from stripe_utils import create_subscription_session, verify_webhook
-from auth_utils import is_premium_user
+from auth_utils import (
+    is_premium_user,
+    verify_token,
+    require_user,
+    require_admin,
+    check_not_banned,
+    sanitize_input,
+)
 from firestore_utils import (
     write_custom_quest,
     get_custom_quest as fs_get_custom_quest,
@@ -201,7 +207,7 @@ db = firestore_v1.Client(
 
 # Session for REST-based Firestore calls
 creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "firestore-key.json"),
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
     scopes=["https://www.googleapis.com/auth/datastore"],
 )
 rest_session = AuthorizedSession(creds)
@@ -634,12 +640,12 @@ async def generate_quest(
         )
     else:
         ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
-    place_names = ", ".join([p["name"] for p in ordered if p.get("type") != "start"])
+    place_names = ", ".join([sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"])
 
     if openai.api_key:
         prompt = (
             f"Write a short playful quest including these places: {place_names}. "
-            f"Keep it under 300 tokens. Style: {', '.join(moods)}"
+            f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
         )
         try:
             completion = openai.ChatCompletion.create(
@@ -764,17 +770,6 @@ async def check_premium(user_id: str) -> bool:
     return False
 
 
-async def _verify_token(auth_header: str | None) -> str | None:
-    """Return user ID if bearer token is valid."""
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return None
-    token = auth_header.split(" ", 1)[1]
-    try:
-        info = id_token.verify_oauth2_token(token, GoogleRequest())
-        return info.get("uid") or info.get("sub")
-    except Exception as e:
-        print("Token verify failed", e)
-        return None
 
 
 async def log_admin_event(event: str, payload: dict):
@@ -993,7 +988,8 @@ async def complete_quest(payload: dict = Body(...)):
         await asyncio.to_thread(rest_session.patch, b_url, json=body)
 
     postcard_url = None
-    prompt = payload.get("imagePrompt") or f"A vintage postcard from {payload.get('city','somewhere')}"
+    prompt_raw = payload.get("imagePrompt") or f"A vintage postcard from {payload.get('city','somewhere')}"
+    prompt = sanitize_input(prompt_raw)
     if openai.api_key:
         try:
             dalle = openai.Image.create(prompt=prompt, n=1, size="512x512")
@@ -1079,7 +1075,9 @@ async def generate_postcard(request: Request):
     difficulty = body.get("difficulty", "Medium")
 
     # 🎨 Prompt for image generation
-    prompt = f"A vintage postcard from {city} with a {mood} tone – Difficulty: {difficulty}. Retro art style."
+    prompt = sanitize_input(
+        f"A vintage postcard from {city} with a {mood} tone – Difficulty: {difficulty}. Retro art style."
+    )
 
     try:
         # 🧠 Generate image using OpenAI
@@ -1332,13 +1330,17 @@ async def get_directions(payload: dict = Body(...)):
 
 
 @app.post("/create-group-quest")
-async def create_group_quest(payload: dict = Body(...)):
+async def create_group_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Create a shared group quest and set user active state."""
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     display_name = payload.get("displayName")
-    if not user_id or not quest_id:
+    if not user_id or not quest_id or uid != user_id:
         return {"error": "userId and questId required"}
+    # TODO: ensure user_id is allowed to create group for quest_id  # 🔒 MANUAL FIX NEEDED
 
     project_id = creds.project_id
     active_url = (
@@ -1368,12 +1370,15 @@ async def create_group_quest(payload: dict = Body(...)):
 
 
 @app.post("/join-group")
-async def join_group(payload: dict = Body(...)):
+async def join_group(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Add a user to an existing group quest."""
     user_id = payload.get("userId")
     group_id = payload.get("groupId")
     display_name = payload.get("displayName")
-    if not user_id or not group_id:
+    if not user_id or not group_id or uid != user_id:
         return {"error": "userId and groupId required"}
 
     project_id = creds.project_id
@@ -1805,10 +1810,12 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
 
 
 @app.post("/ugc-submit")
-async def ugc_submit(request: Request, payload: dict = Body(...)):
+async def ugc_submit(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Record a user's social media submission for the weekly tag."""
-    uid = await _verify_token(request.headers.get("Authorization"))
-    if not uid or uid != payload.get("uid"):
+    if uid != payload.get("uid"):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     tag = payload.get("tag")
     platform = payload.get("platform")
@@ -1985,11 +1992,8 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
 
 
 @app.post("/validate-premium")
-async def validate_premium_token(request: Request):
+async def validate_premium_token(uid: str = Depends(require_user)):
     """Return premium status for the authenticated user."""
-    uid = await _verify_token(request.headers.get("Authorization"))
-    if not uid:
-        return JSONResponse(status_code=401, content={"error": "unauthorized"})
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2062,11 +2066,11 @@ async def update_active_quest(payload: dict = Body(...)):
 
 
 @app.post("/create-custom-quest")
-async def create_custom_quest(request: Request, payload: dict = Body(...)):
+async def create_custom_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Create a custom quest for the authenticated premium user."""
-    uid = await _verify_token(request.headers.get("Authorization"))
-    if not uid:
-        return JSONResponse(status_code=401, content={"error": "unauthorized"})
     if not await is_premium_user(uid):
         return JSONResponse(status_code=403, content={"error": "Premium required"})
 
@@ -2093,14 +2097,15 @@ async def create_custom_quest(request: Request, payload: dict = Body(...)):
 
 
 @app.post("/update-custom-quest")
-async def update_custom_quest(request: Request, payload: dict = Body(...)):
+async def update_custom_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Update an existing custom quest for the authenticated user."""
-    uid = await _verify_token(request.headers.get("Authorization"))
-    if not uid:
-        return JSONResponse(status_code=401, content={"error": "unauthorized"})
     quest_id = payload.get("quest_id")
     if not quest_id:
         return {"error": "quest_id required"}
+    # TODO: verify uid owns the quest before allowing update  # 🔒 MANUAL FIX NEEDED
 
     data = payload.get("data", {})
     data["updatedAt"] = datetime.utcnow().isoformat()
@@ -2197,12 +2202,16 @@ async def unpublish_custom_quest(payload: dict = Body(...)):
 
 
 @app.post("/like-quest")
-async def like_quest(payload: dict = Body(...)):
+async def like_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Record a quest like and increment counter."""
     user_id = payload.get("user_id")
     quest_id = payload.get("quest_id")
-    if not user_id or not quest_id:
+    if not user_id or not quest_id or uid != user_id:
         return {"error": "user_id and quest_id required"}
+    # TODO: enforce one like per user in Firestore security rules  # 🔒 MANUAL FIX NEEDED
 
     project_id = creds.project_id
     like_url = (
@@ -2228,11 +2237,14 @@ async def like_quest(payload: dict = Body(...)):
 
 
 @app.post("/view-quest")
-async def view_quest(payload: dict = Body(...)):
+async def view_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Record a unique quest view."""
     user_id = payload.get("user_id")
     quest_id = payload.get("quest_id")
-    if not user_id or not quest_id:
+    if not user_id or not quest_id or uid != user_id:
         return {"error": "user_id and quest_id required"}
 
     project_id = creds.project_id
@@ -3167,10 +3179,12 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
     }
 
 @app.post("/submit-featured-quest")
-async def submit_featured_quest(request: Request, payload: dict = Body(...)):
+async def submit_featured_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Allow approved creators to submit a featured quest draft."""
-    uid = await _verify_token(request.headers.get("Authorization"))
-    if not uid or uid != payload.get("uid"):
+    if uid != payload.get("uid"):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     if not await _verify_creator(uid):
         return JSONResponse(status_code=403, content={"error": "not_creator"})
@@ -3307,10 +3321,12 @@ async def create_promo_code(payload: dict = Body(...)):
 
 
 @app.post("/redeem-promo-code")
-async def redeem_promo_code(request: Request, payload: dict = Body(...)):
+async def redeem_promo_code(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Redeem a promo code for the authenticated user."""
-    uid = await _verify_token(request.headers.get("Authorization"))
-    if not uid or uid != payload.get("uid"):
+    if uid != payload.get("uid"):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
     code = str(payload.get("code", "")).strip()
     if not code:

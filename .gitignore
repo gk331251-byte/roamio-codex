@@ -1,2 +1,4 @@
 backend/firestore-key.json
 node_modules/
+backend/firestore-key.b64
+.env
