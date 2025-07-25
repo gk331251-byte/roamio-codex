@@ -52,6 +52,7 @@ const Profile = () => {
           setXp(xpVal);
           setLevel(xpData.level ?? Math.floor(xpVal / 1000));
           setStreak(xpData.streakCount || 0);
+          setBadges(xpData.badgesUnlocked || []);
           setShowWatermark(xpData.showRoamioWatermark !== false);
           setPublicOptIn(xpData.publicSharingOptIn === true);
           setShowName(xpData.showUsernameOnShare !== false);
