@@ -13,6 +13,7 @@ export function AppProvider({ children }) {
   const [quest, setQuest] = useState(null);
   const [isPremium, setIsPremium] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
@@ -21,7 +22,11 @@ export function AppProvider({ children }) {
         try {
           const snap = await getDoc(doc(db, 'users', u.uid));
           if (snap.exists()) {
-            setIsPremium(snap.data().premium === true);
+            const data = snap.data();
+            setIsPremium(data.premium === true);
+            setShowOnboarding(data.onboardingComplete !== true);
+          } else {
+            setShowOnboarding(true);
           }
           await registerForPushNotifications();
         } catch (err) {
@@ -36,6 +41,7 @@ export function AppProvider({ children }) {
       } else {
         setIsPremium(false);
         setQuest(null);
+        setShowOnboarding(false);
         await AsyncStorage.removeItem('currentQuest');
       }
       setLoading(false);
@@ -59,7 +65,17 @@ export function AppProvider({ children }) {
   }, [quest]);
 
   return (
-    <AppContext.Provider value={{ user, quest, setQuest, isPremium, loading }}>
+    <AppContext.Provider
+      value={{
+        user,
+        quest,
+        setQuest,
+        isPremium,
+        loading,
+        showOnboarding,
+        setShowOnboarding,
+      }}
+    >
       {children}
     </AppContext.Provider>
   );
