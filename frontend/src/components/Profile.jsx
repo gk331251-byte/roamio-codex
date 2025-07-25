@@ -32,6 +32,7 @@ const Profile = () => {
   const [publicOptIn, setPublicOptIn] = useState(false);
   const [showName, setShowName] = useState(true);
   const [showCity, setShowCity] = useState(true);
+  const [streak, setStreak] = useState(0);
   const nextThreshold = (level + 1) * 1000;
 
   useEffect(() => {
@@ -49,6 +50,7 @@ const Profile = () => {
           const xpVal = xpData.xp ?? xpData.totalXP ?? 0;
           setXp(xpVal);
           setLevel(xpData.level ?? Math.floor(xpVal / 1000));
+          setStreak(xpData.streakCount || 0);
           setBadges(xpData.badgesUnlocked || []);
           setShowWatermark(xpData.showRoamioWatermark !== false);
           setPublicOptIn(xpData.publicSharingOptIn === true);
@@ -113,6 +115,7 @@ const Profile = () => {
       </div>
       <p className="text-sm font-medium">Level {level} — {xp} XP</p>
       <XPProgressBar xp={xp} next={nextThreshold} />
+      <p className="text-sm mt-1">🔥 Streak: {streak} day{streak !== 1 ? 's' : ''}</p>
       <div className="mb-8 text-sm space-y-1">
         <p>Total quests: {stats.total}</p>
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
