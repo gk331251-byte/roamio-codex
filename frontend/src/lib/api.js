@@ -114,6 +114,30 @@ export async function getUserXP(userId) {
   return resp.json();
 }
 
+export async function getUserBadges(userId) {
+  const resp = await fetch(`${BASE_URL}/user-badges/${userId}`);
+  if (!resp.ok) throw new Error('Failed to fetch badges');
+  return resp.json();
+}
+
+export async function getLeaderboard({ field = 'xp', city, timeframe = 'all', limit = 50 } = {}) {
+  const url = new URL(`${BASE_URL}/leaderboard`);
+  url.searchParams.set('field', field);
+  url.searchParams.set('limit', limit);
+  if (city) url.searchParams.set('city', city);
+  if (timeframe) url.searchParams.set('timeframe', timeframe);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error('Failed to fetch leaderboard');
+  return resp.json();
+}
+
+export async function getCachedLeaderboard({ type = 'xp', period = 'allTime', city } = {}) {
+  const docId = city ? `${type}_${city}_${period}` : `${type}_${period}`;
+  const resp = await fetch(`${BASE_URL}/leaderboard-snapshot/${docId}`);
+  if (!resp.ok) throw new Error('Failed to fetch leaderboard');
+  return resp.json();
+}
+
 export async function getDirections(places) {
   const resp = await fetch(`${BASE_URL}/get-directions`, {
     method: 'POST',

@@ -29,18 +29,9 @@ from firestore_utils import (
 from group_utils import create_group_document, add_user_to_group
 
 # ----- XP & Level Helpers -----
-LEVEL_THRESHOLDS = [
-    0,   # Level 1
-    50,  # Level 2
-    120, # Level 3
-    200, # Level 4
-    300, # Level 5
-    420, # Level 6
-    550, # Level 7
-    700, # Level 8
-    880, # Level 9
-    1080 # Level 10
-]
+# Each level is reached every 1000 XP. Pre-generate a list so we can
+# easily look up the next threshold when returning quest results.
+LEVEL_THRESHOLDS = [i * 1000 for i in range(1, 101)]  # supports up to level 100
 
 BADGE_CATALOG = {
     "first_quest": {
@@ -85,18 +76,60 @@ BADGE_CATALOG = {
         "icon": "🎒",
         "criteria": {"type": "stopCount", "value": 10},
     },
+    "hardcore": {
+        "id": "hardcore",
+        "name": "Hardcore",
+        "description": "Complete a Hard quest",
+        "icon": "💀",
+        "type": "difficulty",
+    },
+    "streak-7": {
+        "id": "streak-7",
+        "name": "Flame Keeper",
+        "description": "Maintain a 7-day streak",
+        "icon": "🔥",
+        "type": "streak",
+    },
+    "explorer-5": {
+        "id": "explorer-5",
+        "name": "City Explorer",
+        "description": "Complete quests in 5 cities",
+        "icon": "🌆",
+        "type": "exploration",
+    },
+    "squad-player": {
+        "id": "squad-player",
+        "name": "Squad Player",
+        "description": "Complete a group quest with 3+ members",
+        "icon": "👥",
+        "type": "group",
+    },
+    "quest-10": {
+        "id": "quest-10",
+        "name": "Veteran",
+        "description": "Complete 10 quests",
+        "icon": "🏅",
+        "type": "milestone",
+    },
 }
 
 
 def get_level_from_xp(xp: int) -> int:
-    """Return user level based on total XP."""
-    level = 1
-    for idx, threshold in enumerate(LEVEL_THRESHOLDS, start=1):
-        if xp >= threshold:
-            level = idx
-        else:
-            break
-    return level
+    """Return user level based on total XP using 1000 XP per level."""
+    try:
+        xp_val = int(xp)
+    except Exception:
+        xp_val = 0
+    return xp_val // 1000
+
+def parse_ts(ts: str) -> datetime | None:
+    """Parse ISO timestamp to datetime (UTC)."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", ""))
+    except Exception:
+        return None
 
 def calculate_age(dob_str: str) -> int:
     """Return age in years from YYYY-MM-DD string."""
@@ -836,6 +869,15 @@ async def complete_quest(payload: dict = Body(...)):
     timestamp = datetime.utcnow().isoformat()
     project_id = creds.project_id
 
+    # Path to quest document under the user's quests collection
+    quest_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, quest_url)
+    existing_doc = _decode_document(resp.json()) if resp.status_code == 200 else {}
+
+    xp_already_applied = bool(existing_doc.get("xpApplied"))
+
     # Quest fields
     quest_doc = {
         "title": payload.get("title"),
@@ -845,99 +887,110 @@ async def complete_quest(payload: dict = Body(...)):
         "questText": payload.get("questText"),
         "locationList": payload.get("locationList", []),
         "imagePrompt": payload.get("imagePrompt"),
-        "postcardUrl": None,
-        "visitedIndices": payload.get("visitedIndices", []),
+        "postcardUrl": existing_doc.get("postcardUrl"),
+        "visitedIndices": payload.get("visitedIndices", existing_doc.get("visitedIndices", [])),
         "completed": True,
-        "completedAt": timestamp,
+        "completedAt": existing_doc.get("completedAt", timestamp),
         "isDemo": payload.get("isDemo", False),
-        "xpEarned": 0,
-        "levelBefore": 0,
-        "levelAfter": 0,
-        "badgesUnlocked": [],
     }
 
-    # Save quest under user_quests/{userId}/quests/{questId}
-    quest_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
-    )
-    quest_body = {"fields": _encode_fields(quest_doc)}
-    resp = await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+    difficulty = (payload.get("difficulty") or "Easy").title()
+    base_xp = 100 if difficulty == "Easy" else 200 if difficulty == "Medium" else 300
+    xp_earned = 0 if xp_already_applied else base_xp
+    if payload.get("groupQuest") and not xp_already_applied:
+        xp_earned += 100
+    bonus_xp = 0
+    new_badges = []
 
     # Fetch current user doc
     user_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     )
     resp = await asyncio.to_thread(rest_session.get, user_url)
-    user_data = {}
-    if resp.status_code == 200:
-        user_data = _decode_document(resp.json())
+    user_data = _decode_document(resp.json()) if resp.status_code == 200 else {}
 
-    difficulty = (payload.get("difficulty") or "Easy").title()
-    base_xp = 25 if difficulty == "Easy" else 50 if difficulty == "Medium" else 75
-    xp_earned = base_xp
-    bonus_xp = 0
-    if user_data.get("ugcBoostActive"):
-        cfg_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
-        )
-        cfg_resp = await asyncio.to_thread(rest_session.get, cfg_url)
-        cfg = _decode_document(cfg_resp.json()) if cfg_resp.status_code == 200 else {}
-        mult = float(cfg.get("xpMultiplier", 1.2))
-        xp_earned = int(base_xp * mult)
-        bonus_xp = xp_earned - base_xp
-    level_before = user_data.get("level", 1)
-    total_xp = user_data.get("totalXP", 0) + xp_earned
+    total_xp = user_data.get("xp", user_data.get("totalXP", 0))
+    quests_completed = user_data.get("questsCompleted", 0)
+    streak = user_data.get("streakCount", 0)
+    group_completions = user_data.get("groupCompletions", 0)
+    if xp_earned:
+        total_xp += xp_earned
+        quests_completed += 1
+        last_ts = parse_ts(user_data.get("lastCompleted"))
+        now_dt = datetime.utcnow()
+        if last_ts and now_dt - last_ts <= timedelta(hours=36):
+            streak += 1
+        else:
+            streak = 1
+        user_data["lastCompleted"] = timestamp
+        if payload.get("groupQuest"):
+            group_completions += 1
     level = get_level_from_xp(total_xp)
-    stats = user_data.get("stats", {})
-    badges = user_data.get("badges", {})
-    badge_list = user_data.get("badgesUnlocked", [])
-    badge_list = user_data.get("badgesUnlocked", [])
-    stats["totalQuestsCompleted"] = stats.get("totalQuestsCompleted", 0) + 1
-    stats["totalXP"] = total_xp
-    if quest_doc.get("mood") == "Foodie":
-        stats["foodieQuests"] = stats.get("foodieQuests", 0) + 1
 
-    new_badges = compute_badge_unlocks(stats, level, badge_list)
-    for b in new_badges:
-        badges[b] = True
-        if b not in badge_list:
-            badge_list.append(b)
+    badge_set = set(user_data.get("badgesUnlocked", []))
+    if quests_completed >= 1 and "first-quest" not in badge_set:
+        badge_set.add("first-quest")
+        new_badges.append("first-quest")
+    if quests_completed >= 10 and "quest-10" not in badge_set:
+        badge_set.add("quest-10")
+        new_badges.append("quest-10")
+    if streak >= 7 and "streak-7" not in badge_set:
+        badge_set.add("streak-7")
+        new_badges.append("streak-7")
+    if difficulty == "Hard" and "hardcore" not in badge_set:
+        badge_set.add("hardcore")
+        new_badges.append("hardcore")
+    if payload.get("groupQuest") and len(payload.get("groupQuest", {}).get("members", [])) >= 3 and "squad-player" not in badge_set:
+        badge_set.add("squad-player")
+        new_badges.append("squad-player")
+    if "explorer-5" not in badge_set:
+        qurl = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
+        )
+        qresp = await asyncio.to_thread(rest_session.post, qurl, json={"structuredQuery": {"from": [{"collectionId": "quests"}]}})
+        if qresp.status_code == 200:
+            cities = set()
+            for item in qresp.json():
+                doc = item.get("document")
+                if not doc:
+                    continue
+                qd = _decode_document(doc)
+                city = qd.get("city") or qd.get("questData", {}).get("city")
+                if city:
+                    cities.add(city)
+                if len(cities) >= 5:
+                    break
+            if len(cities) >= 5:
+                badge_set.add("explorer-5")
+                new_badges.append("explorer-5")
 
     quest_doc.update({
         "xpEarned": xp_earned,
-        "levelBefore": level_before,
-        "levelAfter": level,
-        "badgesUnlocked": new_badges,
-        "bonusXP": bonus_xp,
+        "xpApplied": True,
     })
-    # Update quest document with summary details
-    summary_body = {"fields": _encode_fields({
-        "xpEarned": xp_earned,
-        "levelBefore": level_before,
-        "levelAfter": level,
-        "badgesUnlocked": new_badges,
-        "bonusXP": bonus_xp,
-    })}
-    await asyncio.to_thread(rest_session.patch, quest_url, json=summary_body)
+    quest_body = {"fields": _encode_fields(quest_doc)}
+    await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
 
     user_update = {
-        "totalXP": total_xp,
+        "xp": total_xp,
         "level": level,
-        "stats": stats,
-        "badges": badges,
-        "badgesUnlocked": badge_list,
-        "lastActive": timestamp,
+        "lastCompleted": user_data.get("lastCompleted"),
+        "questsCompleted": quests_completed,
+        "streakCount": streak,
+        "groupCompletions": group_completions,
+        "badgesUnlocked": list(badge_set),
+        "badgeCount": len(badge_set),
     }
-    if user_data.get("ugcBoostActive"):
-        user_update["ugcBoostActive"] = False
-    user_body = {"fields": _encode_fields(user_update)}
-    resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
+    if payload.get("city") and not user_data.get("city"):
+        user_update["city"] = payload.get("city")
+    await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
+
+    for badge_id in new_badges:
+        b_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges/{badge_id}"
+        )
+        body = {"fields": _encode_fields({"earnedAt": timestamp, "type": BADGE_CATALOG.get(badge_id, {}).get("type", "general")})}
+        await asyncio.to_thread(rest_session.patch, b_url, json=body)
 
     postcard_url = None
     prompt = payload.get("imagePrompt") or f"A vintage postcard from {payload.get('city','somewhere')}"
@@ -994,6 +1047,7 @@ async def complete_quest(payload: dict = Body(...)):
         "badgesUnlocked": new_badges,
         "nextLevelXP": LEVEL_THRESHOLDS[min(level, len(LEVEL_THRESHOLDS)-1)],
         "imageUrl": postcard_url,
+        "streakCount": streak,
     }
 
 
@@ -1516,27 +1570,118 @@ async def get_user_xp(user_id: str):
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        return {
-            "totalXP": 0,
-            "level": 1,
-            "badgesUnlocked": [],
-            "showRoamioWatermark": True,
-            "skipSharePrompt": False,
-            "publicSharingOptIn": False,
-            "showUsernameOnShare": True,
-            "showCityOnShare": True,
-        }
-    data = _decode_document(resp.json())
+        data = {}
+    else:
+        data = _decode_document(resp.json())
+    xp = data.get("xp")
+    if xp is None:
+        xp = data.get("totalXP", 0)
+    level = data.get("level")
+    if level is None:
+        level = get_level_from_xp(xp)
     return {
-        "totalXP": data.get("totalXP", 0),
-        "level": data.get("level", 1),
+        "xp": xp,
+        "totalXP": xp,
+        "level": level,
+        "streakCount": data.get("streakCount", 0),
         "badgesUnlocked": data.get("badgesUnlocked", []),
         "showRoamioWatermark": data.get("showRoamioWatermark", True),
         "skipSharePrompt": data.get("skipSharePrompt", False),
         "publicSharingOptIn": data.get("publicSharingOptIn", False),
         "showUsernameOnShare": data.get("showUsernameOnShare", True),
         "showCityOnShare": data.get("showCityOnShare", True),
+        "showOnLeaderboard": data.get("showOnLeaderboard", True),
+        "nickname": data.get("nickname"),
     }
+
+
+@app.get("/user-badges/{user_id}")
+async def get_user_badges(user_id: str):
+    """Return list of badges with metadata for the user."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    badges = []
+    if resp.status_code == 200:
+        data = resp.json().get("documents", [])
+        for doc in data:
+            obj = _decode_document(doc)
+            obj["id"] = doc["name"].split("/")[-1]
+            badges.append(obj)
+    return {"badges": badges}
+
+
+@app.get("/leaderboard")
+async def get_leaderboard(
+    field: str = Query("xp"),
+    limit: int = Query(50),
+    city: str | None = Query(None),
+    timeframe: str = Query("all"),
+):
+    """Return leaderboard entries sorted by the chosen field."""
+    project_id = creds.project_id
+    filters = [
+        {
+            "fieldFilter": {
+                "field": {"fieldPath": "showOnLeaderboard"},
+                "op": "EQUAL",
+                "value": {"booleanValue": True},
+            }
+        }
+    ]
+    if city:
+        filters.append(
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "city"},
+                    "op": "EQUAL",
+                    "value": {"stringValue": city},
+                }
+            }
+        )
+    if timeframe == "week":
+        since = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        filters.append(
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "lastCompleted"},
+                    "op": "GREATER_THAN_OR_EQUAL",
+                    "value": {"stringValue": since},
+                }
+            }
+        )
+    if len(filters) == 1:
+        where = filters[0]
+    else:
+        where = {"compositeFilter": {"op": "AND", "filters": filters}}
+    query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "users"}],
+            "where": where,
+            "orderBy": [
+                {"field": {"fieldPath": field}, "direction": "DESCENDING"}
+            ],
+            "limit": limit,
+        }
+    }
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+    )
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    results = []
+    for item in resp.json():
+        doc = item.get("document")
+        if not doc:
+            continue
+        data = _decode_document(doc)
+        data["id"] = doc["name"].split("/")[-1]
+        results.append(data)
+    return {"users": results}
 
 
 @app.post("/leave-group")
@@ -3266,4 +3411,100 @@ async def admin_delete_custom_quest(userId: str = Query(...), questId: str = Que
     await asyncio.to_thread(rest_session.delete, url)
     await log_admin_event("admin_delete_custom", {"admin": userId, "questId": questId})
     return {"status": "deleted"}
+
+
+@app.get("/leaderboard-snapshot/{doc_id}")
+async def get_leaderboard_snapshot(doc_id: str):
+    """Return cached leaderboard document."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    return _decode_document(resp.json())
+
+
+@app.post("/refresh-leaderboards")
+async def refresh_leaderboards():
+    """Recompute leaderboard snapshots and cache them."""
+    project_id = creds.project_id
+    now = datetime.utcnow().isoformat()
+    run_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+
+    leaderboard_fields = {
+        "xp": "xp",
+        "streaks": "streakCount",
+        "groupCompletions": "groupCompletions",
+        "cityQuestCount": "cityQuestCount",
+    }
+
+    async def query_users(field, since):
+        filters = [
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "showOnLeaderboard"},
+                    "op": "EQUAL",
+                    "value": {"booleanValue": True},
+                }
+            }
+        ]
+        if since:
+            filters.append(
+                {
+                    "fieldFilter": {
+                        "field": {"fieldPath": "lastCompleted"},
+                        "op": "GREATER_THAN_OR_EQUAL",
+                        "value": {"stringValue": since},
+                    }
+                }
+            )
+        where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
+        body = {
+            "structuredQuery": {
+                "from": [{"collectionId": "users"}],
+                "where": where,
+                "orderBy": [{"field": {"fieldPath": field}, "direction": "DESCENDING"}],
+                "limit": 100,
+            }
+        }
+        resp = await asyncio.to_thread(rest_session.post, run_url, json=body)
+        if resp.status_code != 200:
+            return []
+        results = []
+        rank = 1
+        for item in resp.json():
+            doc = item.get("document")
+            if not doc:
+                continue
+            data = _decode_document(doc)
+            results.append(
+                {
+                    "rank": rank,
+                    "uid": doc["name"].split("/")[-1],
+                    "displayName": data.get("nickname") or data.get("displayName"),
+                    "xp": data.get("xp", 0),
+                    "streakCount": data.get("streakCount", 0),
+                    "groupCompletions": data.get("groupCompletions", 0),
+                    "cityQuestCount": data.get("cityQuestCount", 0),
+                    "city": data.get("city"),
+                    "avatar": data.get("avatar"),
+                }
+            )
+            rank += 1
+        return results
+
+    for lb_type, field_path in leaderboard_fields.items():
+        for period, days in {"allTime": None, "weekly": 7}.items():
+            since = (datetime.utcnow() - timedelta(days=days)).isoformat() if days else None
+            entries = await query_users(field_path, since)
+            doc_id = f"{lb_type}_{period}"
+            doc_url = (
+                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
+            )
+            body = {"fields": _encode_fields({"lastUpdated": now, "entries": entries})}
+            await asyncio.to_thread(rest_session.patch, doc_url, json=body)
+
+    return {"status": "ok"}
 
