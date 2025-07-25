@@ -131,6 +131,13 @@ export async function getLeaderboard({ field = 'xp', city, timeframe = 'all', li
   return resp.json();
 }
 
+export async function getCachedLeaderboard({ type = 'xp', period = 'allTime', city } = {}) {
+  const docId = city ? `${type}_${city}_${period}` : `${type}_${period}`;
+  const resp = await fetch(`${BASE_URL}/leaderboard-snapshot/${docId}`);
+  if (!resp.ok) throw new Error('Failed to fetch leaderboard');
+  return resp.json();
+}
+
 export async function getDirections(places) {
   const resp = await fetch(`${BASE_URL}/get-directions`, {
     method: 'POST',
