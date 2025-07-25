@@ -87,6 +87,15 @@ def get_level_from_xp(xp: int) -> int:
         xp_val = 0
     return xp_val // 1000
 
+def parse_ts(ts: str) -> datetime | None:
+    """Parse ISO timestamp to datetime (UTC)."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", ""))
+    except Exception:
+        return None
+
 def calculate_age(dob_str: str) -> int:
     """Return age in years from YYYY-MM-DD string."""
     try:
@@ -867,9 +876,16 @@ async def complete_quest(payload: dict = Body(...)):
 
     total_xp = user_data.get("xp", user_data.get("totalXP", 0))
     quests_completed = user_data.get("questsCompleted", 0)
+    streak = user_data.get("streakCount", 0)
     if xp_earned:
         total_xp += xp_earned
         quests_completed += 1
+        last_ts = parse_ts(user_data.get("lastCompleted"))
+        now_dt = datetime.utcnow()
+        if last_ts and now_dt - last_ts <= timedelta(hours=36):
+            streak += 1
+        else:
+            streak = 1
         user_data["lastCompleted"] = timestamp
     level = get_level_from_xp(total_xp)
 
@@ -885,6 +901,7 @@ async def complete_quest(payload: dict = Body(...)):
         "level": level,
         "lastCompleted": user_data.get("lastCompleted"),
         "questsCompleted": quests_completed,
+        "streakCount": streak,
     }
     await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
 
@@ -943,6 +960,7 @@ async def complete_quest(payload: dict = Body(...)):
         "badgesUnlocked": new_badges,
         "nextLevelXP": LEVEL_THRESHOLDS[min(level, len(LEVEL_THRESHOLDS)-1)],
         "imageUrl": postcard_url,
+        "streakCount": streak,
     }
 
 
@@ -1478,6 +1496,7 @@ async def get_user_xp(user_id: str):
         "xp": xp,
         "totalXP": xp,
         "level": level,
+        "streakCount": data.get("streakCount", 0),
         "badgesUnlocked": data.get("badgesUnlocked", []),
         "showRoamioWatermark": data.get("showRoamioWatermark", True),
         "skipSharePrompt": data.get("skipSharePrompt", False),
