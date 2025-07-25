@@ -1,11 +1,13 @@
 import os
 import asyncio
-from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession
+import re
+from fastapi import Depends, HTTPException, Request
+from google.oauth2 import service_account, id_token
+from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
 
 # Initialize Firestore REST session
 creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "firestore-key.json"),
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
     scopes=["https://www.googleapis.com/auth/datastore"],
 )
 rest_session = AuthorizedSession(creds)
@@ -45,3 +47,63 @@ async def is_premium_user(uid: str) -> bool:
         data = _decode_document(resp.json())
         return data.get("isPremium") is True
     return False
+
+
+async def verify_token(auth_header: str | None) -> str | None:
+    """Validate Firebase token and return UID."""
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ", 1)[1]
+    try:
+        client_id = os.getenv("FIREBASE_CLIENT_ID")
+        info = id_token.verify_oauth2_token(
+            token,
+            GoogleRequest(),
+            audience=client_id,
+        )
+        issuer = info.get("iss")
+        if issuer != f"https://securetoken.google.com/{PROJECT_ID}":
+            raise ValueError("Wrong issuer")
+        return info.get("uid") or info.get("sub")
+    except Exception:
+        return None
+
+
+async def _get_user_doc(uid: str) -> dict | None:
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/users/{uid}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code == 200:
+        return _decode_document(resp.json())
+    return None
+
+
+async def require_user(request: Request) -> str:
+    uid = await verify_token(request.headers.get("Authorization"))
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return uid
+
+
+async def require_admin(uid: str = Depends(require_user)) -> str:
+    doc = await _get_user_doc(uid)
+    if not doc or not doc.get("isAdmin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return uid
+
+
+async def check_not_banned(uid: str = Depends(require_user)) -> str:
+    doc = await _get_user_doc(uid)
+    if doc and doc.get("banned"):
+        raise HTTPException(status_code=403, detail="User banned")
+    return uid
+
+
+def sanitize_input(text: str) -> str:
+    if not text:
+        return ""
+    sanitized = re.sub(r"[<>]", "", text)
+    sanitized = sanitized.replace("\n", " ").strip()
+    return sanitized
+

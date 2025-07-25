@@ -7,7 +7,7 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
 
 creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "firestore-key.json"),
+    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
     scopes=["https://www.googleapis.com/auth/datastore"],
 )
 rest_session = AuthorizedSession(creds)
