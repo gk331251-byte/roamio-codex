@@ -34,12 +34,18 @@ export async function completeQuest(quest) {
     visitedIndices: quest.visitedIndices || [],
   };
   try {
-    await fetch(`${BASE_URL}/quest-complete`, {
+    const res = await fetch(`${BASE_URL}/quest-complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text);
+    }
+    return await res.json();
   } catch (err) {
     console.log('Complete quest error', err);
+    return null;
   }
 }
