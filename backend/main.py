@@ -76,6 +76,41 @@ BADGE_CATALOG = {
         "icon": "🎒",
         "criteria": {"type": "stopCount", "value": 10},
     },
+    "hardcore": {
+        "id": "hardcore",
+        "name": "Hardcore",
+        "description": "Complete a Hard quest",
+        "icon": "💀",
+        "type": "difficulty",
+    },
+    "streak-7": {
+        "id": "streak-7",
+        "name": "Flame Keeper",
+        "description": "Maintain a 7-day streak",
+        "icon": "🔥",
+        "type": "streak",
+    },
+    "explorer-5": {
+        "id": "explorer-5",
+        "name": "City Explorer",
+        "description": "Complete quests in 5 cities",
+        "icon": "🌆",
+        "type": "exploration",
+    },
+    "squad-player": {
+        "id": "squad-player",
+        "name": "Squad Player",
+        "description": "Complete a group quest with 3+ members",
+        "icon": "👥",
+        "type": "group",
+    },
+    "quest-10": {
+        "id": "quest-10",
+        "name": "Veteran",
+        "description": "Complete 10 quests",
+        "icon": "🏅",
+        "type": "milestone",
+    },
 }
 
 
@@ -86,6 +121,15 @@ def get_level_from_xp(xp: int) -> int:
     except Exception:
         xp_val = 0
     return xp_val // 1000
+
+def parse_ts(ts: str) -> datetime | None:
+    """Parse ISO timestamp to datetime (UTC)."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", ""))
+    except Exception:
+        return None
 
 def calculate_age(dob_str: str) -> int:
     """Return age in years from YYYY-MM-DD string."""
@@ -867,11 +911,55 @@ async def complete_quest(payload: dict = Body(...)):
 
     total_xp = user_data.get("xp", user_data.get("totalXP", 0))
     quests_completed = user_data.get("questsCompleted", 0)
+    streak = user_data.get("streakCount", 0)
     if xp_earned:
         total_xp += xp_earned
         quests_completed += 1
+        last_ts = parse_ts(user_data.get("lastCompleted"))
+        now_dt = datetime.utcnow()
+        if last_ts and now_dt - last_ts <= timedelta(hours=36):
+            streak += 1
+        else:
+            streak = 1
         user_data["lastCompleted"] = timestamp
     level = get_level_from_xp(total_xp)
+
+    badge_set = set(user_data.get("badgesUnlocked", []))
+    if quests_completed >= 1 and "first-quest" not in badge_set:
+        badge_set.add("first-quest")
+        new_badges.append("first-quest")
+    if quests_completed >= 10 and "quest-10" not in badge_set:
+        badge_set.add("quest-10")
+        new_badges.append("quest-10")
+    if streak >= 7 and "streak-7" not in badge_set:
+        badge_set.add("streak-7")
+        new_badges.append("streak-7")
+    if difficulty == "Hard" and "hardcore" not in badge_set:
+        badge_set.add("hardcore")
+        new_badges.append("hardcore")
+    if payload.get("groupQuest") and len(payload.get("groupQuest", {}).get("members", [])) >= 3 and "squad-player" not in badge_set:
+        badge_set.add("squad-player")
+        new_badges.append("squad-player")
+    if "explorer-5" not in badge_set:
+        qurl = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
+        )
+        qresp = await asyncio.to_thread(rest_session.post, qurl, json={"structuredQuery": {"from": [{"collectionId": "quests"}]}})
+        if qresp.status_code == 200:
+            cities = set()
+            for item in qresp.json():
+                doc = item.get("document")
+                if not doc:
+                    continue
+                qd = _decode_document(doc)
+                city = qd.get("city") or qd.get("questData", {}).get("city")
+                if city:
+                    cities.add(city)
+                if len(cities) >= 5:
+                    break
+            if len(cities) >= 5:
+                badge_set.add("explorer-5")
+                new_badges.append("explorer-5")
 
     quest_doc.update({
         "xpEarned": xp_earned,
@@ -885,8 +973,18 @@ async def complete_quest(payload: dict = Body(...)):
         "level": level,
         "lastCompleted": user_data.get("lastCompleted"),
         "questsCompleted": quests_completed,
+        "streakCount": streak,
+        "badgesUnlocked": list(badge_set),
+        "badgeCount": len(badge_set),
     }
     await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
+
+    for badge_id in new_badges:
+        b_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges/{badge_id}"
+        )
+        body = {"fields": _encode_fields({"earnedAt": timestamp, "type": BADGE_CATALOG.get(badge_id, {}).get("type", "general")})}
+        await asyncio.to_thread(rest_session.patch, b_url, json=body)
 
     postcard_url = None
     prompt = payload.get("imagePrompt") or f"A vintage postcard from {payload.get('city','somewhere')}"
@@ -943,6 +1041,7 @@ async def complete_quest(payload: dict = Body(...)):
         "badgesUnlocked": new_badges,
         "nextLevelXP": LEVEL_THRESHOLDS[min(level, len(LEVEL_THRESHOLDS)-1)],
         "imageUrl": postcard_url,
+        "streakCount": streak,
     }
 
 
@@ -1478,6 +1577,7 @@ async def get_user_xp(user_id: str):
         "xp": xp,
         "totalXP": xp,
         "level": level,
+        "streakCount": data.get("streakCount", 0),
         "badgesUnlocked": data.get("badgesUnlocked", []),
         "showRoamioWatermark": data.get("showRoamioWatermark", True),
         "skipSharePrompt": data.get("skipSharePrompt", False),
@@ -1485,6 +1585,24 @@ async def get_user_xp(user_id: str):
         "showUsernameOnShare": data.get("showUsernameOnShare", True),
         "showCityOnShare": data.get("showCityOnShare", True),
     }
+
+
+@app.get("/user-badges/{user_id}")
+async def get_user_badges(user_id: str):
+    """Return list of badges with metadata for the user."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    badges = []
+    if resp.status_code == 200:
+        data = resp.json().get("documents", [])
+        for doc in data:
+            obj = _decode_document(doc)
+            obj["id"] = doc["name"].split("/")[-1]
+            badges.append(obj)
+    return {"badges": badges}
 
 
 @app.post("/leave-group")

@@ -114,6 +114,12 @@ export async function getUserXP(userId) {
   return resp.json();
 }
 
+export async function getUserBadges(userId) {
+  const resp = await fetch(`${BASE_URL}/user-badges/${userId}`);
+  if (!resp.ok) throw new Error('Failed to fetch badges');
+  return resp.json();
+}
+
 export async function getDirections(places) {
   const resp = await fetch(`${BASE_URL}/get-directions`, {
     method: 'POST',
