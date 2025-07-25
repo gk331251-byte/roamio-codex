@@ -92,3 +92,13 @@ export async function setShowCityOnShare(uid, val) {
   if (!uid) return;
   await updateDoc(doc(db, 'users', uid), { showCityOnShare: val });
 }
+
+export async function setShowOnLeaderboard(uid, val) {
+  if (!uid) return;
+  await updateDoc(doc(db, 'users', uid), { showOnLeaderboard: val });
+}
+
+export async function setNickname(uid, name) {
+  if (!uid) return;
+  await updateDoc(doc(db, 'users', uid), { nickname: name });
+}
