@@ -10,6 +10,7 @@ export default function QuestCompleteSummary({
   badgesUnlocked = [],
   nextLevelXP = 100,
   imageUrl = '',
+  streakCount = 0,
   onClose,
 }) {
   const [count, setCount] = useState(0);
@@ -44,6 +45,11 @@ export default function QuestCompleteSummary({
         <p className="text-sm mt-1">
           {newTotal} / {nextLevelXP} XP (Level {level})
         </p>
+        {streakCount > 0 && (
+          <p className="text-sm text-orange-600 mt-1">
+            +1 Day Streak! You’ve kept your adventure alive for {streakCount} day{streakCount !== 1 ? 's' : ''} straight.
+          </p>
+        )}
         {badgesUnlocked.length > 0 && (
           <div className="mt-4">
             <p className="text-sm font-medium mb-1">🏆 New Badges</p>
