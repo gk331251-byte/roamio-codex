@@ -974,8 +974,6 @@ async def complete_quest(payload: dict = Body(...)):
         "lastCompleted": user_data.get("lastCompleted"),
         "questsCompleted": quests_completed,
         "streakCount": streak,
-        "badgesUnlocked": list(badge_set),
-        "badgeCount": len(badge_set),
     }
     await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
 
