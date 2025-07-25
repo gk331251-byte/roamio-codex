@@ -540,6 +540,7 @@ export default function QuestLivePage() {
           badgesUnlocked={summaryData.badgesUnlocked || []}
           nextLevelXP={summaryData.nextLevelXP || 100}
           imageUrl={summaryData.imageUrl}
+          streakCount={summaryData.streakCount}
           onClose={() => {
             setSummaryOpen(false);
             if (!skipSharePrompt) setShareOpen(true);

@@ -10,6 +10,7 @@ import {
   publishCustomQuest,
   unpublishCustomQuest,
   getUserXP,
+  getUserBadges,
 } from '../lib/api';
 import XPProgressBar from './XPProgressBar';
 import BadgeGallery from './BadgeGallery';
@@ -19,7 +20,6 @@ import {
   setShowUsernameOnShare,
   setShowCityOnShare,
 } from '../lib/firebase';
-const LEVEL_THRESHOLDS = [0,50,120,200,300,420,550,700,880,1080];
 
 const Profile = () => {
   const [user, setUser] = useState(null);
@@ -33,7 +33,8 @@ const Profile = () => {
   const [publicOptIn, setPublicOptIn] = useState(false);
   const [showName, setShowName] = useState(true);
   const [showCity, setShowCity] = useState(true);
-  const nextThreshold = LEVEL_THRESHOLDS[Math.min(level, LEVEL_THRESHOLDS.length - 1)];
+  const [streak, setStreak] = useState(0);
+  const nextThreshold = (level + 1) * 1000;
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -47,15 +48,22 @@ const Profile = () => {
         }
         try {
           const xpData = await getUserXP(u.uid);
-          setXp(xpData.totalXP || 0);
-          setLevel(xpData.level || 1);
-          setBadges(xpData.badgesUnlocked || []);
+          const xpVal = xpData.xp ?? xpData.totalXP ?? 0;
+          setXp(xpVal);
+          setLevel(xpData.level ?? Math.floor(xpVal / 1000));
+          setStreak(xpData.streakCount || 0);
           setShowWatermark(xpData.showRoamioWatermark !== false);
           setPublicOptIn(xpData.publicSharingOptIn === true);
           setShowName(xpData.showUsernameOnShare !== false);
           setShowCity(xpData.showCityOnShare !== false);
         } catch (err) {
           console.error('load xp error', err);
+        }
+        try {
+          const badgeRes = await getUserBadges(u.uid);
+          setBadges(badgeRes.badges || []);
+        } catch (err) {
+          console.error('load badges error', err);
         }
         try {
           const q = await getUserQuests(u.uid);
@@ -111,9 +119,9 @@ const Profile = () => {
           <span className="bg-yellow-200 text-yellow-800 text-xs px-2 py-1 rounded-full">Quest+ Member</span>
         )}
       </div>
-      <p className="text-sm font-medium">Level {level} Explorer</p>
+      <p className="text-sm font-medium">Level {level} — {xp} XP</p>
       <XPProgressBar xp={xp} next={nextThreshold} />
-      <p className="text-xs text-gray-600 mt-1">{xp} XP</p>
+      <p className="text-sm mt-1">🔥 Streak: {streak} day{streak !== 1 ? 's' : ''}</p>
       <div className="mb-8 text-sm space-y-1">
         <p>Total quests: {stats.total}</p>
         {stats.mostCity && <p>Most visited city: {stats.mostCity}</p>}
@@ -132,7 +140,7 @@ const Profile = () => {
 
       <div className="mb-8">
         <h2 className="text-xl font-bold mb-2">Badges</h2>
-        <BadgeGallery unlocked={badges} />
+        <BadgeGallery badges={badges} />
       </div>
 
       <div className="mb-8">
