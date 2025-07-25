@@ -10,6 +10,7 @@ import {
   publishCustomQuest,
   unpublishCustomQuest,
   getUserXP,
+  getUserBadges,
 } from '../lib/api';
 import XPProgressBar from './XPProgressBar';
 import BadgeGallery from './BadgeGallery';
@@ -58,6 +59,12 @@ const Profile = () => {
           setShowCity(xpData.showCityOnShare !== false);
         } catch (err) {
           console.error('load xp error', err);
+        }
+        try {
+          const badgeRes = await getUserBadges(u.uid);
+          setBadges(badgeRes.badges || []);
+        } catch (err) {
+          console.error('load badges error', err);
         }
         try {
           const q = await getUserQuests(u.uid);
@@ -134,7 +141,7 @@ const Profile = () => {
 
       <div className="mb-8">
         <h2 className="text-xl font-bold mb-2">Badges</h2>
-        <BadgeGallery unlocked={badges} />
+        <BadgeGallery badges={badges} />
       </div>
 
       <div className="mb-8">
