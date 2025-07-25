@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { getLeaderboard } from '../lib/api';
+import dayjs from 'dayjs';
+import { getCachedLeaderboard } from '../lib/api';
 
 
 export default function LeaderboardPage() {
@@ -8,6 +9,7 @@ export default function LeaderboardPage() {
   const [timeRange, setTimeRange] = useState('all');
   const [region, setRegion] = useState('global');
   const [loading, setLoading] = useState(true);
+  const [updated, setUpdated] = useState('');
   const userCity = '';
 
   useEffect(() => {
@@ -15,8 +17,10 @@ export default function LeaderboardPage() {
       setLoading(true);
       try {
         const city = region === 'local' ? userCity || undefined : undefined;
-        const data = await getLeaderboard({ field, timeframe: timeRange, city });
-        setEntries(data.users || []);
+        const period = timeRange === 'all' ? 'allTime' : 'weekly';
+        const data = await getCachedLeaderboard({ type: field, period, city });
+        setEntries(data.entries || []);
+        setUpdated(data.lastUpdated || '');
       } catch (err) {
         console.error('lb load', err);
       } finally {
@@ -58,14 +62,21 @@ export default function LeaderboardPage() {
         <p>Loading...</p>
       ) : (
         <div className="space-y-2">
+          {updated && (
+            <p className="text-xs text-gray-500">Updated {dayjs(updated).fromNow()}</p>
+          )}
           {entries.map((e, i) => (
-            <div key={e.id} className="flex justify-between border p-2 rounded">
+            <div key={e.uid || e.id} className="flex justify-between border p-2 rounded">
               <div>
-                #{i + 1} – {e.nickname || e.displayName || 'Anon'}
+                #{i + 1} – {e.displayName || 'Anon'}
                 {e.city && ` (${e.city})`}
               </div>
               <div>
-                {field === 'xp' ? `${e.xp} XP` : `${e.streakCount} days`}
+                {field === 'xp'
+                  ? `${e.xp} XP`
+                  : field === 'streakCount'
+                  ? `${e.streakCount} days`
+                  : `${e.groupCompletions || 0}`}
               </div>
             </div>
           ))}

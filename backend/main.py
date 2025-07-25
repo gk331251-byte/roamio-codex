@@ -3412,3 +3412,99 @@ async def admin_delete_custom_quest(userId: str = Query(...), questId: str = Que
     await log_admin_event("admin_delete_custom", {"admin": userId, "questId": questId})
     return {"status": "deleted"}
 
+
+@app.get("/leaderboard-snapshot/{doc_id}")
+async def get_leaderboard_snapshot(doc_id: str):
+    """Return cached leaderboard document."""
+    project_id = creds.project_id
+    url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, url)
+    if resp.status_code != 200:
+        return {}
+    return _decode_document(resp.json())
+
+
+@app.post("/refresh-leaderboards")
+async def refresh_leaderboards():
+    """Recompute leaderboard snapshots and cache them."""
+    project_id = creds.project_id
+    now = datetime.utcnow().isoformat()
+    run_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+
+    leaderboard_fields = {
+        "xp": "xp",
+        "streaks": "streakCount",
+        "groupCompletions": "groupCompletions",
+        "cityQuestCount": "cityQuestCount",
+    }
+
+    async def query_users(field, since):
+        filters = [
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "showOnLeaderboard"},
+                    "op": "EQUAL",
+                    "value": {"booleanValue": True},
+                }
+            }
+        ]
+        if since:
+            filters.append(
+                {
+                    "fieldFilter": {
+                        "field": {"fieldPath": "lastCompleted"},
+                        "op": "GREATER_THAN_OR_EQUAL",
+                        "value": {"stringValue": since},
+                    }
+                }
+            )
+        where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
+        body = {
+            "structuredQuery": {
+                "from": [{"collectionId": "users"}],
+                "where": where,
+                "orderBy": [{"field": {"fieldPath": field}, "direction": "DESCENDING"}],
+                "limit": 100,
+            }
+        }
+        resp = await asyncio.to_thread(rest_session.post, run_url, json=body)
+        if resp.status_code != 200:
+            return []
+        results = []
+        rank = 1
+        for item in resp.json():
+            doc = item.get("document")
+            if not doc:
+                continue
+            data = _decode_document(doc)
+            results.append(
+                {
+                    "rank": rank,
+                    "uid": doc["name"].split("/")[-1],
+                    "displayName": data.get("nickname") or data.get("displayName"),
+                    "xp": data.get("xp", 0),
+                    "streakCount": data.get("streakCount", 0),
+                    "groupCompletions": data.get("groupCompletions", 0),
+                    "cityQuestCount": data.get("cityQuestCount", 0),
+                    "city": data.get("city"),
+                    "avatar": data.get("avatar"),
+                }
+            )
+            rank += 1
+        return results
+
+    for lb_type, field_path in leaderboard_fields.items():
+        for period, days in {"allTime": None, "weekly": 7}.items():
+            since = (datetime.utcnow() - timedelta(days=days)).isoformat() if days else None
+            entries = await query_users(field_path, since)
+            doc_id = f"{lb_type}_{period}"
+            doc_url = (
+                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
+            )
+            body = {"fields": _encode_fields({"lastUpdated": now, "entries": entries})}
+            await asyncio.to_thread(rest_session.patch, doc_url, json=body)
+
+    return {"status": "ok"}
+
