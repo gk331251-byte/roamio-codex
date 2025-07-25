@@ -77,9 +77,16 @@ export default function QuestLiveScreen({ navigation }) {
   };
 
   const handleComplete = async () => {
-    await completeQuest({ ...quest, visitedIndices: quest.visitedIndices || [] });
+    const summary = await completeQuest({
+      ...quest,
+      visitedIndices: quest.visitedIndices || [],
+    });
     setQuest(null);
-    navigation.navigate('Profile');
+    if (summary) {
+      navigation.navigate('QuestComplete', { summary });
+    } else {
+      navigation.navigate('Profile');
+    }
   };
 
   return (
