@@ -814,44 +814,46 @@ async def increment_daily_usage(user_id: str) -> int:
 
 
 @app.post("/generate-demo-quest")
-async def generate_demo_quest(
-    user_id: str = Body(...),
-    city: str | None = Body(None),
-    lat: float | None = Body(None),
-    lng: float | None = Body(None),
-):
-    """Return a simple one-stop demo quest near the user."""
-    if lat is None or lng is None:
-        if city:
-            try:
-                geo = gmaps.geocode(city)
-                loc = geo[0]["geometry"]["location"]
-                lat = loc["lat"]
-                lng = loc["lng"]
-            except Exception:
-                lat, lng = 40.7128, -74.0060
-        else:
-            lat, lng = 40.7128, -74.0060
-    place = {"name": "Historic Landmark", "lat": lat, "lng": lng}
-    try:
-        resp = gmaps.places_nearby(location=(lat, lng), radius=1500, type="tourist_attraction")
-        if resp.get("results"):
-            p = resp["results"][0]
-            loc = p["geometry"]["location"]
-            place = {"name": p.get("name", "Landmark"), "lat": float(loc["lat"]), "lng": float(loc["lng"])}
-    except Exception:
-        pass
-
-    quest = {
-        "title": "Demo Quest",
-        "city": city or "local",
-        "mood": "Adventure",
-        "difficulty": "Easy",
-        "questText": "Find the oldest statue in your neighborhood.",
-        "places": [place],
+async def generate_demo_quest():
+    """Return a hardcoded quest used for onboarding demos."""
+    return {
+        "quest": {
+            "questText": "Welcome adventurer! Try this fun intro route.",
+            "places": [
+                {
+                    "name": "Welcome Plaza",
+                    "lat": 37.7749,
+                    "lng": -122.4194,
+                    "type": "tourist_attraction",
+                },
+                {
+                    "name": "Local Cafe",
+                    "lat": 37.7750,
+                    "lng": -122.4180,
+                    "type": "cafe",
+                },
+                {
+                    "name": "Riverside Walk",
+                    "lat": 37.7755,
+                    "lng": -122.4170,
+                    "type": "park",
+                },
+            ],
+            "difficulty": "Easy",
+            "route": {
+                "legs": [],
+                "polyline": "",
+                "total_distance": "0.5 miles",
+                "total_duration": "15 minutes",
+            },
+            "timestamp": "2025-07-26T12:00:00Z",
+            "generationMethod": "demo",
+            "tagSource": "manual",
+            "tags": ["demo", "intro"],
+            "city": "Demo City",
+            "mood": "adventure",
+        }
     }
-    quest_id = f"demo_{user_id}"
-    return {"quest": quest, "questId": quest_id}
 
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
