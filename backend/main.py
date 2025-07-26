@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, Body, Request, Depends
+from fastapi import FastAPI, Query, Body, Request, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -451,15 +451,43 @@ async def generate_quest(
     city: str = Body(...),
     moods: list[str] = Body(...),
     time_limit: int = Body(...),
-    token: str = Body(...),
+    authorization: str = Header(...),
     user_id: str | None = Body(None),
     difficulty: str = Body("Easy"),
     lat: float | None = Body(None),
     lng: float | None = Body(None),
+    is_demo: bool = Body(False),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
+    uid = await verify_token(authorization)
+    if not uid:
+        print("[generate_quest] invalid or missing token")
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+    print(f"[generate_quest] UID={uid}, city={city}, moods={moods}, demo={is_demo}")
+    if not user_id:
+        user_id = uid
     if not city or not moods:
         return {"error": "City and mood list are required."}
+
+    if is_demo:
+        return {
+            "quest": {
+                "questText": "Welcome adventurer! Try this fun intro route.",
+                "places": [
+                    {"name": "Welcome Plaza", "lat": 37.7749, "lng": -122.4194, "type": "tourist_attraction"},
+                    {"name": "Local Cafe", "lat": 37.7750, "lng": -122.4180, "type": "cafe"},
+                    {"name": "Riverside Walk", "lat": 37.7755, "lng": -122.4170, "type": "park"},
+                ],
+                "difficulty": "Easy",
+                "route": {"legs": [], "polyline": "", "total_distance": "0.5 miles", "total_duration": "15 minutes"},
+                "timestamp": datetime.utcnow().isoformat(),
+                "generationMethod": "demo",
+                "tagSource": "manual",
+                "tags": ["demo", "intro"],
+                "city": "Demo City",
+                "mood": "adventure",
+            }
+        }
 
     preferred = get_user_preferred_tags(user_id) if user_id else []
 
@@ -592,7 +620,25 @@ async def generate_quest(
             break
 
     if len(selected) < 3:
-        return {"error": "Not enough matching places"}
+        print("[generate_quest] Not enough matching places, using demo quest")
+        return {
+            "quest": {
+                "questText": "Welcome adventurer! Try this fun intro route.",
+                "places": [
+                    {"name": "Welcome Plaza", "lat": 37.7749, "lng": -122.4194, "type": "tourist_attraction"},
+                    {"name": "Local Cafe", "lat": 37.7750, "lng": -122.4180, "type": "cafe"},
+                    {"name": "Riverside Walk", "lat": 37.7755, "lng": -122.4170, "type": "park"},
+                ],
+                "difficulty": "Easy",
+                "route": {"legs": [], "polyline": "", "total_distance": "0.5 miles", "total_duration": "15 minutes"},
+                "timestamp": datetime.utcnow().isoformat(),
+                "generationMethod": "demo",
+                "tagSource": "manual",
+                "tags": ["demo", "intro"],
+                "city": "Demo City",
+                "mood": "adventure",
+            }
+        }
 
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
@@ -1306,16 +1352,18 @@ async def upload_postcard(
 
 
 @app.post("/reroll-quest")
-async def reroll_quest(payload: dict = Body(...)):
+async def reroll_quest(payload: dict = Body(...), authorization: str = Header(...)):
     """Regenerate a quest for the same parameters."""
     city = payload.get("city")
     moods = payload.get("moods", [])
     time_limit = payload.get("time_limit", 60)
-    token = payload.get("token", "")
     # Reuse generate_quest logic
     lat = payload.get("lat")
     lng = payload.get("lng")
-    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng)
+    is_demo = payload.get("is_demo", False)
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit,
+                               authorization=authorization, user_id=None,
+                               lat=lat, lng=lng, is_demo=is_demo)
 
 
 @app.post("/get-directions")
@@ -2050,15 +2098,22 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
 
 
 @app.post("/validate-premium")
-async def validate_premium_token(uid: str = Depends(require_user)):
+async def validate_premium_token(authorization: str = Header(...)):
     """Return premium status for the authenticated user."""
+    uid = await verify_token(authorization)
+    if not uid:
+        print("[validate-premium] missing or invalid token")
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
     await check_not_banned(uid)
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
     premium = fields.get("isPremium") is True
-    return {"isPremium": premium}
+    if not premium:
+        print(f"[validate-premium] uid {uid} not premium")
+        raise HTTPException(status_code=403, detail="Not a premium user")
+    return {"valid": True}
 
 
 @app.post("/api/stripe-webhook")

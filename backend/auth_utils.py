@@ -2,8 +2,10 @@ import os
 import asyncio
 import re
 from fastapi import Depends, HTTPException, Request
-from google.oauth2 import service_account, id_token
-from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
+import firebase_admin
+from firebase_admin import auth as fb_auth
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -14,6 +16,10 @@ creds = service_account.Credentials.from_service_account_file(
 )
 rest_session = AuthorizedSession(creds)
 PROJECT_ID = creds.project_id
+
+# Initialize Firebase Admin if not already
+if not firebase_admin._apps:
+    firebase_admin.initialize_app()
 
 
 def _from_value(val):
@@ -57,17 +63,10 @@ async def verify_token(auth_header: str | None) -> str | None:
         return None
     token = auth_header.split(" ", 1)[1]
     try:
-        client_id = os.getenv("FIREBASE_CLIENT_ID")
-        info = id_token.verify_oauth2_token(
-            token,
-            GoogleRequest(),
-            audience=client_id,
-        )
-        issuer = info.get("iss")
-        if issuer != f"https://securetoken.google.com/{PROJECT_ID}":
-            raise ValueError("Wrong issuer")
-        return info.get("uid") or info.get("sub")
-    except Exception:
+        decoded = await asyncio.to_thread(fb_auth.verify_id_token, token)
+        return decoded.get("uid")
+    except Exception as e:
+        print("verify_token error", e)
         return None
 
 
