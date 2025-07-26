@@ -5,6 +5,7 @@ import { getUGCFeed } from '../lib/api';
 export default function UGCFeed() {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [mood, setMood] = useState('');
   const [city, setCity] = useState('');
 
@@ -13,8 +14,10 @@ export default function UGCFeed() {
       try {
         const data = await getUGCFeed({ mood, city });
         setPosts(data.posts || []);
+        setError('');
       } catch (err) {
         console.error('Failed to load feed', err);
+        setError('failed');
       } finally {
         setLoading(false);
       }
@@ -22,6 +25,12 @@ export default function UGCFeed() {
   }, [mood, city]);
 
   if (loading) return <div className="p-6">Loading...</div>;
+  if (error)
+    return (
+      <div className="p-6 text-red-600">
+        Could not load feed. <button onClick={() => window.location.reload()} className="underline">Retry?</button>
+      </div>
+    );
   return (
     <div className="min-h-screen bg-[#f8fcf8] p-6 text-[#0e1b0e]">
       <h1 className="text-2xl font-bold mb-4">UGC Feed</h1>

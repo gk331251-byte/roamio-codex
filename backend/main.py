@@ -437,18 +437,14 @@ CITY_FALLBACK_MAP = {
 }
 
 # ✅ Replace this with your actual frontend deployed domain
-allowed_origins = [
-    "http://localhost:5173",  # Vite dev server (local)
-    "https://real-quest-frontend.web.app",  # Firebase Hosting / production
-    "https://real-world-quest-app.web.app",  # Firebase hosted frontend
-]
+allowed_origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,  # <-- FIXED
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -1212,11 +1208,13 @@ async def get_user_quests(userId: str = Query(...)):
             ],
         }
     }
-    resp = await asyncio.to_thread(rest_session.post, url, json=query)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+    try:
+        resp = await asyncio.to_thread(rest_session.post, url, json=query)
         resp.raise_for_status()
-    raw = resp.json()
+        raw = resp.json()
+    except Exception as e:
+        print("Firestore REST error", e)
+        return {"posts": []}
     results = []
     for item in raw:
         doc = item.get("document")
@@ -1997,11 +1995,13 @@ async def get_community_quests():
             "limit": 20,
         }
     }
-    resp = await asyncio.to_thread(rest_session.post, url, json=query)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+    try:
+        resp = await asyncio.to_thread(rest_session.post, url, json=query)
         resp.raise_for_status()
-    raw = resp.json()
+        raw = resp.json()
+    except Exception as e:
+        print("Firestore REST error", e)
+        return {"quests": []}
     results = []
     for item in raw:
         doc = item.get("document")
@@ -2108,12 +2108,11 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
 
 
 @app.post("/validate-premium")
-async def validate_premium_token(authorization: str = Header(...)):
+async def validate_premium_token(authorization: str | None = Header(None)):
     """Return premium status for the authenticated user."""
-    uid = await verify_token(authorization)
+    uid = await verify_token(authorization) if authorization else None
     if not uid:
-        print("[validate-premium] missing or invalid token")
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
+        return {"premium": False}
     await check_not_banned(uid)
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"

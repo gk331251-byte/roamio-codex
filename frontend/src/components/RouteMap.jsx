@@ -31,6 +31,7 @@ const Pin = ({ type, name }) => {
 };
 
 const RouteMap = ({ places = [], route = null }) => {
+  const [mapError, setMapError] = React.useState(false);
   const parseLatLng = (val) => {
     const num = parseFloat(val);
     return isNaN(num) ? null : num;
@@ -65,29 +66,44 @@ const RouteMap = ({ places = [], route = null }) => {
       polyline.setMap(map);
     } catch (err) {
       console.error("Failed to render polyline:", err);
+      setMapError(true);
     }
   };
 
   return (
     <div className="w-full my-6 space-y-4">
       <div className="h-[400px] w-full rounded-xl overflow-hidden shadow-md">
-        <GoogleMapReact
-          bootstrapURLKeys={{ key: GOOGLE_MAPS_API_KEY }}
-          defaultCenter={center}
-          defaultZoom={13}
-          yesIWantToUseGoogleMapApiInternals
-          onGoogleApiLoaded={({ map, maps }) => drawRoute(map, maps)}
-        >
-          {orderedPlaces.map((place, index) => (
-            <Pin
-              key={index}
-              lat={parseLatLng(place.lat)}
-              lng={parseLatLng(place.lng)}
-              name={place.name}
-              type={place.type}
-            />
-          ))}
-        </GoogleMapReact>
+        {mapError ? (
+          <div className="flex items-center justify-center h-full text-sm">
+            Unable to load map.{' '}
+            <a
+              href={`https://maps.google.com/?q=${center.lat},${center.lng}`}
+              className="underline ml-1"
+              target="_blank"
+            >
+              View in Google Maps?
+            </a>
+          </div>
+        ) : (
+          <GoogleMapReact
+            bootstrapURLKeys={{ key: GOOGLE_MAPS_API_KEY }}
+            defaultCenter={center}
+            defaultZoom={13}
+            yesIWantToUseGoogleMapApiInternals
+            onGoogleApiLoaded={({ map, maps }) => drawRoute(map, maps)}
+            onError={() => setMapError(true)}
+          >
+            {orderedPlaces.map((place, index) => (
+              <Pin
+                key={index}
+                lat={parseLatLng(place.lat)}
+                lng={parseLatLng(place.lng)}
+                name={place.name}
+                type={place.type}
+              />
+            ))}
+          </GoogleMapReact>
+        )}
       </div>
 
       <div className="space-y-4 px-4 mt-4 text-left">
