@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
 import hashlib
+import logging
 from datetime import datetime, timedelta
 import asyncio
 import googlemaps
@@ -33,6 +34,10 @@ from firestore_utils import (
     query_custom_quests_by_creator,
 )
 from group_utils import create_group_document, add_user_to_group
+
+# ----- Logging Setup -----
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("roamio")
 
 # ----- XP & Level Helpers -----
 # Each level is reached every 1000 XP. Pre-generate a list so we can
@@ -191,7 +196,7 @@ gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY")
 try:
     gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
 except Exception as e:
-    print("Google Maps disabled:", e);
+    logger.warning(f"Google Maps disabled: {e}")
     gmaps = None
 openai_key = os.getenv("OPENAI_API_KEY");
 if openai_key and openai_key.startswith("sk-"):
@@ -238,7 +243,7 @@ def save_quest_to_firestore(hash_key, quest_obj):
     }
     response = rest_session.patch(url, json=body)
     if response.status_code != 200:
-        print("Firestore REST Error:", response.text)
+        logger.error(f"Firestore REST error: {response.text}")
         response.raise_for_status()
 
 
@@ -258,7 +263,7 @@ def save_place_to_cache(place_id: str, data: dict):
     body = {"fields": _encode_fields(data)}
     resp = rest_session.patch(url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
 
 
@@ -498,7 +503,7 @@ async def generate_quest(
             geocode = gmaps.geocode(city)
             city_location = geocode[0]["geometry"]["location"]
     except Exception as e:
-        print(f"Geocoding error: {e}")
+        logger.error(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
 
 
@@ -514,7 +519,7 @@ async def generate_quest(
             )
             places_results = response.get("results", [])
         except Exception as e:
-            print(f"Places API error: {e}")
+            logger.error(f"Places API error: {e}")
             return {"error": "Failed to fetch places"}
 
         candidates = []
@@ -561,7 +566,7 @@ async def generate_quest(
                     "rating": place.get("rating", 0),
                 })
             except Exception as e:
-                print("Skipping place", e)
+                logger.warning(f"Skipping place: {e}")
         candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
         selected = []
@@ -586,7 +591,7 @@ async def generate_quest(
             city_location = geo[0]["geometry"]["location"]
             city = fallback_city
         except Exception as e:
-            print("Fallback geocode error", e)
+            logger.error(f"Fallback geocode error: {e}")
             break
 
     if len(selected) < 3:
@@ -600,7 +605,7 @@ async def generate_quest(
         if ((user_age and user_age < 21) or prefers_clean) and "age21+" in cached.get("tags", []):
             cached = None
     if cached:
-        print("Using cached quest")
+        logger.info("Using cached quest")
         result = {"quest": cached}
         if fallback_city:
             result["fallbackCity"] = fallback_city
@@ -623,7 +628,7 @@ async def generate_quest(
             mode="walking",
         )
     except Exception as e:
-        print("Directions error", e)
+        logger.error(f"Directions error: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve directions")
 
     route = directions[0]
@@ -654,7 +659,7 @@ async def generate_quest(
             )
             quest_text = completion.choices[0].message.content.strip()
         except Exception as e:
-            print("OpenAI error", e)
+            logger.error(f"OpenAI error: {e}")
             quest_text = (
                 f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
                 f"and ends at {ordered[-1]['name']}!"
@@ -1003,7 +1008,7 @@ async def complete_quest(payload: dict = Body(...)):
             blob.make_public()
             postcard_url = blob.public_url
         except Exception as e:
-            print("postcard gen failed", e)
+            logger.error(f"postcard gen failed: {e}")
 
     if postcard_url:
         quest_doc["postcardUrl"] = postcard_url
@@ -1031,7 +1036,7 @@ async def complete_quest(payload: dict = Body(...)):
         feed_body = {"fields": _encode_fields(feed_doc)}
         fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
         if fr.status_code != 200:
-            print("Firestore REST error", fr.text)
+            logger.error(f"Firestore REST error: {fr.text}")
             fr.raise_for_status()
 
     return {
@@ -1111,7 +1116,7 @@ async def generate_postcard(request: Request):
         return {"status": "ok", "imageUrl": public_url}
 
     except Exception as e:
-        print("🔥 Error generating postcard:", e)
+        logger.error(f"Postcard generation error: {e}")
         return {"status": "error", "message": str(e)}
 
 @app.get("/test-write")
@@ -1124,7 +1129,7 @@ def test_write():
     resp = rest_session.patch(url, json=body)
     if resp.status_code == 200:
         return {"status": "Document written!"}
-    print("Firestore REST error", resp.text)
+    logger.error(f"Firestore REST error: {resp.text}")
     resp.raise_for_status()
 
 @app.get("/get-user-quests")
@@ -1147,7 +1152,7 @@ async def get_user_quests(userId: str = Query(...)):
     }
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     raw = resp.json()
     results = []
@@ -1172,7 +1177,7 @@ async def get_quest(quest_id: str):
     )
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     return resp.json()
 
@@ -1209,7 +1214,7 @@ async def track_visit(payload: dict = Body(...)):
     body = {"fields": _encode_fields(existing_fields)}
     resp = await asyncio.to_thread(rest_session.patch, quest_url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
 
     # ----- XP & Badges -----
@@ -1256,7 +1261,7 @@ async def track_visit(payload: dict = Body(...)):
     }
     resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
 
     return {
@@ -1296,8 +1301,9 @@ async def upload_postcard(
     body = {"fields": _encode_fields({"postcardUrl": image_url})}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
+    logger.info(f"[{uid}] uploaded postcard for quest {quest_id}")
     return {"status": "postcard uploaded"}
 
 
@@ -1399,7 +1405,7 @@ async def create_group_quest(
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_body = {"fields": _encode_fields(active_doc)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
-
+    logger.info(f"[{uid}] created group quest {group_id}")
     return {"groupId": group_id}
 
 
@@ -1440,7 +1446,7 @@ async def join_group(
     }
     active_body = {"fields": _encode_fields(active_doc)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
-
+    logger.info(f"[{uid}] joined group {group_id}")
     return {"status": "joined", "questId": group_doc.get("questId")}
 
 
@@ -1532,7 +1538,7 @@ async def track_stop_visit(
 
     user_body = {"fields": _encode_fields({"totalXP": total_xp, "level": level, "stats": stats, "badges": badges, "badgesUnlocked": badge_list})}
     await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
-
+    logger.info(f"[{uid}] visited stop {place_index} in group {group_id}")
     return {"visitedStops": user_progress, "totalXP": total_xp, "level": level, "badges": badges}
 
 
@@ -1575,7 +1581,7 @@ async def complete_group_quest(
     }
     active_body = {"fields": _encode_fields(active_fields)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
-
+    logger.info(f"[{uid}] completed group quest {group_id}")
     return {"status": "completed"}
 
 
@@ -1723,7 +1729,7 @@ async def get_leaderboard(
     )
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     results = []
     for item in resp.json():
@@ -1773,7 +1779,7 @@ async def get_group_quest(group_id: str):
     )
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     return resp.json()
 
@@ -1801,7 +1807,7 @@ async def report_quest(payload: dict = Body(...)):
     body = {"fields": _encode_fields(report)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     return {"status": "reported"}
 
@@ -1822,7 +1828,7 @@ async def get_quest_reports():
     }
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     raw = resp.json()
     results = []
@@ -1851,8 +1857,9 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
     body = {"fields": _encode_fields({"visible": visible})}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
+    logger.info(f"[{uid}] updated active quest")
     return {"status": "updated"}
 
 
@@ -1901,6 +1908,7 @@ async def ugc_submit(
         "ugcTagsUsed": used,
     })
     await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(ufields)})
+    logger.info(f"[{uid}] submitted UGC for tag {tag}")
     return {"status": "ok", "xpMultiplier": cfg.get("xpMultiplier", 1.0)}
 
 
@@ -1931,7 +1939,7 @@ async def get_community_quests():
     }
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     raw = resp.json()
     results = []
@@ -1969,7 +1977,7 @@ async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(
         query["structuredQuery"]["where"] = where
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     raw = resp.json()
     posts = []
@@ -2001,7 +2009,7 @@ async def create_checkout_session(payload: dict = Body(...)):
             session = await create_subscription_session(user_id, email, success, cancel)
             return {"url": session.url}
         except Exception as e:
-            print("Stripe error", e)
+            logger.error(f"Stripe error: {e}")
             return {"error": "stripe failed"}
     # Fallback mock URL
     return {"url": success.replace("{CHECKOUT_SESSION_ID}", "mock")}
@@ -2027,7 +2035,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
                 sess = await asyncio.to_thread(stripe.checkout.Session.retrieve, session_id)
                 premium = sess.get("payment_status") == "paid"
             except Exception as e:
-                print("Stripe verify error", e)
+                logger.error(f"Stripe verify error: {e}")
                 premium = False
         elif session_id == "mock":
             premium = True
@@ -2064,7 +2072,7 @@ async def stripe_webhook(request: Request):
     try:
         event = verify_webhook(payload, sig)
     except Exception as e:
-        print("Webhook verify error", e)
+        logger.error(f"Webhook verify error: {e}")
         return JSONResponse(status_code=400, content={"error": "invalid"})
 
     if event["type"] == "checkout.session.completed":
@@ -2084,9 +2092,9 @@ async def stripe_webhook(request: Request):
                     await asyncio.to_thread(rest_session.patch, url, json=body)
                     await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
             except Exception as e:
-                print("User email lookup failed", e)
+                logger.error(f"User email lookup failed: {e}")
         else:
-            print("No email on session")
+            logger.warning("No email on session")
 
     return {"received": True}
 
@@ -2115,7 +2123,7 @@ async def update_active_quest(
     body = {"fields": _encode_fields(fields)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     return {"status": "updated"}
 
@@ -2146,9 +2154,10 @@ async def create_custom_quest(
 
     try:
         quest_id = await write_custom_quest(data, uid)
+        logger.info(f"[{uid}] created custom quest {quest_id}")
         return {"questId": quest_id}
     except Exception as e:
-        print("create_custom_quest error", e)
+        logger.error(f"create_custom_quest error: {e}")
         return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
 
 
@@ -2184,9 +2193,9 @@ async def update_custom_quest(
     for url in (user_url, global_url):
         resp = await asyncio.to_thread(rest_session.patch, url, json=body)
         if resp.status_code != 200:
-            print("Firestore REST error", resp.text)
+            logger.error(f"Firestore REST error: {resp.text}")
             resp.raise_for_status()
-
+    logger.info(f"[{uid}] updated custom quest {quest_id}")
     return {"status": "updated"}
 
 
@@ -2248,9 +2257,9 @@ async def publish_custom_quest(
     for url in (user_url, global_url):
         resp = await asyncio.to_thread(rest_session.patch, url, json=body)
         if resp.status_code != 200:
-            print("Firestore REST error", resp.text)
+            logger.error(f"Firestore REST error: {resp.text}")
             resp.raise_for_status()
-
+    logger.info(f"[{uid}] published custom quest {quest_id}")
     return {"status": "published"}
 
 
@@ -2293,9 +2302,9 @@ async def unpublish_custom_quest(
     for url in (user_url, global_url):
         resp = await asyncio.to_thread(rest_session.patch, url, json=body)
         if resp.status_code != 200:
-            print("Firestore REST error", resp.text)
+            logger.error(f"Firestore REST error: {resp.text}")
             resp.raise_for_status()
-
+    logger.info(f"[{uid}] unpublished custom quest {quest_id}")
     return {"status": "unpublished"}
 
 
@@ -2319,7 +2328,7 @@ async def like_quest(
     body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
     resp = await asyncio.to_thread(rest_session.patch, like_url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
 
     quest_url = (
@@ -2332,6 +2341,7 @@ async def like_quest(
         patch = {"fields": _encode_fields({"likesCount": count})}
         await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
+    logger.info(f"[{uid}] liked quest {quest_id}")
     return {"status": "liked"}
 
 
@@ -2366,6 +2376,7 @@ async def view_quest(
             patch = {"fields": _encode_fields({"viewsCount": count})}
             await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
+    logger.info(f"[{uid}] viewed quest {quest_id}")
     return {"status": "viewed"}
 
 
@@ -2416,7 +2427,7 @@ async def create_community_group(payload: dict = Body(...)):
     body = {"fields": _encode_fields(doc)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     return {"groupId": group_id}
 
@@ -2481,7 +2492,7 @@ async def audit_quest_cache():
     query = {"structuredQuery": {"from": [{"collectionId": "quests"}]}}
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     flagged = []
     for item in resp.json():
@@ -2499,7 +2510,7 @@ async def audit_quest_cache():
             reason = "malformed"
         if reason:
             flagged.append({"id": doc["name"].split("/")[-1], "reason": reason})
-    print("Audit results", flagged)
+    logger.info(f"Audit results: {flagged}")
     return {"flagged": flagged}
 
 
@@ -2516,7 +2527,7 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
         geocode = gmaps.geocode(city)
         city_loc = geocode[0]["geometry"]["location"]
     except Exception as e:
-        print("geocode error", e)
+        logger.error(f"geocode error: {e}")
         return {"error": "geocode failed"}
 
     try:
@@ -2527,7 +2538,7 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
         )
         places_results = resp.get("results", [])
     except Exception as e:
-        print("places error", e)
+        logger.error(f"places error: {e}")
         return {"error": "places failed"}
 
     candidates = []
@@ -2585,7 +2596,7 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
             mode="walking",
         )
     except Exception as e:
-        print("directions error", e)
+        logger.error(f"directions error: {e}")
         return {"error": "directions failed"}
 
     route = directions[0]
@@ -2815,7 +2826,7 @@ async def create_community(payload: dict = Body(...)):
     body = {"fields": _encode_fields(doc)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
 
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{owner_id}/joinedCommunities/{community_id}"
@@ -2924,7 +2935,7 @@ async def community_trending():
     }
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     results = []
     for item in resp.json():
@@ -3312,7 +3323,7 @@ async def submit_featured_quest(
     body = {"fields": _encode_fields(quest_doc)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
 
     creator_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/creators/{uid}"
@@ -3349,7 +3360,7 @@ async def get_featured_quests(approved: bool = Query(True)):
         }
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     raw = resp.json()
     quests = []
@@ -3384,7 +3395,7 @@ async def admin_review_featured(payload: dict = Body(...)):
     patch = {"fields": _encode_fields({"isApproved": bool(approved), "adminReviewed": True})}
     resp = await asyncio.to_thread(rest_session.patch, url, json=patch)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     return {"status": "updated"}
 
@@ -3415,7 +3426,7 @@ async def create_promo_code(payload: dict = Body(...)):
     body = {"fields": _encode_fields(data)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     await log_admin_event("create_promo", {"code": code, "admin": user_id})
     return {"status": "created"}
@@ -3475,10 +3486,11 @@ async def redeem_promo_code(
     body = {"fields": _encode_fields(updates)}
     presp = await asyncio.to_thread(rest_session.patch, user_url, json=body)
     if presp.status_code != 200:
-        print("Firestore REST error", presp.text)
+        logger.error(f"Firestore REST error: {presp.text}")
         presp.raise_for_status()
     code_data["usageCount"] = code_data.get("usageCount", 0) + 1
     await asyncio.to_thread(rest_session.patch, code_url, json={"fields": _encode_fields(code_data)})
+    logger.info(f"[{uid}] redeemed promo code {code}")
     return {"status": "redeemed", **effects}
 
 
@@ -3495,7 +3507,7 @@ async def admin_create_custom_quest(payload: dict = Body(...)):
         await log_admin_event("admin_create_custom", {"admin": user_id, "questId": quest_id})
         return {"questId": quest_id}
     except Exception as e:
-        print("admin_create_custom_quest", e)
+        logger.error(f"admin_create_custom_quest error: {e}")
         return JSONResponse(status_code=500, content={"error": "failed"})
 
 
@@ -3514,7 +3526,7 @@ async def admin_edit_custom_quest(payload: dict = Body(...)):
     body = {"fields": _encode_fields(data)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
+        logger.error(f"Firestore REST error: {resp.text}")
         resp.raise_for_status()
     await log_admin_event("admin_edit_custom", {"admin": user_id, "questId": quest_id})
     return {"status": "updated"}

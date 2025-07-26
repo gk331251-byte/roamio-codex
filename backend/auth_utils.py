@@ -4,6 +4,7 @@ import re
 from fastapi import Depends, HTTPException, Request
 from google.oauth2 import service_account, id_token
 from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
+import logging
 
 # Initialize Firestore REST session
 creds = service_account.Credentials.from_service_account_file(
@@ -12,6 +13,7 @@ creds = service_account.Credentials.from_service_account_file(
 )
 rest_session = AuthorizedSession(creds)
 PROJECT_ID = creds.project_id
+logger = logging.getLogger("roamio")
 
 
 def _from_value(val):
@@ -52,6 +54,7 @@ async def is_premium_user(uid: str) -> bool:
 async def verify_token(auth_header: str | None) -> str | None:
     """Validate Firebase token and return UID."""
     if not auth_header or not auth_header.startswith("Bearer "):
+        logger.warning("Missing or malformed auth header")
         return None
     token = auth_header.split(" ", 1)[1]
     try:
@@ -66,6 +69,7 @@ async def verify_token(auth_header: str | None) -> str | None:
             raise ValueError("Wrong issuer")
         return info.get("uid") or info.get("sub")
     except Exception:
+        logger.warning("Invalid auth token")
         return None
 
 
@@ -82,6 +86,7 @@ async def _get_user_doc(uid: str) -> dict | None:
 async def require_user(request: Request) -> str:
     uid = await verify_token(request.headers.get("Authorization"))
     if not uid:
+        logger.warning("Unauthorized request")
         raise HTTPException(status_code=401, detail="Unauthorized")
     return uid
 
@@ -96,6 +101,7 @@ async def require_admin(uid: str = Depends(require_user)) -> str:
 async def check_not_banned(uid: str = Depends(require_user)) -> str:
     doc = await _get_user_doc(uid)
     if doc and doc.get("banned"):
+        logger.warning(f"Banned user attempted access: {uid}")
         raise HTTPException(status_code=403, detail="User banned")
     return uid
 
