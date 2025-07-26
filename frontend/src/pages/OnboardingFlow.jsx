@@ -72,7 +72,7 @@ export default function OnboardingFlow() {
         },
         { merge: true }
       );
-      navigate('/live', { state: { quest: result.quest, questId: result.questId, timeLimit: Number(time) } });
+      navigate('/quest-details', { state: { quest: result.quest, questId: result.questId, timeLimit: Number(time) } });
     } catch (err) {
       console.error('onboarding failed', err);
       setError('Failed to start quest');

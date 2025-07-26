@@ -71,7 +71,7 @@ export default function PublicQuestPage() {
       const res = await createCustomQuest(payload);
       const group = await createGroupQuest(user.uid, res.questId, user.displayName);
       await replayQuest(questId, user.uid).catch(() => {});
-      navigate('/live', { state: { quest, questId: res.questId, groupId: group.groupId } });
+      navigate('/quest-details', { state: { quest, questId: res.questId, groupId: group.groupId } });
     } catch (err) {
       console.error('start failed', err);
     }

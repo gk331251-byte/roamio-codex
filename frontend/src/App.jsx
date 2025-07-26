@@ -9,7 +9,7 @@ import LandingPage from "./components/LandingPage";
 import WelcomePage from "./pages/WelcomePage";
 import OnboardingFlow from "./pages/OnboardingFlow";
 import QuestHome from "./components/QuestHome";
-import QuestDetails from "./components/QuestDetails";
+import QuestDetails from "./pages/QuestDetailsPage";
 import QuestHistory from "./components/QuestHistory";
 import Profile from "./components/Profile";
 import PostcardGalleryPage from "./pages/PostcardGalleryPage";
@@ -95,7 +95,7 @@ function App() {
         <Route path="/landing" element={<LandingPage />} />
         <Route path="/home" element={<QuestHome />} />
         <Route path="/onboarding" element={<OnboardingFlow />} />
-        <Route path="/details" element={<QuestDetails />} />
+        <Route path="/quest-details" element={<QuestDetails />} />
         <Route path="/quest/:city/:mood/route" element={<QuestRoute />} />
         <Route path="/history" element={<QuestHistory />} />
         <Route path="/profile" element={<Profile />} />

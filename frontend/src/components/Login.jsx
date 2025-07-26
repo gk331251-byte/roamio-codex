@@ -1,5 +1,5 @@
 import React from "react";
-import { signInWithPopup } from "firebase/auth";
+import { signInWithPopup, signInAnonymously } from "firebase/auth";
 import { auth, provider } from "../firebase";
 
 const Login = () => {
@@ -12,6 +12,15 @@ const Login = () => {
     }
   };
 
+  const handleGuest = async () => {
+    try {
+      await signInAnonymously(auth);
+      console.log('Guest login success');
+    } catch (error) {
+      console.error('Guest login failed', error);
+    }
+  };
+
   return (
     <div className="space-y-2 text-center">
       <button
@@ -19,6 +28,12 @@ const Login = () => {
         className="bg-green-600 text-white px-4 py-2 rounded-lg"
       >
         Sign In with Google
+      </button>
+      <button
+        onClick={handleGuest}
+        className="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg mt-2"
+      >
+        Continue as Guest
       </button>
       <p className="text-xs text-gray-500 mt-2">
         By signing in, you agree to our{' '}

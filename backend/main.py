@@ -1371,34 +1371,26 @@ async def reroll_quest(payload: dict = Body(...), authorization: str = Header(..
 
 @app.post("/get-directions")
 async def get_directions(payload: dict = Body(...)):
-    print("Received /get-directions payload:", payload)
-    try:
-        places = payload.get("places", [])
-        if not places or len(places) < 2:
-            return {"error": "At least two valid places required"}
-
+    """Proxy Google Maps directions to avoid CORS issues."""
+    origin = payload.get("origin")
+    destination = payload.get("destination")
+    waypoints = payload.get("waypoints", [])
+    places = payload.get("places")
+    if places and len(places) >= 2:
         origin = f"{places[0]['lat']},{places[0]['lng']}"
         destination = f"{places[-1]['lat']},{places[-1]['lng']}"
         waypoints = [f"{p['lat']},{p['lng']}" for p in places[1:-1]]
-
-        directions_result = gmaps.directions(
-            origin=origin,
-            destination=destination,
+    try:
+        directions = gmaps.directions(
+            origin,
+            destination,
             waypoints=waypoints,
             mode="walking",
             optimize_waypoints=True,
         )
-
-        if not directions_result:
-            return {"error": "No route found"}
-
-        route = directions_result[0]
-        return {
-            "polyline": route.get("overview_polyline", {}).get("points", ""),
-            "legs": route.get("legs", []),
-        }
+        return {"directions": directions}
     except Exception as e:
-        print("Error fetching directions:", str(e))
+        print("Error fetching directions:", e)
         return {"error": str(e)}
 
 
@@ -2387,8 +2379,9 @@ async def like_quest(
     # TODO: enforce one like per user in Firestore security rules  # 🔒 MANUAL FIX NEEDED
 
     project_id = creds.project_id
+    doc_id = f"{quest_id}_{user_id}"
     like_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{quest_id}/{user_id}"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{doc_id}"
     )
     body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
     resp = await asyncio.to_thread(rest_session.patch, like_url, json=body)
@@ -2422,8 +2415,9 @@ async def view_quest(
     await check_not_banned(uid)
 
     project_id = creds.project_id
+    doc_id = f"{quest_id}_{user_id}"
     view_doc = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{quest_id}/{user_id}"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{doc_id}"
     )
     resp = await asyncio.to_thread(rest_session.get, view_doc)
     if resp.status_code == 404:

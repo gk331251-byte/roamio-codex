@@ -217,7 +217,12 @@ const QuestHome = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fcf8] px-6 py-8 text-[#0e1b0e] font-sans">
+    <div className="min-h-screen bg-[#f8fcf8] px-6 py-8 text-[#0e1b0e] font-sans relative">
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-white z-50">
+          Generating...
+        </div>
+      )}
       <h1 className="text-[32px] font-bold mb-6 text-center">Create a New Quest</h1>
       {resumeData && (
         <div className="mb-6 text-center">
