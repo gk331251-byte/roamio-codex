@@ -156,7 +156,7 @@ export default function CustomQuestBuilder() {
       }
       const quest = await getCustomQuest(id);
       const group = await createGroupQuest(user.uid, id, user.displayName);
-      navigate('/live', { state: { quest, questId: id, groupId: group.groupId, timeLimit } });
+      navigate('/quest-details', { state: { quest, questId: id, groupId: group.groupId, timeLimit } });
     } catch (err) {
       console.error('❌ API error:', err);
       setError('Something went wrong starting custom quest.');

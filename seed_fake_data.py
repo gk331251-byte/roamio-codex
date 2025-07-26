@@ -155,9 +155,11 @@ async def seed_likes_views(users, quests):
         like_users = random.sample(users, random.randint(1, 5))
         view_users = random.sample(users, random.randint(len(like_users), len(like_users)+5))
         for uid, _ in like_users:
-            await write_doc(f"quest_likes/{qid}/{uid}", {"timestamp": datetime.utcnow().isoformat()})
+            doc_id = f"{qid}_{uid}"
+            await write_doc(f"quest_likes/{doc_id}", {"timestamp": datetime.utcnow().isoformat()})
         for uid, _ in view_users:
-            await write_doc(f"quest_views/{qid}/{uid}", {"timestamp": datetime.utcnow().isoformat()})
+            doc_id = f"{qid}_{uid}"
+            await write_doc(f"quest_views/{doc_id}", {"timestamp": datetime.utcnow().isoformat()})
         quest_patch = {
             "likesCount": len(like_users),
             "viewsCount": len(view_users),

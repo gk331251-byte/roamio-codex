@@ -64,6 +64,11 @@ This app showcases full-stack AI integration with Google Cloud infrastructure, g
 }
 ```
 
+## API Endpoints
+
+- `POST /generate-quest` – create a new quest
+- `POST /get-directions` – proxy Google Maps Directions API and return the raw response
+
 ## 💻 Dev Setup
 
 ```bash

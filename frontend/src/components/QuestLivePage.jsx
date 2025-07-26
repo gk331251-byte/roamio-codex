@@ -99,7 +99,6 @@ export default function QuestLivePage() {
     if (!quest || !userLocation || !quest.places?.length) return;
     const fetchOptimized = async () => {
       const VISIT_SEC = 10 * 60; // assumed time spent at each stop
-      const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       const coords = quest.places.map((p) => `${p.lat},${p.lng}`);
       if (coords.length < 2) return;
 
@@ -115,14 +114,15 @@ export default function QuestLivePage() {
           }),
         });        
         const data = await res.json();
-        const order = data?.routes?.[0]?.waypoint_order;
+        const route = data?.directions?.[0];
+        const order = route?.waypoint_order;
         let ordered = quest.places;
         if (Array.isArray(order) && order.length === coords.length - 1) {
           ordered = order.map((i) => quest.places[i]);
           ordered.push(quest.places[quest.places.length - 1]);
         }
 
-        const legs = data?.legs || [];
+        const legs = route?.legs || [];
         if (legs.length > 0) {
           const sec = legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
           const mins = Math.round(sec / 60);
@@ -160,7 +160,7 @@ export default function QuestLivePage() {
           console.error('failed to store optimized order', err);
         }
 
-        const poly = data?.routes?.[0]?.overview_polyline?.points;
+        const poly = route?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
           setPolylinePoints(decoded);
@@ -273,31 +273,21 @@ export default function QuestLivePage() {
 
     const fetchRoute = async () => {
       setEtaError("");
-      const origin = `${userLocation.lat},${userLocation.lng}`;
-      const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-      const destination = `${remaining[remaining.length - 1].lat},${remaining[remaining.length - 1].lng}`;
-      const waypoints = remaining
-        .slice(0, -1)
-        .map((p) => `${p.lat},${p.lng}`)
-        .join('|');
-
-      console.log('Waypoints', waypoints);
-      console.log('Remaining stops', remaining);
-
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&mode=walking` +
-        (waypoints ? `&waypoints=${waypoints}` : '') +
-        `&key=${key}`;
-
       try {
-        const res = await fetch(url);
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/get-directions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ places: remaining })
+        });
         const data = await res.json();
-        const legs = data?.routes?.[0]?.legs || [];
+        const route = data?.directions?.[0];
+        const legs = route?.legs || [];
         if (legs.length === 0) throw new Error('No route');
         const sec = legs.reduce((s, l) => s + (l.duration?.value || 0), 0);
         const mins = Math.round(sec / 60);
         setEtaText(`${mins} min`);
         console.log('ETA legs', legs.map((l) => l.duration?.text));
-        const poly = data?.routes?.[0]?.overview_polyline?.points;
+        const poly = route?.overview_polyline?.points;
         if (poly) {
           const decoded = decode(poly).map(([lat, lng]) => ({ lat, lng }));
           setPolylinePoints(decoded);
