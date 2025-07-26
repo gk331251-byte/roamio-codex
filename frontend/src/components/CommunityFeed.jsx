@@ -37,7 +37,11 @@ export default function CommunityFeed() {
   };
 
   if (loading) return <div className="p-6">Loading...</div>;
-  if (error) return <div className="p-6 text-red-600">{error}</div>;
+  if (error) return (
+    <div className="p-6 text-red-600">
+      Could not load feed. <button onClick={() => window.location.reload()} className="underline">Retry?</button>
+    </div>
+  );
   if (quests.length === 0) return <div className="p-6">Join the fun – no recent community quests yet.</div>;
 
   return (

@@ -126,6 +126,18 @@ const QuestHome = () => {
     });
   }, []);
 
+  useEffect(() => {
+    if (!coords || !window.google || !window.google.maps) return;
+    const geocoder = new window.google.maps.Geocoder();
+    geocoder.geocode({ location: coords }, (res, status) => {
+      if (status === 'OK' && res[0]) {
+        const { formatted_address, place_id } = res[0];
+        setStartLocation({ address: formatted_address, lat: coords.lat, lng: coords.lng, placeId: place_id });
+        setCity(formatted_address);
+      }
+    });
+  }, [coords]);
+
   const handleLogin = async () => {
     const auth = getAuth();
     const provider = new GoogleAuthProvider();
@@ -164,8 +176,8 @@ const QuestHome = () => {
       return;
     }
 
-    if (!startLocation || !Array.isArray(mood) || mood.length === 0 || isNaN(timeLimit)) {
-      setError("Please fill out all fields correctly.");
+    if ((!startLocation && !coords) || !Array.isArray(mood) || mood.length === 0 || isNaN(timeLimit)) {
+      setError("Please enter a valid starting location or use your current location.");
       return;
     }
 
