@@ -34,6 +34,9 @@ from firestore_utils import (
 )
 from group_utils import create_group_document, add_user_to_group
 
+app = FastAPI()
+
+
 # ----- XP & Level Helpers -----
 # Each level is reached every 1000 XP. Pre-generate a list so we can
 # easily look up the next threshold when returning quest results.
@@ -414,7 +417,6 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
 
 # Load Google Maps API 
 
-app = FastAPI()
 
 # Manual fallbacks for vague regions
 CITY_FALLBACK_MAP = {
