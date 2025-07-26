@@ -1269,14 +1269,27 @@ async def track_visit(payload: dict = Body(...)):
 
 
 @app.post("/upload-postcard")
-async def upload_postcard(payload: dict = Body(...)):
+async def upload_postcard(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Attach postcard image info to quest."""
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     image_url = payload.get("imageUrl")
     if not all([user_id, quest_id, image_url]):
         return {"error": "userId, questId, and imageUrl required"}
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+    await check_not_banned(uid)
+
     project_id = creds.project_id
+    check_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, check_url)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="Quest not found")
     url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
     )
@@ -1340,7 +1353,28 @@ async def create_group_quest(
     display_name = payload.get("displayName")
     if not user_id or not quest_id or uid != user_id:
         return {"error": "userId and questId required"}
-    # TODO: ensure user_id is allowed to create group for quest_id  # 🔒 MANUAL FIX NEEDED
+    await check_not_banned(uid)
+
+    # ----- Ownership check -----
+    project_id = creds.project_id
+    cust_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, cust_url)
+    allowed = False
+    if resp.status_code == 200:
+        data = _decode_document(resp.json())
+        if data.get("creatorId") == uid or data.get("createdBy") == uid:
+            allowed = True
+    if not allowed:
+        user_url = (
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
+        )
+        uresp = await asyncio.to_thread(rest_session.get, user_url)
+        if uresp.status_code == 200:
+            allowed = True
+    if not allowed:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
 
     project_id = creds.project_id
     active_url = (
@@ -1380,6 +1414,7 @@ async def join_group(
     display_name = payload.get("displayName")
     if not user_id or not group_id or uid != user_id:
         return {"error": "userId and groupId required"}
+    await check_not_banned(uid)
 
     project_id = creds.project_id
     active_url = (
@@ -1410,13 +1445,19 @@ async def join_group(
 
 
 @app.post("/track-stop-visit")
-async def track_stop_visit(payload: dict = Body(...)):
+async def track_stop_visit(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Track a stop visit for a group quest."""
     group_id = payload.get("groupId")
     user_id = payload.get("userId")
     place_index = payload.get("placeIndex")
     if group_id is None or user_id is None or place_index is None:
         return {"error": "groupId, userId and placeIndex required"}
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+    await check_not_banned(uid)
 
     project_id = creds.project_id
     group_url = (
@@ -1425,12 +1466,12 @@ async def track_stop_visit(payload: dict = Body(...)):
     )
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
-        return {"error": "Group not found"}
+        raise HTTPException(status_code=404, detail="Group not found")
     fields = _decode_document(resp.json())
     if fields.get("completed"):
-        return {"error": "Group completed"}
+        raise HTTPException(status_code=400, detail="Group completed")
     if not any(m.get("userId") == user_id for m in fields.get("members", [])):
-        return {"error": "Not a group member"}
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
 
     progress = fields.get("progress", {})
     user_progress = progress.get(user_id, [])
@@ -1496,12 +1537,18 @@ async def track_stop_visit(payload: dict = Body(...)):
 
 
 @app.post("/complete-group-quest")
-async def complete_group_quest(payload: dict = Body(...)):
+async def complete_group_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Mark a group quest as completed by a user."""
     group_id = payload.get("groupId")
     user_id = payload.get("userId")
     if not group_id or not user_id:
         return {"error": "groupId and userId required"}
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+    await check_not_banned(uid)
 
     project_id = creds.project_id
     group_url = (
@@ -1510,12 +1557,12 @@ async def complete_group_quest(payload: dict = Body(...)):
     )
     resp = await asyncio.to_thread(rest_session.get, group_url)
     if resp.status_code != 200:
-        return {"error": "Group not found"}
+        raise HTTPException(status_code=404, detail="Group not found")
     fields = _decode_document(resp.json())
     if fields.get("completed"):
-        return {"error": "Group already completed"}
+        raise HTTPException(status_code=400, detail="Group already completed")
     if not any(m.get("userId") == user_id for m in fields.get("members", [])):
-        return {"error": "Not a group member"}
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
     fields["completed"] = True
     body = {"fields": _encode_fields(fields)}
     await asyncio.to_thread(rest_session.patch, group_url, json=body)
@@ -1817,6 +1864,7 @@ async def ugc_submit(
     """Record a user's social media submission for the weekly tag."""
     if uid != payload.get("uid"):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    await check_not_banned(uid)
     tag = payload.get("tag")
     platform = payload.get("platform")
     image_url = payload.get("imageUrl")
@@ -1994,6 +2042,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
 @app.post("/validate-premium")
 async def validate_premium_token(uid: str = Depends(require_user)):
     """Return premium status for the authenticated user."""
+    await check_not_banned(uid)
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2043,12 +2092,18 @@ async def stripe_webhook(request: Request):
 
 
 @app.post("/update-active-quest")
-async def update_active_quest(payload: dict = Body(...)):
+async def update_active_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Patch the user's active quest document with extra data."""
     user_id = payload.get("userId")
     data = payload.get("data")
     if not user_id or not isinstance(data, dict):
         return {"error": "userId and data required"}
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+    await check_not_banned(uid)
 
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
@@ -2071,6 +2126,7 @@ async def create_custom_quest(
     uid: str = Depends(require_user),
 ):
     """Create a custom quest for the authenticated premium user."""
+    await check_not_banned(uid)
     if not await is_premium_user(uid):
         return JSONResponse(status_code=403, content={"error": "Premium required"})
 
@@ -2105,7 +2161,18 @@ async def update_custom_quest(
     quest_id = payload.get("quest_id")
     if not quest_id:
         return {"error": "quest_id required"}
-    # TODO: verify uid owns the quest before allowing update  # 🔒 MANUAL FIX NEEDED
+    await check_not_banned(uid)
+
+    project_id = creds.project_id
+    own_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, own_url)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="Quest not found")
+    doc = _decode_document(resp.json())
+    if doc.get("creatorId") != uid and doc.get("createdBy") != uid:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
 
     data = payload.get("data", {})
     data["updatedAt"] = datetime.utcnow().isoformat()
@@ -2141,14 +2208,30 @@ async def list_custom_quests(creatorId: str = Query(...), publicOnly: bool = Que
 
 
 @app.post("/publish-custom-quest")
-async def publish_custom_quest(payload: dict = Body(...)):
+async def publish_custom_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Mark a custom quest as public and published."""
     user_id = payload.get("user_id")
     quest_id = payload.get("quest_id")
     if not user_id or not quest_id:
         return {"error": "user_id and quest_id required"}
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+    await check_not_banned(uid)
 
     project_id = creds.project_id
+    own_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, own_url)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="Quest not found")
+    data = _decode_document(resp.json())
+    if data.get("creatorId") != uid and data.get("createdBy") != uid:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+
     patch_fields = {
         "status": "published",
         "public": True,
@@ -2172,14 +2255,29 @@ async def publish_custom_quest(payload: dict = Body(...)):
 
 
 @app.post("/unpublish-custom-quest")
-async def unpublish_custom_quest(payload: dict = Body(...)):
+async def unpublish_custom_quest(
+    payload: dict = Body(...),
+    uid: str = Depends(require_user),
+):
     """Mark a custom quest as draft and private."""
     user_id = payload.get("user_id")
     quest_id = payload.get("quest_id")
     if not user_id or not quest_id:
         return {"error": "user_id and quest_id required"}
+    if uid != user_id:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
+    await check_not_banned(uid)
 
     project_id = creds.project_id
+    own_url = (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
+    )
+    resp = await asyncio.to_thread(rest_session.get, own_url)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="Quest not found")
+    data = _decode_document(resp.json())
+    if data.get("creatorId") != uid and data.get("createdBy") != uid:
+        raise HTTPException(status_code=403, detail="You do not own this resource.")
     patch_fields = {
         "status": "draft",
         "public": False,
@@ -2211,6 +2309,7 @@ async def like_quest(
     quest_id = payload.get("quest_id")
     if not user_id or not quest_id or uid != user_id:
         return {"error": "user_id and quest_id required"}
+    await check_not_banned(uid)
     # TODO: enforce one like per user in Firestore security rules  # 🔒 MANUAL FIX NEEDED
 
     project_id = creds.project_id
@@ -2246,6 +2345,7 @@ async def view_quest(
     quest_id = payload.get("quest_id")
     if not user_id or not quest_id or uid != user_id:
         return {"error": "user_id and quest_id required"}
+    await check_not_banned(uid)
 
     project_id = creds.project_id
     view_doc = (
@@ -3186,6 +3286,7 @@ async def submit_featured_quest(
     """Allow approved creators to submit a featured quest draft."""
     if uid != payload.get("uid"):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    await check_not_banned(uid)
     if not await _verify_creator(uid):
         return JSONResponse(status_code=403, content={"error": "not_creator"})
 
@@ -3328,6 +3429,7 @@ async def redeem_promo_code(
     """Redeem a promo code for the authenticated user."""
     if uid != payload.get("uid"):
         return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    await check_not_banned(uid)
     code = str(payload.get("code", "")).strip()
     if not code:
         return {"error": "code required"}
