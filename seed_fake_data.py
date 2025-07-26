@@ -145,10 +145,24 @@ async def seed_community_quests(users):
             "uid": uid,
             "questText": f"Share your best memory from {city}",
             "imageUrl": f"https://picsum.photos/seed/{doc_id}/400/300",
-            "completedAt": datetime.utcnow().isoformat(),
-            "visible": True,
+            "publishedAt": datetime.utcnow().isoformat(),
+            "isVisible": True,
         }
         await write_doc(f"community_quests/{doc_id}", quest)
+
+async def seed_ugc_posts(users, count=8):
+    for _ in range(count):
+        post_id = uuid4().hex[:12]
+        uid, name = random.choice(users)
+        post = {
+            "text": "This quest was so fun with my friends!",
+            "author": name,
+            "uid": uid,
+            "city": random.choice(CITIES),
+            "mood": random.choice(MOODS),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        await write_doc(f"ugc_feed/{post_id}", post)
 
 async def seed_likes_views(users, quests):
     for qid in random.sample(quests, min(len(quests), 5)):
@@ -173,6 +187,7 @@ async def main():
     await seed_groups(users, quests)
     await seed_communities(users, quests)
     await seed_community_quests(users)
+    await seed_ugc_posts(users)
     await seed_likes_views(users, quests)
 
 if __name__ == "__main__":

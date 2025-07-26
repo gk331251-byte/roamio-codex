@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAuth } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
@@ -16,6 +16,7 @@ export default function OnboardingFlow() {
   const [time, setTime] = useState(60);
   const [useGPS, setUseGPS] = useState(false);
   const [coords, setCoords] = useState(null);
+  const [startLocation, setStartLocation] = useState(null);
   const [city, setCity] = useState('');
   const [dob, setDob] = useState('');
   const [loading, setLoading] = useState(false);
@@ -38,14 +39,29 @@ export default function OnboardingFlow() {
     }
   };
 
+  useEffect(() => {
+    if (!window.google || !window.google.maps || !window.google.maps.places) return;
+    const input = document.getElementById('onboard-address');
+    if (!input || input._ac) return;
+    const ac = new window.google.maps.places.Autocomplete(input);
+    input._ac = ac;
+    ac.addListener('place_changed', () => {
+      const p = ac.getPlace();
+      if (!p.geometry) return;
+      const { lat, lng } = p.geometry.location.toJSON();
+      setStartLocation({ address: p.formatted_address, lat, lng, placeId: p.place_id });
+      setCity(p.formatted_address);
+    });
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (selected.length === 0) {
       setError('Select at least one mood');
       return;
     }
-    if (!useGPS && !city) {
-      setError('City is required');
+    if (!useGPS && !startLocation) {
+      setError('Starting address required');
       return;
     }
     if (!dob) {
@@ -61,7 +77,8 @@ export default function OnboardingFlow() {
         city || 'gps',
         token,
         user.uid,
-        useGPS ? coords : null
+        useGPS ? coords : null,
+        startLocation
       );
       await setDoc(
         doc(db, 'users', user.uid),
@@ -119,10 +136,10 @@ export default function OnboardingFlow() {
           </label>
           {!useGPS && (
             <input
+              id="onboard-address"
               type="text"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              placeholder="Enter your city"
+              placeholder="Start address"
+              defaultValue={city}
               className="w-full border rounded px-3 py-2"
               required
             />

@@ -38,6 +38,7 @@ const QuestHome = () => {
   const [mood, setMood] = useState([]);
   const [timeLimit, setTimeLimit] = useState(90);
   const [coords, setCoords] = useState(null);
+  const [startLocation, setStartLocation] = useState(null);
   const [gpsMsg, setGpsMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -110,6 +111,21 @@ const QuestHome = () => {
     })();
   }, [user]);
 
+  useEffect(() => {
+    if (!window.google || !window.google.maps || !window.google.maps.places) return;
+    const input = document.getElementById('start-address');
+    if (!input || input._ac) return;
+    const ac = new window.google.maps.places.Autocomplete(input);
+    input._ac = ac;
+    ac.addListener('place_changed', () => {
+      const p = ac.getPlace();
+      if (!p.geometry) return;
+      const { lat, lng } = p.geometry.location.toJSON();
+      setStartLocation({ address: p.formatted_address, lat, lng, placeId: p.place_id });
+      setCity(p.formatted_address);
+    });
+  }, []);
+
   const handleLogin = async () => {
     const auth = getAuth();
     const provider = new GoogleAuthProvider();
@@ -148,7 +164,7 @@ const QuestHome = () => {
       return;
     }
 
-    if (!city || !Array.isArray(mood) || mood.length === 0 || isNaN(timeLimit)) {
+    if (!startLocation || !Array.isArray(mood) || mood.length === 0 || isNaN(timeLimit)) {
       setError("Please fill out all fields correctly.");
       return;
     }
@@ -162,7 +178,7 @@ const QuestHome = () => {
         Number(timeLimit),
         token,
         user.uid,
-        coords,
+        startLocation,
         difficulty
       );
       if (result.error) {
@@ -251,10 +267,10 @@ const QuestHome = () => {
         <>
           <div className="space-y-4 max-w-md mx-auto">
             <input
+              id="start-address"
               type="text"
-              placeholder="Enter city"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
+              placeholder="Start address"
+              defaultValue={city}
               className="w-full px-4 py-2 border border-[#d0e7d0] rounded-lg focus:outline-none"
             />
             <button

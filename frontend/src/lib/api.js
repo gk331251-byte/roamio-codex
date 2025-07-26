@@ -10,7 +10,7 @@ import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from 
  * @param {number} timeLimit - Time limit in minutes
  * @param {string} token - Firebase user token for auth
  */
-export async function generateQuest(city, mood, timeLimit, token, userId, coords, difficulty = 'Easy') {
+export async function generateQuest(city, mood, timeLimit, token, userId, startLocation, difficulty = 'Easy') {
   if (!city || !Array.isArray(mood) || mood.length === 0 || typeof timeLimit !== 'number') {
     throw new Error("Invalid input: city, mood[], and numeric timeLimit are required.");
   }
@@ -28,8 +28,7 @@ export async function generateQuest(city, mood, timeLimit, token, userId, coords
       time_limit: timeLimit,
       token,
       user_id: userId,
-      lat: coords?.lat,
-      lng: coords?.lng,
+      start_location: startLocation,
       difficulty,
     }),
   });
@@ -42,12 +41,12 @@ export async function generateQuest(city, mood, timeLimit, token, userId, coords
   return await response.json();
 }
 
-export async function generateDemoQuest(city, token, userId, coords) {
+export async function generateDemoQuest(city, token, userId, coords, startLocation) {
   const url = `${BASE_URL}/generate-demo-quest`;
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ city, user_id: userId, lat: coords?.lat, lng: coords?.lng, token })
+    body: JSON.stringify({ city, user_id: userId, lat: coords?.lat, lng: coords?.lng, token, start_location: startLocation })
   });
   if (!resp.ok) throw new Error('Failed to generate demo quest');
   return resp.json();

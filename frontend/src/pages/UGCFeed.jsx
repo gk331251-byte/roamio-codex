@@ -43,7 +43,7 @@ export default function UGCFeed() {
           className="border rounded px-2 py-1"
         />
       </div>
-      {posts.length === 0 && <p>No posts yet.</p>}
+      {posts.length === 0 && <p>No posts yet – be the first adventurer!</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
         {posts.map((p) => (
           <PostcardCard key={p.id} post={p} />
