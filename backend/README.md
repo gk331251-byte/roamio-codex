@@ -66,7 +66,7 @@ This app showcases full-stack AI integration with Google Cloud infrastructure, g
 
 ## API Endpoints
 
-- `POST /generate-quest` – create a new quest
+- `POST /generate-quest` – create a new quest (requires `start_location` with `lat` and `lng`)
 - `POST /get-directions` – proxy Google Maps Directions API and return the raw response
 
 ## 💻 Dev Setup

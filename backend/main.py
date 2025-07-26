@@ -38,6 +38,16 @@ from group_utils import create_group_document, add_user_to_group
 app = FastAPI()
 
 
+def truncate_text(text: str, max_tokens: int = 80, max_sentences: int = 3) -> str:
+    """Trim text to a limited number of tokens and sentences."""
+    sentences = [s.strip() for s in text.split(".") if s.strip()]
+    trimmed = ". ".join(sentences[:max_sentences])
+    words = trimmed.split()
+    if len(words) > max_tokens:
+        trimmed = " ".join(words[:max_tokens])
+    return trimmed.strip()
+
+
 # ----- XP & Level Helpers -----
 # Each level is reached every 1000 XP. Pre-generate a list so we can
 # easily look up the next threshold when returning quest results.
@@ -457,6 +467,7 @@ async def generate_quest(
     difficulty: str = Body("Easy"),
     lat: float | None = Body(None),
     lng: float | None = Body(None),
+    start_location: dict | None = Body(None),
     is_demo: bool = Body(False),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
@@ -467,8 +478,15 @@ async def generate_quest(
     print(f"[generate_quest] UID={uid}, city={city}, moods={moods}, demo={is_demo}, guest={is_guest}")
     if not user_id:
         user_id = uid
-    if not city or not moods:
-        return {"error": "City and mood list are required."}
+    if start_location:
+        lat = start_location.get("lat", lat)
+        lng = start_location.get("lng", lng)
+        if not city:
+            city = start_location.get("address", "")
+    if lat is None or lng is None:
+        return {"error": "start_location with lat/lng required"}
+    if not moods:
+        return {"error": "Mood list is required."}
 
     if is_demo:
         return {
@@ -525,14 +543,10 @@ async def generate_quest(
                 raise HTTPException(status_code=403, detail="You haven't unlocked {} quests yet.".format(req_diff))
 
     try:
-        if lat is not None and lng is not None:
-            city_location = {"lat": float(lat), "lng": float(lng)}
-        else:
-            geocode = gmaps.geocode(city)
-            city_location = geocode[0]["geometry"]["location"]
+        city_location = {"lat": float(lat), "lng": float(lng)}
     except Exception as e:
         print(f"Geocoding error: {e}")
-        return {"error": "Failed to locate city center."}
+        return {"error": "Failed to locate start location."}
 
 
     attempts = 0
@@ -697,23 +711,23 @@ async def generate_quest(
 
     if openai.api_key:
         prompt = (
-            f"Write a short playful quest including: {place_names}. "
-            f"Keep it under 250 tokens and use simple language. Style: {', '.join(sanitize_input(m) for m in moods)}"
+            f"Write a quest introduction in 3 sentences or fewer for a route with {len(ordered) - 1} stops in {city}. "
+            f"Stops: {place_names}. Tone: {', '.join(sanitize_input(m) for m in moods)}."
         )
         try:
             completion = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
             )
-            quest_text = completion.choices[0].message.content.strip()
+            quest_text = truncate_text(completion.choices[0].message.content.strip())
         except Exception as e:
             print("OpenAI error", e)
-            quest_text = (
+            quest_text = truncate_text(
                 f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
                 f"and ends at {ordered[-1]['name']}!"
             )
     else:
-        quest_text = (
+        quest_text = truncate_text(
             f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
             f"and ends at {ordered[-1]['name']}!"
         )
@@ -1978,7 +1992,8 @@ async def get_community_quests():
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "community_quests"}],
-            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "orderBy": [{"field": {"fieldPath": "publishedAt"}, "direction": "DESCENDING"}],
+            "where": {"fieldFilter": {"field": {"fieldPath": "isVisible"}, "op": "EQUAL", "value": {"booleanValue": True}}},
             "limit": 20,
         }
     }
@@ -1993,7 +2008,7 @@ async def get_community_quests():
         if not doc:
             continue
         obj = _decode_document(doc)
-        if obj.get("visible") is False or not obj.get("imageUrl"):
+        if obj.get("isVisible") is False or not obj.get("imageUrl"):
             continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)

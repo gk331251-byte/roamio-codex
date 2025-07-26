@@ -38,7 +38,7 @@ export default function CommunityFeed() {
 
   if (loading) return <div className="p-6">Loading...</div>;
   if (error) return <div className="p-6 text-red-600">{error}</div>;
-  if (quests.length === 0) return <div className="p-6">No public quests yet.</div>;
+  if (quests.length === 0) return <div className="p-6">Join the fun – no recent community quests yet.</div>;
 
   return (
     <div className="min-h-screen bg-[#f8fcf8] px-6 py-8 text-[#0e1b0e] font-sans">
