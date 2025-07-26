@@ -549,16 +549,28 @@ async def generate_quest(
     fallback_city = None
     selected = []
     while attempts < 2:
-        try:
-            response = gmaps.places_nearby(
-                location=(city_location["lat"], city_location["lng"]),
-                radius=2000,
-                type="tourist_attraction",
-            )
-            places_results = response.get("results", [])
-        except Exception as e:
-            print(f"Places API error: {e}")
-            return {"error": "Failed to fetch places"}
+        radius = 2000
+        places_results = []
+        while radius <= 20000:
+            try:
+                response = gmaps.places_nearby(
+                    location=(city_location["lat"], city_location["lng"]),
+                    radius=radius,
+                    type="tourist_attraction",
+                )
+                places_results = response.get("results", [])
+            except Exception as e:
+                print(f"Places API error: {e}")
+                return {"error": "Failed to fetch places"}
+            if len(places_results) >= 5:
+                break
+            radius *= 2
+            if radius <= 20000:
+                print(f"[generate_quest] expanding radius to {radius}m")
+            else:
+                print("[generate_quest] radius fallback maxed out")
+        if len(places_results) == 0:
+            break
 
         candidates = []
         for place in places_results:
@@ -617,6 +629,50 @@ async def generate_quest(
             if len(selected) >= 5:
                 break
 
+        if len(selected) < 3:
+            print("[generate_quest] fallback POI logic triggered")
+            generic = []
+            for place in places_results:
+                try:
+                    name = place.get("name")
+                    if not name or is_chain(name):
+                        continue
+                    loc = place["geometry"]["location"]
+                    typ = place.get("types", ["Unknown"])[0]
+                    tags = compute_place_tags(place)
+                    generic.append({
+                        "name": name,
+                        "type": typ,
+                        "lat": float(loc["lat"]),
+                        "lng": float(loc["lng"]),
+                        "tags": tags,
+                        "isAgeRestricted": False,
+                        "score": 0,
+                        "rating": place.get("rating", 0),
+                    })
+                except Exception:
+                    continue
+            generic.sort(key=lambda x: x["rating"], reverse=True)
+            selected = generic[:5]
+            if len(selected) < 3 and places_results:
+                for place in places_results:
+                    name = place.get("name")
+                    if not name or any(p["name"] == name for p in selected):
+                        continue
+                    loc = place["geometry"]["location"]
+                    selected.append({
+                        "name": name,
+                        "type": place.get("types", ["Unknown"])[0],
+                        "lat": float(loc["lat"]),
+                        "lng": float(loc["lng"]),
+                        "tags": compute_place_tags(place),
+                        "isAgeRestricted": False,
+                        "score": 0,
+                        "rating": place.get("rating", 0),
+                    })
+                    if len(selected) >= 3:
+                        break
+
         if len(selected) >= 3:
             break
 
@@ -633,25 +689,9 @@ async def generate_quest(
             break
 
     if len(selected) < 3:
-        print("[generate_quest] Not enough matching places, using demo quest")
-        return {
-            "quest": {
-                "questText": "Welcome adventurer! Try this fun intro route.",
-                "places": [
-                    {"name": "Welcome Plaza", "lat": 37.7749, "lng": -122.4194, "type": "tourist_attraction"},
-                    {"name": "Local Cafe", "lat": 37.7750, "lng": -122.4180, "type": "cafe"},
-                    {"name": "Riverside Walk", "lat": 37.7755, "lng": -122.4170, "type": "park"},
-                ],
-                "difficulty": "Easy",
-                "route": {"legs": [], "polyline": "", "total_distance": "0.5 miles", "total_duration": "15 minutes"},
-                "timestamp": datetime.utcnow().isoformat(),
-                "generationMethod": "demo",
-                "tagSource": "manual",
-                "tags": ["demo", "intro"],
-                "city": "Demo City",
-                "mood": "adventure",
-            }
-        }
+        msg = "We couldn\u2019t find enough matching spots nearby. Try again with different moods or adjust your location."
+        print("[generate_quest] insufficient POIs even after fallback")
+        return {"error": msg}
 
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
@@ -1995,13 +2035,18 @@ async def get_community_quests():
             "limit": 20,
         }
     }
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
     try:
         resp = await asyncio.to_thread(rest_session.post, url, json=query)
         resp.raise_for_status()
         raw = resp.json()
     except Exception as e:
         print("Firestore REST error", e)
-        return {"quests": []}
+        return JSONResponse(status_code=200, content={"quests": []}, headers=headers)
     results = []
     for item in raw:
         doc = item.get("document")
@@ -2012,7 +2057,7 @@ async def get_community_quests():
             continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
-    return {"quests": results}
+    return JSONResponse(content={"quests": results}, headers=headers)
 
 
 @app.get("/ugc-feed")
@@ -2035,11 +2080,20 @@ async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(
     if filters:
         where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
         query["structuredQuery"]["where"] = where
-    resp = await asyncio.to_thread(rest_session.post, url, json=query)
-    if resp.status_code != 200:
-        print("Firestore REST error", resp.text)
-        resp.raise_for_status()
-    raw = resp.json()
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+    try:
+        resp = await asyncio.to_thread(rest_session.post, url, json=query)
+        if resp.status_code != 200:
+            print("Firestore REST error", resp.text)
+            raise Exception("firestore")
+        raw = resp.json()
+    except Exception as e:
+        print("Firestore REST error", e)
+        return JSONResponse(status_code=200, content={"posts": []}, headers=headers)
     posts = []
     for item in raw:
         doc = item.get("document")
@@ -2050,7 +2104,13 @@ async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(
             continue
         obj["id"] = doc["name"].split("/")[-1]
         posts.append(obj)
-    return {"posts": posts}
+    return JSONResponse(content={"posts": posts}, headers=headers)
+
+
+@app.get("/debug-feed")
+async def debug_feed():
+    """Simple endpoint to verify feed retrieval."""
+    return await get_ugc_feed()
 
 @app.post("/create-checkout-session")
 async def create_checkout_session(payload: dict = Body(...)):
@@ -2652,7 +2712,7 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
             break
 
     if len(selected) < 3:
-        return {"error": "not enough places"}
+        return {"error": "We couldn\u2019t find enough matching spots nearby. Try again with different moods or adjust your location."}
 
     origin = f"{selected[0]['lat']},{selected[0]['lng']}"
     destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
