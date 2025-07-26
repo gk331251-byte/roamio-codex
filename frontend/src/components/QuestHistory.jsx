@@ -38,6 +38,7 @@ const QuestHistory = () => {
     for (let i = 0; i < delays.length; i++) {
       try {
         const data = await getUserQuests(uid);
+        console.debug('history loaded', data.quests?.length || 0);
         setQuests(data.quests || []);
         if (highlightNew && data.quests && data.quests.length > 0) {
           setHighlight(data.quests[0].id || null);
@@ -107,44 +108,54 @@ const QuestHistory = () => {
         <p className="text-[#4e974e] text-sm mb-6">Relive your past adventures and discover new paths.</p>
 
         <div className="space-y-6">
-          {quests.map((quest, index) => (
-            <Motion.div
-              key={quest.id || index}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: index * 0.1 }}
-              className={`flex flex-col lg:flex-row gap-4 items-stretch rounded-xl bg-white p-4 shadow-md ${
-                highlight === (quest.id || null) ? 'ring-2 ring-yellow-400' : ''
-              }`}
-            >
-              <div className="flex-[2] flex flex-col justify-between gap-2">
-                <div>
-                  <h2 className="font-bold text-lg">{quest.questData?.title || quest.title || 'Quest'}</h2>
-                  <p className="text-sm text-[#4e974e]">
-                    Mood: {quest.questData?.difficulty || quest.difficulty || 'easy'} | Stops: {quest.questData?.places?.length || 0}
-                  </p>
+          {quests.map((quest, index) => {
+            const data = quest.questData || quest;
+            if (!data.questText) {
+              return (
+                <div key={quest.id || index} className="p-4 bg-white rounded shadow">
+                  Quest data missing
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleReplay(quest)}
-                    className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 256 256" fill="currentColor">
-                      <path d="M224 128a96 96 0 01-94.7 96H128a95.4 95.4 0 01-65.9-26.2 8 8 0 0111-11.6A80 80 0 1071.4 71.4L44.6 96H72a8 8 0 010 16H24a8 8 0 01-8-8V56a8 8 0 0116 0v29.8L60.2 60A96 96 0 01224 128z" />
-                    </svg>
-                    Replay
-                  </button>
-                  <button
-                    onClick={() => handleRemix(quest)}
-                    className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium"
-                  >
-                    Remix
-                  </button>
+              );
+            }
+            return (
+              <Motion.div
+                key={quest.id || index}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: index * 0.1 }}
+                className={`flex flex-col lg:flex-row gap-4 items-stretch rounded-xl bg-white p-4 shadow-md ${
+                  highlight === (quest.id || null) ? 'ring-2 ring-yellow-400' : ''
+                }`}
+              >
+                <div className="flex-[2] flex flex-col justify-between gap-2">
+                  <div>
+                    <h2 className="font-bold text-lg">{data.title || 'Quest'}</h2>
+                    <p className="text-sm text-[#4e974e]">
+                      Mood: {data.difficulty || 'easy'} | Stops: {data.places?.length || data.locationList?.length || 0}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleReplay(quest)}
+                      className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 256 256" fill="currentColor">
+                        <path d="M224 128a96 96 0 01-94.7 96H128a95.4 95.4 0 01-65.9-26.2 8 8 0 0111-11.6A80 80 0 1071.4 71.4L44.6 96H72a8 8 0 010 16H24a8 8 0 01-8-8V56a8 8 0 0116 0v29.8L60.2 60A96 96 0 01224 128z" />
+                      </svg>
+                      Replay
+                    </button>
+                    <button
+                      onClick={() => handleRemix(quest)}
+                      className="flex items-center gap-2 bg-[#e7f3e7] text-[#0e1b0e] px-3 py-1 rounded-xl w-fit text-sm font-medium"
+                    >
+                      Remix
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className="flex-1 bg-cover bg-center aspect-video rounded-xl" style={{ backgroundImage: `url(${quest.postcardUrl || quest.imageUrl || 'https://placehold.co/600x300'})` }} />
-            </Motion.div>
-          ))}
+                <div className="flex-1 bg-cover bg-center aspect-video rounded-xl" style={{ backgroundImage: `url(${quest.postcardUrl || quest.imageUrl || 'https://placehold.co/600x300'})` }} />
+              </Motion.div>
+            );
+          })}
         </div>
       </section>
     </div>
