@@ -22,6 +22,7 @@ from stripe_utils import create_subscription_session, verify_webhook
 from auth_utils import (
     is_premium_user,
     verify_token,
+    verify_token_info,
     require_user,
     require_admin,
     check_not_banned,
@@ -459,11 +460,11 @@ async def generate_quest(
     is_demo: bool = Body(False),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
-    uid = await verify_token(authorization)
+    uid, is_guest = await verify_token_info(authorization)
     if not uid:
         print("[generate_quest] invalid or missing token")
         raise HTTPException(status_code=401, detail="Invalid or missing token")
-    print(f"[generate_quest] UID={uid}, city={city}, moods={moods}, demo={is_demo}")
+    print(f"[generate_quest] UID={uid}, city={city}, moods={moods}, demo={is_demo}, guest={is_guest}")
     if not user_id:
         user_id = uid
     if not city or not moods:
@@ -513,7 +514,9 @@ async def generate_quest(
                 else:
                     user_age = int(user_doc.get("age", 0))
                 prefers_clean = bool(user_doc.get("prefersCleanMode", False))
-            if usage_count >= 3:
+            if is_guest and usage_count >= 1:
+                return JSONResponse(status_code=403, content={"error": "Daily guest limit reached"})
+            if not is_guest and usage_count >= 3:
                 return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
             # difficulty gating
             req_diff = difficulty.title()
@@ -688,12 +691,14 @@ async def generate_quest(
         )
     else:
         ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
-    place_names = ", ".join([sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"])
+    place_names = ", ".join(
+        [sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"][:5]
+    )
 
     if openai.api_key:
         prompt = (
-            f"Write a short playful quest including these places: {place_names}. "
-            f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
+            f"Write a short playful quest including: {place_names}. "
+            f"Keep it under 250 tokens and use simple language. Style: {', '.join(sanitize_input(m) for m in moods)}"
         )
         try:
             completion = openai.ChatCompletion.create(
@@ -1060,23 +1065,21 @@ async def complete_quest(payload: dict = Body(...)):
         patch_body = {"fields": _encode_fields({"postcardUrl": postcard_url})}
         await asyncio.to_thread(rest_session.patch, quest_url, json=patch_body)
 
-    if payload.get("public"):
+    if payload.get("public") and postcard_url:
         feed_id = f"{quest_id}_{user_id}"
         feed_doc = {
-            "uid": user_id,
+            "userId": user_id,
             "imageUrl": postcard_url,
             "city": payload.get("city"),
             "timestamp": timestamp,
-            "badgesUnlocked": new_badges,
-            "xpEarned": xp_earned,
             "displayName": payload.get("displayName"),
             "mood": payload.get("mood"),
-            "questTitle": payload.get("title"),
-            "sharedFromQuestId": quest_id,
-            "isFlagged": False,
+            "title": payload.get("title"),
+            "questText": payload.get("questText"),
+            "visible": True,
         }
         feed_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed/{feed_id}"
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{feed_id}"
         )
         feed_body = {"fields": _encode_fields(feed_doc)}
         fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
@@ -1998,7 +2001,7 @@ async def get_community_quests():
         if not doc:
             continue
         obj = _decode_document(doc)
-        if obj.get("visible") is False:
+        if obj.get("visible") is False or not obj.get("imageUrl"):
             continue
         obj["id"] = doc["name"].split("/")[-1]
         results.append(obj)
@@ -2094,7 +2097,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
             body = {"fields": _encode_fields(fields)}
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
-    return {"isPremium": premium}
+    return {"premium": premium}
 
 
 @app.post("/validate-premium")
@@ -2110,10 +2113,7 @@ async def validate_premium_token(authorization: str = Header(...)):
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
     premium = fields.get("isPremium") is True
-    if not premium:
-        print(f"[validate-premium] uid {uid} not premium")
-        raise HTTPException(status_code=403, detail="Not a premium user")
-    return {"valid": True}
+    return {"premium": premium}
 
 
 @app.post("/api/stripe-webhook")
@@ -2188,12 +2188,19 @@ async def update_active_quest(
 @app.post("/create-custom-quest")
 async def create_custom_quest(
     payload: dict = Body(...),
-    uid: str = Depends(require_user),
+    authorization: str = Header(...),
 ):
-    """Create a custom quest for the authenticated premium user."""
+    """Create a custom quest for the authenticated user or guest."""
+    uid, is_guest = await verify_token_info(authorization)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
     await check_not_banned(uid)
-    if not await is_premium_user(uid):
+    if not await is_premium_user(uid) and not is_guest:
         return JSONResponse(status_code=403, content={"error": "Premium required"})
+
+    usage_count = await get_daily_usage(uid)
+    if is_guest and usage_count >= 1:
+        return JSONResponse(status_code=403, content={"error": "Daily guest limit reached"})
 
     location_list = payload.get("locationList", [])
     if len(location_list) < 2:
@@ -2211,6 +2218,8 @@ async def create_custom_quest(
 
     try:
         quest_id = await write_custom_quest(data, uid)
+        if is_guest:
+            await increment_daily_usage(uid)
         return {"questId": quest_id}
     except Exception as e:
         print("create_custom_quest error", e)

@@ -86,18 +86,20 @@ export async function validatePremium(userId, sessionId) {
     url.searchParams.set('session_id', sessionId);
     const resp = await fetch(url.toString());
     if (!resp.ok) throw new Error('Failed to validate premium');
-    return resp.json();
+    const data = await resp.json();
+    return { premium: !!data.premium, isPremium: !!data.premium };
   }
   const auth = getAuth();
   const user = auth.currentUser;
-  if (!user) return { isPremium: false };
+  if (!user) return { premium: false, isPremium: false };
   const token = await user.getIdToken();
   const resp = await fetch(`${BASE_URL}/validate-premium`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!resp.ok) throw new Error('Failed to validate premium');
-  return resp.json();
+  const data = await resp.json();
+  return { premium: !!data.premium, isPremium: !!data.premium };
 }
 
 export async function getUserQuests(userId) {

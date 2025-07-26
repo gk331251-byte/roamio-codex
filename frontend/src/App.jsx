@@ -1,7 +1,7 @@
 // src/App.jsx
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { useEffect } from "react";
-import { onAuthStateChanged, getAuth } from "firebase/auth";
+import { onAuthStateChanged, getAuth, signInAnonymously } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "./firebase";
 import { getActiveQuest, getQuest, leaveGroup } from "./lib/api";
@@ -50,7 +50,15 @@ function App() {
   useEffect(() => {
     const auth = getAuth();
     const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) return;
+      console.debug('auth state', user ? user.uid : 'none');
+      if (!user) {
+        try {
+          await signInAnonymously(auth);
+        } catch (err) {
+          console.error('guest sign-in failed', err);
+        }
+        return;
+      }
       try {
         const snap = await getDoc(doc(db, 'users', user.uid));
         const onboarded = snap.exists() && snap.data().onboarding;

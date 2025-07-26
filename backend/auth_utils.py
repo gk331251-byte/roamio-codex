@@ -70,6 +70,20 @@ async def verify_token(auth_header: str | None) -> str | None:
         return None
 
 
+async def verify_token_info(auth_header: str | None) -> tuple[str | None, bool]:
+    """Return UID and whether the token represents an anonymous user."""
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None, False
+    token = auth_header.split(" ", 1)[1]
+    try:
+        decoded = await asyncio.to_thread(fb_auth.verify_id_token, token)
+        provider = decoded.get("firebase", {}).get("sign_in_provider")
+        return decoded.get("uid"), provider == "anonymous"
+    except Exception as e:
+        print("verify_token_info error", e)
+        return None, False
+
+
 async def _get_user_doc(uid: str) -> dict | None:
     url = (
         f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/users/{uid}"
