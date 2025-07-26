@@ -4,6 +4,8 @@ import re
 from fastapi import Depends, HTTPException, Request
 from google.oauth2 import service_account, id_token
 from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
+from dotenv import load_dotenv
+load_dotenv()
 
 # Initialize Firestore REST session
 creds = service_account.Credentials.from_service_account_file(

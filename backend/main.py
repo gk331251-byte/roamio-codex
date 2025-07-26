@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, Body, Request
+from fastapi import FastAPI, Query, Body, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -190,7 +190,7 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY")
+gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY") or os.getenv("MAPS_API_KEY")
 try:
     gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
 except Exception as e:
@@ -1320,30 +1320,36 @@ async def reroll_quest(payload: dict = Body(...)):
 
 @app.post("/get-directions")
 async def get_directions(payload: dict = Body(...)):
-    """Return mocked directions data for a list of places."""
-    places = payload.get("places", [])
-    if not isinstance(places, list) or len(places) < 2:
-        return {"error": "At least two places required"}
+    print("Received /get-directions payload:", payload)
+    try:
+        places = payload.get("places", [])
+        if not places or len(places) < 2:
+            return {"error": "At least two valid places required"}
 
-    # Pretend to compute directions. Real API calls are disabled.
-    await asyncio.sleep(0)
+        origin = f"{places[0]['lat']},{places[0]['lng']}"
+        destination = f"{places[-1]['lat']},{places[-1]['lng']}"
+        waypoints = [f"{p['lat']},{p['lng']}" for p in places[1:-1]]
 
-    return {
-        "polyline": "abc123mockedpolyline",
-        "legs": [
-            {
-                "duration": {"text": "10 mins"},
-                "start_address": places[0].get("name", "Start"),
-                "end_address": places[1].get("name", "Stop 1"),
-            },
-            {
-                "duration": {"text": "12 mins"},
-                "start_address": places[1].get("name", "Stop 1"),
-                "end_address": places[2].get("name", "Stop 2") if len(places) > 2 else places[1].get("name", "Stop 2"),
-            },
-        ],
-        "totalTime": "22 mins",
-    }
+        directions_result = gmaps.directions(
+            origin=origin,
+            destination=destination,
+            waypoints=waypoints,
+            mode="walking",
+            optimize_waypoints=True,
+        )
+
+        if not directions_result:
+            return {"error": "No route found"}
+
+        route = directions_result[0]
+        return {
+            "polyline": route.get("overview_polyline", {}).get("points", ""),
+            "legs": route.get("legs", []),
+        }
+    except Exception as e:
+        print("Error fetching directions:", str(e))
+        return {"error": str(e)}
+
 
 
 @app.post("/create-group-quest")

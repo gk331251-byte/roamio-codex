@@ -107,9 +107,13 @@ export default function QuestLivePage() {
       const destination = coords[coords.length - 1];
       const waypointStr = coords.slice(0, -1).join('|');
       try {
-        const res = await fetch(
-          `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&waypoints=optimize:true|${waypointStr}&mode=walking&key=${key}`
-        );
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/get-directions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            places: remaining.length ? remaining : quest.places,
+          }),
+        });        
         const data = await res.json();
         const order = data?.routes?.[0]?.waypoint_order;
         let ordered = quest.places;
@@ -118,8 +122,13 @@ export default function QuestLivePage() {
           ordered.push(quest.places[quest.places.length - 1]);
         }
 
-        const legs = data?.routes?.[0]?.legs || [];
-        const limitSec = timeLimit * 60;
+        const legs = data?.legs || [];
+        if (legs.length > 0) {
+          const sec = legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
+          const mins = Math.round(sec / 60);
+          setEtaText(`${mins} min`);
+        }
+                const limitSec = timeLimit * 60;
         let total = 0;
         let keep = legs.length;
         for (let i = 0; i < legs.length; i++) {
