@@ -2676,8 +2676,9 @@ async def search_quests(query: str = Query(...), user_id: str | None = None):
         return any(tok in hay for tok in tokens)
 
     # community quests
+    # Run query against the community_quests collection
     cq_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests:runQuery"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
     )
     cq_query = {
         "structuredQuery": {
@@ -2698,8 +2699,9 @@ async def search_quests(query: str = Query(...), user_id: str | None = None):
                 results["public"].append(data)
 
     # custom quests (published)
+    # Published custom quests
     cust_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests:runQuery"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
     )
     cust_query = {
         "structuredQuery": {
