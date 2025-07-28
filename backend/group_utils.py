@@ -7,7 +7,7 @@ import asyncio
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 
-from firestore_utils import _encode_fields, _decode_document
+from backend.firestore_utils import _encode_fields, _decode_document
 
 creds = service_account.Credentials.from_service_account_file(
     os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),

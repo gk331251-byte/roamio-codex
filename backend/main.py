@@ -1,4 +1,7 @@
-from fastapi import FastAPI, Query, Body, Request, Depends, Header, HTTPException
+from fastapi import FastAPI, Query, Body, Request, Depends, APIRouter, HTTPException
+from typing import Any
+import asyncio
+import requests
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -17,35 +20,25 @@ from firebase_admin import auth as fb_auth
 
 
 from dotenv import load_dotenv
-from emotion_utils import generate_filtered_quest_payload
-from stripe_utils import create_subscription_session, verify_webhook
-from auth_utils import (
+from backend.emotion_utils import generate_filtered_quest_payload
+from backend.stripe_utils import create_subscription_session, verify_webhook
+from backend.auth_utils import (
     is_premium_user,
     verify_token,
-    verify_token_info,
     require_user,
     require_admin,
     check_not_banned,
     sanitize_input,
 )
-from firestore_utils import (
+from backend.firestore_utils import (
     write_custom_quest,
     get_custom_quest as fs_get_custom_quest,
     query_custom_quests_by_creator,
 )
-from group_utils import create_group_document, add_user_to_group
+from backend.group_utils import create_group_document, add_user_to_group
 
 app = FastAPI()
 
-
-def truncate_text(text: str, max_tokens: int = 80, max_sentences: int = 3) -> str:
-    """Trim text to a limited number of tokens and sentences."""
-    sentences = [s.strip() for s in text.split(".") if s.strip()]
-    trimmed = ". ".join(sentences[:max_sentences])
-    words = trimmed.split()
-    if len(words) > max_tokens:
-        trimmed = " ".join(words[:max_tokens])
-    return trimmed.strip()
 
 
 # ----- XP & Level Helpers -----
@@ -437,14 +430,18 @@ CITY_FALLBACK_MAP = {
 }
 
 # ✅ Replace this with your actual frontend deployed domain
-allowed_origins = ["*"]
+allowed_origins = [
+    "http://localhost:5173",  # Vite dev server (local)
+    "https://real-quest-frontend.web.app",  # Firebase Hosting / production
+    "https://real-world-quest-app.web.app",  # Firebase hosted frontend
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=allowed_origins,  # <-- FIXED
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -458,51 +455,15 @@ async def generate_quest(
     city: str = Body(...),
     moods: list[str] = Body(...),
     time_limit: int = Body(...),
-    authorization: str = Header(...),
+    token: str = Body(...),
     user_id: str | None = Body(None),
     difficulty: str = Body("Easy"),
     lat: float | None = Body(None),
     lng: float | None = Body(None),
-    start_location: dict | None = Body(None),
-    is_demo: bool = Body(False),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
-    uid, is_guest = await verify_token_info(authorization)
-    if not uid:
-        print("[generate_quest] invalid or missing token")
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
-    print(f"[generate_quest] UID={uid}, city={city}, moods={moods}, demo={is_demo}, guest={is_guest}")
-    if not user_id:
-        user_id = uid
-    if start_location:
-        lat = start_location.get("lat", lat)
-        lng = start_location.get("lng", lng)
-        if not city:
-            city = start_location.get("address", "")
-    if lat is None or lng is None:
-        return {"error": "start_location with lat/lng required"}
-    if not moods:
-        return {"error": "Mood list is required."}
-
-    if is_demo:
-        return {
-            "quest": {
-                "questText": "Welcome adventurer! Try this fun intro route.",
-                "places": [
-                    {"name": "Welcome Plaza", "lat": 37.7749, "lng": -122.4194, "type": "tourist_attraction"},
-                    {"name": "Local Cafe", "lat": 37.7750, "lng": -122.4180, "type": "cafe"},
-                    {"name": "Riverside Walk", "lat": 37.7755, "lng": -122.4170, "type": "park"},
-                ],
-                "difficulty": "Easy",
-                "route": {"legs": [], "polyline": "", "total_distance": "0.5 miles", "total_duration": "15 minutes"},
-                "timestamp": datetime.utcnow().isoformat(),
-                "generationMethod": "demo",
-                "tagSource": "manual",
-                "tags": ["demo", "intro"],
-                "city": "Demo City",
-                "mood": "adventure",
-            }
-        }
+    if not city or not moods:
+        return {"error": "City and mood list are required."}
 
     preferred = get_user_preferred_tags(user_id) if user_id else []
 
@@ -528,9 +489,7 @@ async def generate_quest(
                 else:
                     user_age = int(user_doc.get("age", 0))
                 prefers_clean = bool(user_doc.get("prefersCleanMode", False))
-            if is_guest and usage_count >= 1:
-                return JSONResponse(status_code=403, content={"error": "Daily guest limit reached"})
-            if not is_guest and usage_count >= 3:
+            if usage_count >= 3:
                 return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
             # difficulty gating
             req_diff = difficulty.title()
@@ -539,38 +498,30 @@ async def generate_quest(
                 raise HTTPException(status_code=403, detail="You haven't unlocked {} quests yet.".format(req_diff))
 
     try:
-        city_location = {"lat": float(lat), "lng": float(lng)}
+        if lat is not None and lng is not None:
+            city_location = {"lat": float(lat), "lng": float(lng)}
+        else:
+            geocode = gmaps.geocode(city)
+            city_location = geocode[0]["geometry"]["location"]
     except Exception as e:
         print(f"Geocoding error: {e}")
-        return {"error": "Failed to locate start location."}
+        return {"error": "Failed to locate city center."}
 
 
     attempts = 0
     fallback_city = None
     selected = []
     while attempts < 2:
-        radius = 2000
-        places_results = []
-        while radius <= 20000:
-            try:
-                response = gmaps.places_nearby(
-                    location=(city_location["lat"], city_location["lng"]),
-                    radius=radius,
-                    type="tourist_attraction",
-                )
-                places_results = response.get("results", [])
-            except Exception as e:
-                print(f"Places API error: {e}")
-                return {"error": "Failed to fetch places"}
-            if len(places_results) >= 5:
-                break
-            radius *= 2
-            if radius <= 20000:
-                print(f"[generate_quest] expanding radius to {radius}m")
-            else:
-                print("[generate_quest] radius fallback maxed out")
-        if len(places_results) == 0:
-            break
+        try:
+            response = gmaps.places_nearby(
+                location=(city_location["lat"], city_location["lng"]),
+                radius=2000,
+                type="tourist_attraction",
+            )
+            places_results = response.get("results", [])
+        except Exception as e:
+            print(f"Places API error: {e}")
+            return {"error": "Failed to fetch places"}
 
         candidates = []
         for place in places_results:
@@ -629,50 +580,6 @@ async def generate_quest(
             if len(selected) >= 5:
                 break
 
-        if len(selected) < 3:
-            print("[generate_quest] fallback POI logic triggered")
-            generic = []
-            for place in places_results:
-                try:
-                    name = place.get("name")
-                    if not name or is_chain(name):
-                        continue
-                    loc = place["geometry"]["location"]
-                    typ = place.get("types", ["Unknown"])[0]
-                    tags = compute_place_tags(place)
-                    generic.append({
-                        "name": name,
-                        "type": typ,
-                        "lat": float(loc["lat"]),
-                        "lng": float(loc["lng"]),
-                        "tags": tags,
-                        "isAgeRestricted": False,
-                        "score": 0,
-                        "rating": place.get("rating", 0),
-                    })
-                except Exception:
-                    continue
-            generic.sort(key=lambda x: x["rating"], reverse=True)
-            selected = generic[:5]
-            if len(selected) < 3 and places_results:
-                for place in places_results:
-                    name = place.get("name")
-                    if not name or any(p["name"] == name for p in selected):
-                        continue
-                    loc = place["geometry"]["location"]
-                    selected.append({
-                        "name": name,
-                        "type": place.get("types", ["Unknown"])[0],
-                        "lat": float(loc["lat"]),
-                        "lng": float(loc["lng"]),
-                        "tags": compute_place_tags(place),
-                        "isAgeRestricted": False,
-                        "score": 0,
-                        "rating": place.get("rating", 0),
-                    })
-                    if len(selected) >= 3:
-                        break
-
         if len(selected) >= 3:
             break
 
@@ -689,9 +596,7 @@ async def generate_quest(
             break
 
     if len(selected) < 3:
-        msg = "We couldn\u2019t find enough matching spots nearby. Try again with different moods or adjust your location."
-        print("[generate_quest] insufficient POIs even after fallback")
-        return {"error": msg}
+        return {"error": "Not enough matching places"}
 
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
@@ -741,29 +646,27 @@ async def generate_quest(
         )
     else:
         ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
-    place_names = ", ".join(
-        [sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"][:5]
-    )
+    place_names = ", ".join([sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"])
 
     if openai.api_key:
         prompt = (
-            f"Write a quest introduction in 3 sentences or fewer for a route with {len(ordered) - 1} stops in {city}. "
-            f"Stops: {place_names}. Tone: {', '.join(sanitize_input(m) for m in moods)}."
+            f"Write a short playful quest including these places: {place_names}. "
+            f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
         )
         try:
             completion = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
             )
-            quest_text = truncate_text(completion.choices[0].message.content.strip())
+            quest_text = completion.choices[0].message.content.strip()
         except Exception as e:
             print("OpenAI error", e)
-            quest_text = truncate_text(
+            quest_text = (
                 f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
                 f"and ends at {ordered[-1]['name']}!"
             )
     else:
-        quest_text = truncate_text(
+        quest_text = (
             f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
             f"and ends at {ordered[-1]['name']}!"
         )
@@ -1115,21 +1018,23 @@ async def complete_quest(payload: dict = Body(...)):
         patch_body = {"fields": _encode_fields({"postcardUrl": postcard_url})}
         await asyncio.to_thread(rest_session.patch, quest_url, json=patch_body)
 
-    if payload.get("public") and postcard_url:
+    if payload.get("public"):
         feed_id = f"{quest_id}_{user_id}"
         feed_doc = {
-            "userId": user_id,
+            "uid": user_id,
             "imageUrl": postcard_url,
             "city": payload.get("city"),
             "timestamp": timestamp,
+            "badgesUnlocked": new_badges,
+            "xpEarned": xp_earned,
             "displayName": payload.get("displayName"),
             "mood": payload.get("mood"),
-            "title": payload.get("title"),
-            "questText": payload.get("questText"),
-            "visible": True,
+            "questTitle": payload.get("title"),
+            "sharedFromQuestId": quest_id,
+            "isFlagged": False,
         }
         feed_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{feed_id}"
+            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed/{feed_id}"
         )
         feed_body = {"fields": _encode_fields(feed_doc)}
         fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
@@ -1248,13 +1153,11 @@ async def get_user_quests(userId: str = Query(...)):
             ],
         }
     }
-    try:
-        resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
         resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        print("Firestore REST error", e)
-        return {"posts": []}
+    raw = resp.json()
     results = []
     for item in raw:
         doc = item.get("document")
@@ -1407,42 +1310,48 @@ async def upload_postcard(
 
 
 @app.post("/reroll-quest")
-async def reroll_quest(payload: dict = Body(...), authorization: str = Header(...)):
+async def reroll_quest(payload: dict = Body(...)):
     """Regenerate a quest for the same parameters."""
     city = payload.get("city")
     moods = payload.get("moods", [])
     time_limit = payload.get("time_limit", 60)
+    token = payload.get("token", "")
     # Reuse generate_quest logic
     lat = payload.get("lat")
     lng = payload.get("lng")
-    is_demo = payload.get("is_demo", False)
-    return await generate_quest(city=city, moods=moods, time_limit=time_limit,
-                               authorization=authorization, user_id=None,
-                               lat=lat, lng=lng, is_demo=is_demo)
+    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng)
 
 
 @app.post("/get-directions")
 async def get_directions(payload: dict = Body(...)):
-    """Proxy Google Maps directions to avoid CORS issues."""
-    origin = payload.get("origin")
-    destination = payload.get("destination")
-    waypoints = payload.get("waypoints", [])
-    places = payload.get("places")
-    if places and len(places) >= 2:
+    print("Received /get-directions payload:", payload)
+    try:
+        places = payload.get("places", [])
+        if not places or len(places) < 2:
+            return {"error": "At least two valid places required"}
+
         origin = f"{places[0]['lat']},{places[0]['lng']}"
         destination = f"{places[-1]['lat']},{places[-1]['lng']}"
         waypoints = [f"{p['lat']},{p['lng']}" for p in places[1:-1]]
-    try:
-        directions = gmaps.directions(
-            origin,
-            destination,
+
+        directions_result = gmaps.directions(
+            origin=origin,
+            destination=destination,
             waypoints=waypoints,
             mode="walking",
             optimize_waypoints=True,
         )
-        return {"directions": directions}
+
+        if not directions_result:
+            return {"error": "No route found"}
+
+        route = directions_result[0]
+        return {
+            "polyline": route.get("overview_polyline", {}).get("points", ""),
+            "legs": route.get("legs", []),
+        }
     except Exception as e:
-        print("Error fetching directions:", e)
+        print("Error fetching directions:", str(e))
         return {"error": str(e)}
 
 
@@ -2021,43 +1930,45 @@ async def get_weekly_tag():
 
 
 @app.get("/get-community-quests")
-async def get_community_quests():
-    """Return recently completed public quests."""
+async def get_community_quests() -> dict[str, list[dict[str, Any]]]:
+    """
+    Fetches the latest public community quests from Firestore.
+    Uses Firestore's REST API with a structuredQuery sorted by completedAt.
+    """
     project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests:runQuery"
-    )
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "community_quests"}],
-            "orderBy": [{"field": {"fieldPath": "publishedAt"}, "direction": "DESCENDING"}],
-            "where": {"fieldFilter": {"field": {"fieldPath": "isVisible"}, "op": "EQUAL", "value": {"booleanValue": True}}},
-            "limit": 20,
+            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "limit": 20
         }
     }
-    headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-    }
+
     try:
         resp = await asyncio.to_thread(rest_session.post, url, json=query)
         resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        print("Firestore REST error", e)
-        return JSONResponse(status_code=200, content={"quests": []}, headers=headers)
-    results = []
-    for item in raw:
-        doc = item.get("document")
+    except requests.RequestException as e:
+        print("Firestore REST error:", e.response.text if e.response else str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch community quests")
+
+    raw_results = resp.json()
+    quests = []
+
+    for entry in raw_results:
+        doc = entry.get("document")
         if not doc:
             continue
-        obj = _decode_document(doc)
-        if obj.get("isVisible") is False or not obj.get("imageUrl"):
+
+        data = _decode_document(doc)
+        if data.get("visible") is False:
             continue
-        obj["id"] = doc["name"].split("/")[-1]
-        results.append(obj)
-    return JSONResponse(content={"quests": results}, headers=headers)
+
+        data["id"] = doc["name"].split("/")[-1]
+        quests.append(data)
+
+    return {"quests": quests}
 
 
 @app.get("/ugc-feed")
@@ -2080,20 +1991,11 @@ async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(
     if filters:
         where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
         query["structuredQuery"]["where"] = where
-    headers = {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-    }
-    try:
-        resp = await asyncio.to_thread(rest_session.post, url, json=query)
-        if resp.status_code != 200:
-            print("Firestore REST error", resp.text)
-            raise Exception("firestore")
-        raw = resp.json()
-    except Exception as e:
-        print("Firestore REST error", e)
-        return JSONResponse(status_code=200, content={"posts": []}, headers=headers)
+    resp = await asyncio.to_thread(rest_session.post, url, json=query)
+    if resp.status_code != 200:
+        print("Firestore REST error", resp.text)
+        resp.raise_for_status()
+    raw = resp.json()
     posts = []
     for item in raw:
         doc = item.get("document")
@@ -2104,13 +2006,7 @@ async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(
             continue
         obj["id"] = doc["name"].split("/")[-1]
         posts.append(obj)
-    return JSONResponse(content={"posts": posts}, headers=headers)
-
-
-@app.get("/debug-feed")
-async def debug_feed():
-    """Simple endpoint to verify feed retrieval."""
-    return await get_ugc_feed()
+    return {"posts": posts}
 
 @app.post("/create-checkout-session")
 async def create_checkout_session(payload: dict = Body(...)):
@@ -2164,22 +2060,19 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
             body = {"fields": _encode_fields(fields)}
             await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
-    return {"premium": premium}
+    return {"isPremium": premium}
 
 
 @app.post("/validate-premium")
-async def validate_premium_token(authorization: str | None = Header(None)):
+async def validate_premium_token(uid: str = Depends(require_user)):
     """Return premium status for the authenticated user."""
-    uid = await verify_token(authorization) if authorization else None
-    if not uid:
-        return {"premium": False}
     await check_not_banned(uid)
     project_id = creds.project_id
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
     premium = fields.get("isPremium") is True
-    return {"premium": premium}
+    return {"isPremium": premium}
 
 
 @app.post("/api/stripe-webhook")
@@ -2254,19 +2147,12 @@ async def update_active_quest(
 @app.post("/create-custom-quest")
 async def create_custom_quest(
     payload: dict = Body(...),
-    authorization: str = Header(...),
+    uid: str = Depends(require_user),
 ):
-    """Create a custom quest for the authenticated user or guest."""
-    uid, is_guest = await verify_token_info(authorization)
-    if not uid:
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
+    """Create a custom quest for the authenticated premium user."""
     await check_not_banned(uid)
-    if not await is_premium_user(uid) and not is_guest:
+    if not await is_premium_user(uid):
         return JSONResponse(status_code=403, content={"error": "Premium required"})
-
-    usage_count = await get_daily_usage(uid)
-    if is_guest and usage_count >= 1:
-        return JSONResponse(status_code=403, content={"error": "Daily guest limit reached"})
 
     location_list = payload.get("locationList", [])
     if len(location_list) < 2:
@@ -2284,8 +2170,6 @@ async def create_custom_quest(
 
     try:
         quest_id = await write_custom_quest(data, uid)
-        if is_guest:
-            await increment_daily_usage(uid)
         return {"questId": quest_id}
     except Exception as e:
         print("create_custom_quest error", e)
@@ -2453,9 +2337,8 @@ async def like_quest(
     # TODO: enforce one like per user in Firestore security rules  # 🔒 MANUAL FIX NEEDED
 
     project_id = creds.project_id
-    doc_id = f"{quest_id}_{user_id}"
     like_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{doc_id}"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{quest_id}/{user_id}"
     )
     body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
     resp = await asyncio.to_thread(rest_session.patch, like_url, json=body)
@@ -2489,9 +2372,8 @@ async def view_quest(
     await check_not_banned(uid)
 
     project_id = creds.project_id
-    doc_id = f"{quest_id}_{user_id}"
     view_doc = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{doc_id}"
+        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{quest_id}/{user_id}"
     )
     resp = await asyncio.to_thread(rest_session.get, view_doc)
     if resp.status_code == 404:
@@ -2712,7 +2594,7 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
             break
 
     if len(selected) < 3:
-        return {"error": "We couldn\u2019t find enough matching spots nearby. Try again with different moods or adjust your location."}
+        return {"error": "not enough places"}
 
     origin = f"{selected[0]['lat']},{selected[0]['lng']}"
     destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
