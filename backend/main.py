@@ -9,6 +9,7 @@ import json
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import sys
 import traceback
 import requests
 import hashlib
@@ -25,7 +26,34 @@ from backend.routes import some_router  # or routes if running locally
 import openai
 import googlemaps
 from dotenv import load_dotenv
-from backend.lib.google_utils import get_authorized_session
+
+
+app = FastAPI()
+
+
+def _get_authorized_session():
+    from google.auth.transport.requests import AuthorizedSession
+    import google.auth
+
+    try:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+        print("✅ Auth credentials loaded. Project:", creds.project_id)
+        return AuthorizedSession(creds)
+    except Exception as e:
+        print("❌ ERROR: Could not initialize Google AuthorizedSession:")
+        traceback.print_exc()
+        return None
+
+
+try:
+    print("🔧 Initializing rest session...")
+    rest_session = _get_authorized_session()
+    if not rest_session:
+        raise RuntimeError("Failed to initialize Firestore session via `_get_authorized_session()`")
+except Exception as e:
+    print("💥 Startup error in main.py line 43 💥")
+    traceback.print_exc()
+    sys.exit(1)
 
 
 def log_startup_debug():
@@ -39,13 +67,7 @@ try:
     load_dotenv()
     os.environ["SSL_CERT_FILE"] = certifi.where()
 
-    try:
-        rest_session, _ = get_authorized_session()
-        print("✅ Firestore AuthorizedSession created")
-    except Exception as cred_err:
-        print("❌ Failed to initialize Firestore session:", cred_err)
-        traceback.print_exc()
-        rest_session = None
+
 
     gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if gmaps_key:
@@ -65,7 +87,6 @@ try:
 
     openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-    app = FastAPI()
     app.include_router(some_router)
 
     print("✅ FastAPI app initialized")
@@ -3736,6 +3757,7 @@ async def refresh_leaderboards():
 
     return {"status": "ok"}
 
+@app.get("/status")
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
