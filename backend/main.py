@@ -34,48 +34,39 @@ app = FastAPI()
 def _get_authorized_session():
     from google.auth.transport.requests import AuthorizedSession
     from google.oauth2 import service_account
-    import google.auth
+    import traceback
 
-    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if cred_path:
-        print("🔑 GOOGLE_APPLICATION_CREDENTIALS:", cred_path)
-    else:
-        print("🔑 GOOGLE_APPLICATION_CREDENTIALS not set")
-
-    # Prefer explicit service account key if provided
-    if cred_path and os.path.exists(cred_path):
-        try:
-            creds = service_account.Credentials.from_service_account_file(
-                cred_path,
-                scopes=["https://www.googleapis.com/auth/datastore"],
-            )
-            print("✅ Loaded service account credentials from file")
-            return AuthorizedSession(creds)
-        except Exception:
-            print("❌ Failed loading credentials from file")
-            traceback.print_exc()
-
-    # Fall back to default credentials (e.g., Cloud Run)
     try:
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/datastore"]
+        path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        print("🔍 Env var GOOGLE_APPLICATION_CREDENTIALS =", path)
+
+        if not path:
+            raise EnvironmentError("GOOGLE_APPLICATION_CREDENTIALS not set")
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Credential file not found at: {path}")
+
+        if not os.access(path, os.R_OK):
+            raise PermissionError(f"Credential file not readable: {path}")
+
+        creds = service_account.Credentials.from_service_account_file(
+            path,
+            scopes=["https://www.googleapis.com/auth/datastore"],
         )
-        print("✅ Loaded default application credentials. Project:", creds.project_id)
+        print("✅ Credentials loaded successfully.")
         return AuthorizedSession(creds)
-    except Exception:
-        print("❌ ERROR: Could not initialize Google AuthorizedSession via defaults")
+
+    except Exception as e:
+        print("❌ AUTH INIT FAILED in _get_authorized_session()")
         traceback.print_exc()
         return None
 
 
-try:
-    print("🔧 Initializing rest session...")
-    rest_session = _get_authorized_session()
-    if not rest_session:
-        raise RuntimeError("Failed to initialize Firestore session via `_get_authorized_session()`")
-except Exception as e:
-    print("💥 Startup error in main.py line 43 💥")
-    traceback.print_exc()
+print("🔐 Attempting to get rest_session")
+rest_session = _get_authorized_session()
+if not rest_session:
+    print("❌ Could not initialize rest_session. Exiting.")
+    import sys
     sys.exit(1)
 
 
