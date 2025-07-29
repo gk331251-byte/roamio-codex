@@ -1,47 +1,75 @@
 print("🔥 booted")
-print("🔥 Starting backend.main.py")
+print("🔥 Starting backend.main")
+
+from fastapi import Query, Body, Request, Depends, APIRouter, HTTPException
+from typing import Any
+import asyncio
+import requests
+import json
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import os
+import traceback
+import requests
+import hashlib
+from datetime import datetime, timedelta
+import asyncio
+import certifi
+import google.auth
+from google.cloud import firestore_v1, storage
+import firebase_admin
+from firebase_admin import auth as fb_auth
+import uvicorn
+from fastapi import FastAPI
+from backend.routes import some_router  # or routes if running locally
+import openai
+import googlemaps
+from dotenv import load_dotenv
+from backend.lib.google_utils import get_authorized_session
+
+
+def _get_authorized_session():
+    """Return AuthorizedSession or None on failure."""
+    try:
+        session, _ = get_authorized_session()
+        return session
+    except Exception as e:
+        print("❌ Failed to initialize AuthorizedSession:", e)
+        traceback.print_exc()
+        return None
+
+
+def log_startup_debug():
+    print("🔥 DEBUG: Starting FastAPI app")
+    print("🔑 GOOGLE_MAPS_API_KEY set:", bool(os.environ.get("GOOGLE_MAPS_API_KEY")))
+    print("🔑 GOOGLE_APPLICATION_CREDENTIALS set:", bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")))
+    print("⚙️  PORT:", os.environ.get("PORT", "8080"))
 
 try:
-    from fastapi import Query, Body, Request, Depends, APIRouter, HTTPException
-    from typing import Any
-    import asyncio
-    import requests
-    import json
-    from fastapi.responses import JSONResponse
-    from fastapi.middleware.cors import CORSMiddleware
-    import os
-    import traceback
-    import requests
-    import hashlib
-    from datetime import datetime, timedelta
-    import asyncio
-    import certifi
-    import google.auth
-    from google.cloud import firestore_v1, storage
-    from google.oauth2 import service_account
-    import firebase_admin
-    from firebase_admin import auth as fb_auth
-    import uvicorn
-    import google.auth
-    from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
-    from fastapi import FastAPI
-    from backend.routes import some_router  # or routes if running locally
-    import openai
-    import googlemaps
+    log_startup_debug()
+    load_dotenv()
+    os.environ["SSL_CERT_FILE"] = certifi.where()
 
-    # Confirm env vars
-    print("🔑 GOOGLE_APPLICATION_CREDENTIALS:", os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
-    print("🔑 GOOGLE_MAPS_API_KEY:", os.environ.get("GOOGLE_MAPS_API_KEY"))
-    print("🔑 OPENAI_API_KEY:", os.environ.get("OPENAI_API_KEY"))
-    print("🔑 PORT:", os.environ.get("PORT"))
+    rest_session = _get_authorized_session()
+    if not rest_session:
+        print("⚠️  Firestore REST session not initialized")
 
-    creds = service_account.Credentials.from_service_account_info(
-    json.loads(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")),
-    scopes=["https://www.googleapis.com/auth/datastore"],
-)
-    rest_session = AuthorizedSession(creds)
+    gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if gmaps_key:
+        try:
+            gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
+            print("✅ Google Maps Client initialized")
+        except Exception as e:
+            print("❌ Google Maps init failed:", e)
+            gmaps = None
+    else:
+        print("❌ GOOGLE_MAPS_API_KEY not set")
+        gmaps = None
 
-    gmaps = googlemaps.Client(key=os.environ.get("GOOGLE_MAPS_API_KEY"))
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app()
+    print("✅ Firebase Admin initialized")
+
     openai.api_key = os.environ.get("OPENAI_API_KEY")
 
     app = FastAPI()
@@ -54,14 +82,10 @@ try:
         time.sleep(60)
 
 except Exception as e:
-    print("💥 Startup error:")
+    print("💥 FATAL STARTUP ERROR 💥")
     traceback.print_exc()
-    import time
-    time.sleep(60)  # prevent immediate crash
     raise e
 
-
-from dotenv import load_dotenv
 from backend.emotion_utils import generate_filtered_quest_payload
 from backend.stripe_utils import create_subscription_session, verify_webhook
 from backend.auth_utils import (
@@ -3708,3 +3732,7 @@ async def refresh_leaderboards():
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8080"))
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port)
