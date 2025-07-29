@@ -1,25 +1,25 @@
-from fastapi import Query, Body, Request, Depends, APIRouter, HTTPException
-from typing import Any
-import asyncio
-import requests
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-import os
-import traceback
-import requests
-import hashlib
-from datetime import datetime, timedelta
-import asyncio
-import certifi
-from google.cloud import firestore_v1, storage
-from google.oauth2 import service_account
-import firebase_admin
-from firebase_admin import auth as fb_auth
-import uvicorn
+print("🔥 booted")
 print("🔥 Starting backend.main.py")
 
-
 try:
+    from fastapi import Query, Body, Request, Depends, APIRouter, HTTPException
+    from typing import Any
+    import asyncio
+    import requests
+    from fastapi.responses import JSONResponse
+    from fastapi.middleware.cors import CORSMiddleware
+    import os
+    import traceback
+    import requests
+    import hashlib
+    from datetime import datetime, timedelta
+    import asyncio
+    import certifi
+    from google.cloud import firestore_v1, storage
+    from google.oauth2 import service_account
+    import firebase_admin
+    from firebase_admin import auth as fb_auth
+    import uvicorn
     import google.auth
     from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
     from fastapi import FastAPI
@@ -28,25 +28,31 @@ try:
     import googlemaps
 
     # Confirm env vars
+    print("🔑 GOOGLE_APPLICATION_CREDENTIALS:", os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
     print("🔑 GOOGLE_MAPS_API_KEY:", os.environ.get("GOOGLE_MAPS_API_KEY"))
     print("🔑 OPENAI_API_KEY:", os.environ.get("OPENAI_API_KEY"))
+    print("🔑 PORT:", os.environ.get("PORT"))
 
     creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
     rest_session = AuthorizedSession(creds)
 
-    gmaps = googlemaps.Client(key=os.environ["GOOGLE_MAPS_API_KEY"])
-    openai.api_key = os.environ["OPENAI_API_KEY"]
+    gmaps = googlemaps.Client(key=os.environ.get("GOOGLE_MAPS_API_KEY"))
+    openai.api_key = os.environ.get("OPENAI_API_KEY")
 
     app = FastAPI()
     app.include_router(some_router)
 
     print("✅ FastAPI app initialized")
+    if os.environ.get("DIAG_SLEEP") == "1":
+        print("⏳ Sleeping 60s for diagnostics...")
+        import time
+        time.sleep(60)
 
 except Exception as e:
     print("💥 Startup error:")
     traceback.print_exc()
     import time
-    time.sleep(30)  # prevent immediate crash
+    time.sleep(60)  # prevent immediate crash
     raise e
 
 
