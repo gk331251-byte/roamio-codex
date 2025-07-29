@@ -3,15 +3,9 @@ import asyncio
 import hashlib
 from typing import List, Optional
 from datetime import datetime
-from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession
+from backend.lib.google_utils import get_authorized_session
 
-creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-    scopes=["https://www.googleapis.com/auth/datastore"],
-)
-rest_session = AuthorizedSession(creds)
-PROJECT_ID = creds.project_id
+rest_session, PROJECT_ID = get_authorized_session()
 
 
 def _to_value(val):

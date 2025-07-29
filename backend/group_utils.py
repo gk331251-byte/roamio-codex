@@ -4,17 +4,10 @@ from datetime import datetime
 from typing import Tuple
 import asyncio
 
-from google.auth.transport.requests import AuthorizedSession
-from google.oauth2 import service_account
-
+from backend.lib.google_utils import get_authorized_session
 from backend.firestore_utils import _encode_fields, _decode_document
 
-creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-    scopes=["https://www.googleapis.com/auth/datastore"],
-)
-rest_session = AuthorizedSession(creds)
-PROJECT_ID = creds.project_id
+rest_session, PROJECT_ID = get_authorized_session()
 
 async def create_group_document(user_id: str, quest_id: str, display_name: str) -> Tuple[str, dict]:
     """Helper to create group quest and return groupId and document body."""
