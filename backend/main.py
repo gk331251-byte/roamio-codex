@@ -6,6 +6,7 @@ try:
     from typing import Any
     import asyncio
     import requests
+    import json
     from fastapi.responses import JSONResponse
     from fastapi.middleware.cors import CORSMiddleware
     import os
@@ -34,7 +35,10 @@ try:
     print("🔑 OPENAI_API_KEY:", os.environ.get("OPENAI_API_KEY"))
     print("🔑 PORT:", os.environ.get("PORT"))
 
-    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+    creds = service_account.Credentials.from_service_account_info(
+    json.loads(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")),
+    scopes=["https://www.googleapis.com/auth/datastore"],
+)
     rest_session = AuthorizedSession(creds)
 
     gmaps = googlemaps.Client(key=os.environ.get("GOOGLE_MAPS_API_KEY"))
