@@ -37,11 +37,11 @@ def _get_authorized_session():
     import traceback
 
     try:
-        path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-        print("🔍 Env var GOOGLE_APPLICATION_CREDENTIALS =", path)
-
-        if not path:
-            raise EnvironmentError("GOOGLE_APPLICATION_CREDENTIALS not set")
+        path = os.environ.get(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "/secrets/firestore-key.json",
+        )
+        print("🔐 GOOGLE_APPLICATION_CREDENTIALS:", path)
 
         if not os.path.exists(path):
             raise FileNotFoundError(f"Credential file not found at: {path}")
@@ -73,7 +73,8 @@ if not rest_session:
 def log_startup_debug():
     print("🔥 DEBUG: Starting FastAPI app")
     print("🔑 GOOGLE_MAPS_API_KEY set:", bool(os.environ.get("GOOGLE_MAPS_API_KEY")))
-    print("🔑 GOOGLE_APPLICATION_CREDENTIALS set:", bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")))
+    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/firestore-key.json")
+    print("🔑 GOOGLE_APPLICATION_CREDENTIALS path:", cred_path)
     print("⚙️  PORT:", os.environ.get("PORT", "8080"))
 
 try:
