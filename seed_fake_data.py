@@ -4,8 +4,7 @@ import random
 from datetime import datetime
 from uuid import uuid4
 
-from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession
+from backend.lib.google_utils import get_authorized_session
 
 try:
     from faker import Faker
@@ -15,13 +14,8 @@ except Exception:
 
 from backend.firestore_utils import _encode_fields
 
-# Initialize REST session using service account
-creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-    scopes=["https://www.googleapis.com/auth/datastore"],
-)
-rest_session = AuthorizedSession(creds)
-PROJECT_ID = creds.project_id
+# Initialize REST session using service account or default credentials
+rest_session, PROJECT_ID = get_authorized_session()
 BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
 
 NAMES = [
