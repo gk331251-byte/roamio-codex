@@ -1,0 +1,7 @@
+# Ignore local virtual environments and caches
+**/__pycache__/
+backend/.venv/
+node_modules/
+*.pyc
+.DS_Store
+.env
