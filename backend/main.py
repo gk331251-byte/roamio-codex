@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 import asyncio
 import certifi
 import google.auth
+from google.oauth2 import service_account
+from google.auth import default as google_auth_default
 from google.cloud import firestore_v1, storage
 import firebase_admin
 from firebase_admin import auth as fb_auth
@@ -39,14 +41,17 @@ def _get_authorized_session():
     try:
         cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         if cred_path:
-            print("🔐 GOOGLE_APPLICATION_CREDENTIALS:", cred_path)
+            creds = service_account.Credentials.from_service_account_file(
+                cred_path,
+                scopes=["https://www.googleapis.com/auth/datastore"],
+            )
+            print("✅ Loaded service account from local file.")
         else:
             print("🔐 GOOGLE_APPLICATION_CREDENTIALS not set; using metadata")
-
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/datastore"]
-        )
-        print("✅ Application default credentials loaded")
+            creds, _ = google_auth_default(
+                scopes=["https://www.googleapis.com/auth/datastore"]
+            )
+            print("✅ Loaded default application credentials from metadata.")
         return AuthorizedSession(creds)
 
     except Exception:
@@ -304,7 +309,7 @@ if rest_session is None:
     rest_session = _get_authorized_session()
     if rest_session:
         try:
-            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+            creds, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/datastore"])
             print("✅ Firestore REST session created")
         except Exception as cred_err:
             print("❌ Failed to initialize Firestore defaults:", cred_err)
@@ -315,7 +320,7 @@ if rest_session is None:
         creds = None
 else:
     try:
-        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+        creds, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/datastore"])
     except Exception as cred_err:
         print("❌ Failed to load default credentials for Firestore:", cred_err)
         traceback.print_exc()
