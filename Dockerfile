@@ -9,10 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source
 COPY backend ./backend
 
-# Optionally copy service account key if present
-COPY backend/firestore-key.json ./backend/firestore-key.json
-
 # Cloud Run expects the app to listen on port 8080
 ENV PORT=8080
+ENV GOOGLE_APPLICATION_CREDENTIALS=/secrets/firestore-key.json
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080"]
