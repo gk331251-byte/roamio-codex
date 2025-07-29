@@ -16,9 +16,6 @@ import hashlib
 from datetime import datetime, timedelta
 import asyncio
 import certifi
-import google.auth
-from google.oauth2 import service_account
-from google.auth import default as google_auth_default
 from google.cloud import firestore_v1, storage
 import firebase_admin
 from firebase_admin import auth as fb_auth
@@ -28,59 +25,33 @@ from backend.routes import some_router  # or routes if running locally
 import openai
 import googlemaps
 from dotenv import load_dotenv
+from backend.auth_utils import _get_authorized_session
 
 
 app = FastAPI()
-
-
-def _get_authorized_session():
-    """Create an AuthorizedSession using default application credentials."""
-    from google.auth.transport.requests import AuthorizedSession
-    import traceback
-
-    try:
-        cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-        if cred_path:
-            creds = service_account.Credentials.from_service_account_file(
-                cred_path,
-                scopes=["https://www.googleapis.com/auth/datastore"],
-            )
-            print("✅ Loaded service account from local file.")
-        else:
-            print("🔐 GOOGLE_APPLICATION_CREDENTIALS not set; using metadata")
-            creds, _ = google_auth_default(
-                scopes=["https://www.googleapis.com/auth/datastore"]
-            )
-            print("✅ Loaded default application credentials from metadata.")
-        return AuthorizedSession(creds)
-
-    except Exception:
-        print("❌ AUTH INIT FAILED in _get_authorized_session()")
-        traceback.print_exc()
-        return None
 
 
 print("🔐 Attempting to get rest_session")
 rest_session = _get_authorized_session()
 if not rest_session:
     print("❌ Could not initialize rest_session. Exiting.")
-    import sys
     sys.exit(1)
 
 
 def log_startup_debug():
     print("🔥 DEBUG: Starting FastAPI app")
     print("🔑 GOOGLE_MAPS_API_KEY set:", bool(os.environ.get("GOOGLE_MAPS_API_KEY")))
-    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/firestore-key.json")
-    print("🔑 GOOGLE_APPLICATION_CREDENTIALS path:", cred_path)
+    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    print(
+        "🔑 GOOGLE_APPLICATION_CREDENTIALS path:", cred_path or "(using Secret Manager)"
+    )
     print("⚙️  PORT:", os.environ.get("PORT", "8080"))
+
 
 try:
     log_startup_debug()
     load_dotenv()
     os.environ["SSL_CERT_FILE"] = certifi.where()
-
-
 
     gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if gmaps_key:
@@ -106,6 +77,7 @@ try:
     if os.environ.get("DIAG_SLEEP") == "1":
         print("⏳ Sleeping 60s for diagnostics...")
         import time
+
         time.sleep(60)
 
 except Exception as e:
@@ -129,7 +101,6 @@ from backend.firestore_utils import (
     query_custom_quests_by_creator,
 )
 from backend.group_utils import create_group_document, add_user_to_group
-
 
 
 #
@@ -227,6 +198,7 @@ def get_level_from_xp(xp: int) -> int:
         xp_val = 0
     return xp_val // 1000
 
+
 def parse_ts(ts: str) -> datetime | None:
     """Parse ISO timestamp to datetime (UTC)."""
     if not ts:
@@ -235,6 +207,7 @@ def parse_ts(ts: str) -> datetime | None:
         return datetime.fromisoformat(ts.replace("Z", ""))
     except Exception:
         return None
+
 
 def calculate_age(dob_str: str) -> int:
     """Return age in years from YYYY-MM-DD string."""
@@ -274,6 +247,7 @@ def compute_badge_unlocks(stats: dict, level: int, existing: list) -> list:
             new.append(bid)
     return new
 
+
 # === Load .env variables (if running locally) ===
 load_dotenv()
 
@@ -290,9 +264,9 @@ gmaps = googlemaps.Client(key=os.environ["GOOGLE_MAPS_API_KEY"])
 try:
     gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
 except Exception as e:
-    print("Google Maps disabled:", e);
+    print("Google Maps disabled:", e)
     gmaps = None
-openai_key = os.getenv("OPENAI_API_KEY");
+openai_key = os.getenv("OPENAI_API_KEY")
 if openai_key and openai_key.startswith("sk-"):
     openai.api_key = openai_key
 else:
@@ -307,24 +281,8 @@ db = firestore_v1.Client(
 # Session for REST-based Firestore calls
 if rest_session is None:
     rest_session = _get_authorized_session()
-    if rest_session:
-        try:
-            creds, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/datastore"])
-            print("✅ Firestore REST session created")
-        except Exception as cred_err:
-            print("❌ Failed to initialize Firestore defaults:", cred_err)
-            traceback.print_exc()
-            creds = None
-            rest_session = None
-    else:
-        creds = None
-else:
-    try:
-        creds, _ = google_auth_default(scopes=["https://www.googleapis.com/auth/datastore"])
-    except Exception as cred_err:
-        print("❌ Failed to load default credentials for Firestore:", cred_err)
-        traceback.print_exc()
-        creds = None
+
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 
 # Initialize Firebase Admin for user lookups
 if not firebase_admin._apps:
@@ -336,20 +294,20 @@ def generate_hash_key(*parts: str) -> str:
     key_str = "_".join(p.strip().lower() for p in parts if p)
     return hashlib.sha256(key_str.encode()).hexdigest()
 
+
 def get_cached_quest(hash_key):
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
     resp = rest_session.get(url)
     if resp.status_code == 200:
         return _decode_document(resp.json())
     return None
 
+
 def save_quest_to_firestore(hash_key, quest_obj):
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
-    body = {
-        "fields": _encode_fields(quest_obj)
-    }
+    body = {"fields": _encode_fields(quest_obj)}
     response = rest_session.patch(url, json=body)
     if response.status_code != 200:
         print("Firestore REST Error:", response.text)
@@ -358,7 +316,7 @@ def save_quest_to_firestore(hash_key, quest_obj):
 
 def get_cached_place(place_id: str) -> dict | None:
     """Retrieve a cached place with tags."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
     resp = rest_session.get(url)
     if resp.status_code == 200:
@@ -367,7 +325,7 @@ def get_cached_place(place_id: str) -> dict | None:
 
 
 def save_place_to_cache(place_id: str, data: dict):
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
     body = {"fields": _encode_fields(data)}
     resp = rest_session.patch(url, json=body)
@@ -377,7 +335,7 @@ def save_place_to_cache(place_id: str, data: dict):
 
 
 def get_user_preferred_tags(user_id: str) -> list[str]:
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = rest_session.get(url)
     if resp.status_code == 200:
@@ -429,16 +387,29 @@ def is_chain(name: str) -> bool:
 
 # === Narrative template map for tag-based generation ===
 TEMPLATE_MAP = {
-    ("weird", "occult"): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
-    ("romantic", "bookstore", "quiet"): "Take your time drifting through this soft and charming city trail of [places] in [city].",
-    ("cheap eats", "bar", "open-late"): "Feast through the night with this budget-friendly adventure across [places] in [city].",
+    (
+        "weird",
+        "occult",
+    ): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
+    (
+        "romantic",
+        "bookstore",
+        "quiet",
+    ): "Take your time drifting through this soft and charming city trail of [places] in [city].",
+    (
+        "cheap eats",
+        "bar",
+        "open-late",
+    ): "Feast through the night with this budget-friendly adventure across [places] in [city].",
 }
+
 
 def choose_template(tags: list[str]) -> str | None:
     for key, tmpl in TEMPLATE_MAP.items():
         if all(t in tags for t in key):
             return tmpl
     return None
+
 
 def fill_template(template: str, city: str, mood: str, places: list[dict]) -> str:
     text = template.replace("[city]", city).replace("[mood]", mood)
@@ -447,11 +418,10 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
         text = text.replace("[firstStop]", places[0]["name"])
         text = text.replace("[lastStop]", places[-1]["name"])
     return text
-
 
 
 def get_user_preferred_tags(user_id: str) -> list[str]:
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = rest_session.get(url)
     if resp.status_code == 200:
@@ -500,18 +470,32 @@ def is_chain(name: str) -> bool:
     lower = name.lower()
     return any(k in lower for k in CHAIN_KEYWORDS)
 
+
 # === Narrative template map for tag-based generation ===
 TEMPLATE_MAP = {
-    ("weird", "occult"): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
-    ("romantic", "bookstore", "quiet"): "Take your time drifting through this soft and charming city trail of [places] in [city].",
-    ("cheap eats", "bar", "open-late"): "Feast through the night with this budget-friendly adventure across [places] in [city].",
+    (
+        "weird",
+        "occult",
+    ): "Begin your journey into the unknown with these strange and magical stops in [city]: [places].",
+    (
+        "romantic",
+        "bookstore",
+        "quiet",
+    ): "Take your time drifting through this soft and charming city trail of [places] in [city].",
+    (
+        "cheap eats",
+        "bar",
+        "open-late",
+    ): "Feast through the night with this budget-friendly adventure across [places] in [city].",
 }
+
 
 def choose_template(tags: list[str]) -> str | None:
     for key, tmpl in TEMPLATE_MAP.items():
         if all(t in tags for t in key):
             return tmpl
     return None
+
 
 def fill_template(template: str, city: str, mood: str, places: list[dict]) -> str:
     text = template.replace("[city]", city).replace("[mood]", mood)
@@ -520,13 +504,14 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
         text = text.replace("[firstStop]", places[0]["name"])
         text = text.replace("[lastStop]", places[-1]["name"])
     return text
+
 
 # Set up Secret Manager
 
 # Set up Firestore
 
 
-# Load Google Maps API 
+# Load Google Maps API
 
 
 # Manual fallbacks for vague regions
@@ -552,10 +537,10 @@ app.add_middleware(
 )
 
 
-
 @app.get("/")
 def read_root():
     return {"message": "Real-World Quest Generator Backend is working!"}
+
 
 @app.post("/generate-quest")
 async def generate_quest(
@@ -584,7 +569,7 @@ async def generate_quest(
         user_is_premium = await check_premium(user_id)
         if not user_is_premium:
             # fetch level from Firestore
-            project_id = creds.project_id
+            project_id = PROJECT_ID
             url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
             resp = await asyncio.to_thread(rest_session.get, url)
             if resp.status_code == 200:
@@ -597,12 +582,19 @@ async def generate_quest(
                     user_age = int(user_doc.get("age", 0))
                 prefers_clean = bool(user_doc.get("prefersCleanMode", False))
             if usage_count >= 3:
-                return JSONResponse(status_code=403, content={"error": "Daily quest limit reached"})
+                return JSONResponse(
+                    status_code=403, content={"error": "Daily quest limit reached"}
+                )
             # difficulty gating
             req_diff = difficulty.title()
-            required_level = 1 if req_diff == "Easy" else 3 if req_diff == "Medium" else 6
+            required_level = (
+                1 if req_diff == "Easy" else 3 if req_diff == "Medium" else 6
+            )
             if user_level < required_level:
-                raise HTTPException(status_code=403, detail="You haven't unlocked {} quests yet.".format(req_diff))
+                raise HTTPException(
+                    status_code=403,
+                    detail="You haven't unlocked {} quests yet.".format(req_diff),
+                )
 
     try:
         if lat is not None and lng is not None:
@@ -613,7 +605,6 @@ async def generate_quest(
     except Exception as e:
         print(f"Geocoding error: {e}")
         return {"error": "Failed to locate city center."}
-
 
     attempts = 0
     fallback_city = None
@@ -645,10 +636,15 @@ async def generate_quest(
                     except Exception:
                         details = None
                 tags = (
-                    cached_place.get("tags") if cached_place else compute_place_tags(place, details)
+                    cached_place.get("tags")
+                    if cached_place
+                    else compute_place_tags(place, details)
                 )
                 is_restricted = (
-                    "bar" in tags or "night-club" in tags or "liquor-store" in tags or typ in ["bar", "night_club"]
+                    "bar" in tags
+                    or "night-club" in tags
+                    or "liquor-store" in tags
+                    or typ in ["bar", "night_club"]
                 )
                 if (user_age and user_age < 21) or prefers_clean:
                     if is_restricted:
@@ -663,16 +659,18 @@ async def generate_quest(
                     continue
                 loc = place["geometry"]["location"]
                 typ = place.get("types", ["Unknown"])[0]
-                candidates.append({
-                    "name": name,
-                    "type": typ,
-                    "lat": float(loc["lat"]),
-                    "lng": float(loc["lng"]),
-                    "tags": tags,
-                    "isAgeRestricted": is_restricted,
-                    "score": overlap,
-                    "rating": place.get("rating", 0),
-                })
+                candidates.append(
+                    {
+                        "name": name,
+                        "type": typ,
+                        "lat": float(loc["lat"]),
+                        "lng": float(loc["lng"]),
+                        "tags": tags,
+                        "isAgeRestricted": is_restricted,
+                        "score": overlap,
+                        "rating": place.get("rating", 0),
+                    }
+                )
             except Exception as e:
                 print("Skipping place", e)
         candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
@@ -710,7 +708,9 @@ async def generate_quest(
     hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
     cached = get_cached_quest(hash_key)
     if cached:
-        if ((user_age and user_age < 21) or prefers_clean) and "age21+" in cached.get("tags", []):
+        if ((user_age and user_age < 21) or prefers_clean) and "age21+" in cached.get(
+            "tags", []
+        ):
             cached = None
     if cached:
         print("Using cached quest")
@@ -747,13 +747,26 @@ async def generate_quest(
     if lat is not None and lng is not None:
         ordered_waypoints = [selected[i] for i in waypoint_order]
         ordered = (
-            [{"name": "Your Location", "type": "start", "lat": float(lat), "lng": float(lng), "tags": [], "isAgeRestricted": False}]
+            [
+                {
+                    "name": "Your Location",
+                    "type": "start",
+                    "lat": float(lat),
+                    "lng": float(lng),
+                    "tags": [],
+                    "isAgeRestricted": False,
+                }
+            ]
             + ordered_waypoints
             + [selected[-1]]
         )
     else:
-        ordered = [selected[0]] + [selected[i+1] for i in waypoint_order] + [selected[-1]]
-    place_names = ", ".join([sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"])
+        ordered = (
+            [selected[0]] + [selected[i + 1] for i in waypoint_order] + [selected[-1]]
+        )
+    place_names = ", ".join(
+        [sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"]
+    )
 
     if openai.api_key:
         prompt = (
@@ -823,9 +836,6 @@ async def generate_quest(
     return result
 
 
-
-
-
 def _to_value(val):
     if val is None:
         return {"nullValue": None}
@@ -843,8 +853,10 @@ def _to_value(val):
         return {"mapValue": {"fields": {k: _to_value(v) for k, v in val.items()}}}
     return {"stringValue": str(val)}
 
+
 def _encode_fields(data: dict):
     return {k: _to_value(v) for k, v in data.items()}
+
 
 def _from_value(val):
     if "nullValue" in val:
@@ -858,9 +870,7 @@ def _from_value(val):
     if "stringValue" in val:
         return val["stringValue"]
     if "arrayValue" in val:
-        return [
-            _from_value(v) for v in val.get("arrayValue", {}).get("values", [])
-        ]
+        return [_from_value(v) for v in val.get("arrayValue", {}).get("values", [])]
     if "mapValue" in val:
         return {
             k: _from_value(v)
@@ -868,13 +878,14 @@ def _from_value(val):
         }
     return val
 
+
 def _decode_document(doc: dict) -> dict:
     return {k: _from_value(v) for k, v in doc.get("fields", {}).items()}
 
 
 async def check_premium(user_id: str) -> bool:
     """Return True if the user has premium status."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
@@ -883,24 +894,28 @@ async def check_premium(user_id: str) -> bool:
     return False
 
 
-
-
 async def log_admin_event(event: str, payload: dict):
     """Write a simple event document to admin_logs."""
     doc_id = hashlib.sha1(f"{event}-{datetime.utcnow()}".encode()).hexdigest()[:12]
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/admin_logs/{doc_id}"
-    body = {"fields": _encode_fields({"event": event, "payload": payload, "created": datetime.utcnow().isoformat()})}
+    body = {
+        "fields": _encode_fields(
+            {
+                "event": event,
+                "payload": payload,
+                "created": datetime.utcnow().isoformat(),
+            }
+        )
+    }
     await asyncio.to_thread(rest_session.patch, url, json=body)
 
 
 async def get_daily_usage(user_id: str) -> int:
     """Retrieve today's quest generation count for the user."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
         doc = _decode_document(resp.json())
@@ -911,10 +926,8 @@ async def get_daily_usage(user_id: str) -> int:
 async def increment_daily_usage(user_id: str) -> int:
     """Increment and return today's quest generation count."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
     resp = await asyncio.to_thread(rest_session.get, url)
     count = 0
     if resp.status_code == 200:
@@ -968,6 +981,7 @@ async def generate_demo_quest():
         }
     }
 
+
 @app.post("/quest-complete")
 async def complete_quest(payload: dict = Body(...)):
     """Finalize a quest and award XP."""
@@ -977,12 +991,10 @@ async def complete_quest(payload: dict = Body(...)):
         return {"error": "userId and questId required"}
 
     timestamp = datetime.utcnow().isoformat()
-    project_id = creds.project_id
+    project_id = PROJECT_ID
 
     # Path to quest document under the user's quests collection
-    quest_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
-    )
+    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, quest_url)
     existing_doc = _decode_document(resp.json()) if resp.status_code == 200 else {}
 
@@ -998,7 +1010,9 @@ async def complete_quest(payload: dict = Body(...)):
         "locationList": payload.get("locationList", []),
         "imagePrompt": payload.get("imagePrompt"),
         "postcardUrl": existing_doc.get("postcardUrl"),
-        "visitedIndices": payload.get("visitedIndices", existing_doc.get("visitedIndices", [])),
+        "visitedIndices": payload.get(
+            "visitedIndices", existing_doc.get("visitedIndices", [])
+        ),
         "completed": True,
         "completedAt": existing_doc.get("completedAt", timestamp),
         "isDemo": payload.get("isDemo", False),
@@ -1013,9 +1027,7 @@ async def complete_quest(payload: dict = Body(...)):
     new_badges = []
 
     # Fetch current user doc
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    )
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, user_url)
     user_data = _decode_document(resp.json()) if resp.status_code == 200 else {}
 
@@ -1050,14 +1062,20 @@ async def complete_quest(payload: dict = Body(...)):
     if difficulty == "Hard" and "hardcore" not in badge_set:
         badge_set.add("hardcore")
         new_badges.append("hardcore")
-    if payload.get("groupQuest") and len(payload.get("groupQuest", {}).get("members", [])) >= 3 and "squad-player" not in badge_set:
+    if (
+        payload.get("groupQuest")
+        and len(payload.get("groupQuest", {}).get("members", [])) >= 3
+        and "squad-player" not in badge_set
+    ):
         badge_set.add("squad-player")
         new_badges.append("squad-player")
     if "explorer-5" not in badge_set:
-        qurl = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
+        qurl = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
+        qresp = await asyncio.to_thread(
+            rest_session.post,
+            qurl,
+            json={"structuredQuery": {"from": [{"collectionId": "quests"}]}},
         )
-        qresp = await asyncio.to_thread(rest_session.post, qurl, json={"structuredQuery": {"from": [{"collectionId": "quests"}]}})
         if qresp.status_code == 200:
             cities = set()
             for item in qresp.json():
@@ -1074,10 +1092,12 @@ async def complete_quest(payload: dict = Body(...)):
                 badge_set.add("explorer-5")
                 new_badges.append("explorer-5")
 
-    quest_doc.update({
-        "xpEarned": xp_earned,
-        "xpApplied": True,
-    })
+    quest_doc.update(
+        {
+            "xpEarned": xp_earned,
+            "xpApplied": True,
+        }
+    )
     quest_body = {"fields": _encode_fields(quest_doc)}
     await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
 
@@ -1093,17 +1113,27 @@ async def complete_quest(payload: dict = Body(...)):
     }
     if payload.get("city") and not user_data.get("city"):
         user_update["city"] = payload.get("city")
-    await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(user_update)})
+    await asyncio.to_thread(
+        rest_session.patch, user_url, json={"fields": _encode_fields(user_update)}
+    )
 
     for badge_id in new_badges:
-        b_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges/{badge_id}"
-        )
-        body = {"fields": _encode_fields({"earnedAt": timestamp, "type": BADGE_CATALOG.get(badge_id, {}).get("type", "general")})}
+        b_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges/{badge_id}"
+        body = {
+            "fields": _encode_fields(
+                {
+                    "earnedAt": timestamp,
+                    "type": BADGE_CATALOG.get(badge_id, {}).get("type", "general"),
+                }
+            )
+        }
         await asyncio.to_thread(rest_session.patch, b_url, json=body)
 
     postcard_url = None
-    prompt_raw = payload.get("imagePrompt") or f"A vintage postcard from {payload.get('city','somewhere')}"
+    prompt_raw = (
+        payload.get("imagePrompt")
+        or f"A vintage postcard from {payload.get('city','somewhere')}"
+    )
     prompt = sanitize_input(prompt_raw)
     if openai.api_key:
         try:
@@ -1111,7 +1141,9 @@ async def complete_quest(payload: dict = Body(...)):
             raw_url = dalle["data"][0]["url"]
             image_data = requests.get(raw_url).content
             filename = f"postcards/{user_id}_{quest_id}.png"
-            bucket_name = os.getenv("VITE_FIREBASE_STORAGE_BUCKET") or "your-bucket-name"
+            bucket_name = (
+                os.getenv("VITE_FIREBASE_STORAGE_BUCKET") or "your-bucket-name"
+            )
             bucket = storage.Client().bucket(bucket_name)
             blob = bucket.blob(filename)
             blob.upload_from_string(image_data, content_type="image/png")
@@ -1140,9 +1172,7 @@ async def complete_quest(payload: dict = Body(...)):
             "sharedFromQuestId": quest_id,
             "isFlagged": False,
         }
-        feed_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed/{feed_id}"
-        )
+        feed_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed/{feed_id}"
         feed_body = {"fields": _encode_fields(feed_doc)}
         fr = await asyncio.to_thread(rest_session.patch, feed_url, json=feed_body)
         if fr.status_code != 200:
@@ -1156,7 +1186,7 @@ async def complete_quest(payload: dict = Body(...)):
         "newTotal": total_xp,
         "level": level,
         "badgesUnlocked": new_badges,
-        "nextLevelXP": LEVEL_THRESHOLDS[min(level, len(LEVEL_THRESHOLDS)-1)],
+        "nextLevelXP": LEVEL_THRESHOLDS[min(level, len(LEVEL_THRESHOLDS) - 1)],
         "imageUrl": postcard_url,
         "streakCount": streak,
     }
@@ -1173,10 +1203,10 @@ def get_places(city: str = Query(...)):
     places_result = gmaps.places_nearby(
         location=(location["lat"], location["lng"]),
         radius=5000,
-        type="tourist_attraction"
+        type="tourist_attraction",
     )
 
-    place_names = [place['name'] for place in places_result.get('results', [])]
+    place_names = [place["name"] for place in places_result.get("results", [])]
     return {"city": city, "places": place_names}
 
 
@@ -1196,11 +1226,7 @@ async def generate_postcard(request: Request):
 
     try:
         # 🧠 Generate image using OpenAI
-        dalle_response = openai.Image.create(
-            prompt=prompt,
-            n=1,
-            size="512x512"
-        )
+        dalle_response = openai.Image.create(prompt=prompt, n=1, size="512x512")
         image_url = dalle_response["data"][0]["url"]
 
         # 💾 Download and re-upload to Firebase Storage
@@ -1216,12 +1242,19 @@ async def generate_postcard(request: Request):
         public_url = blob.public_url
 
         # 📝 Update Firestore document
-        quest_ref = db.collection("user_quests").document(user_id).collection("quests").document(quest_id)
-        quest_ref.update({
-            "imageUrl": public_url,
-            "completed": True,
-            "completedAt": firestore.SERVER_TIMESTAMP
-        })
+        quest_ref = (
+            db.collection("user_quests")
+            .document(user_id)
+            .collection("quests")
+            .document(quest_id)
+        )
+        quest_ref.update(
+            {
+                "imageUrl": public_url,
+                "completed": True,
+                "completedAt": firestore.SERVER_TIMESTAMP,
+            }
+        )
 
         return {"status": "ok", "imageUrl": public_url}
 
@@ -1229,12 +1262,11 @@ async def generate_postcard(request: Request):
         print("🔥 Error generating postcard:", e)
         return {"status": "error", "message": str(e)}
 
+
 @app.get("/test-write")
 def test_write():
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
     body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
     resp = rest_session.patch(url, json=body)
     if resp.status_code == 200:
@@ -1242,13 +1274,12 @@ def test_write():
     print("Firestore REST error", resp.text)
     resp.raise_for_status()
 
+
 @app.get("/get-user-quests")
 async def get_user_quests(userId: str = Query(...)):
     """Return quests for a user sorted by completedAt desc."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{userId}:runQuery"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{userId}:runQuery"
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "quests"}],
@@ -1281,10 +1312,8 @@ async def get_user_quests(userId: str = Query(...)):
 @app.get("/get-quest/{quest_id}")
 async def get_quest(quest_id: str):
     """Fetch a quest document via Firestore REST."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
@@ -1302,10 +1331,8 @@ async def track_visit(payload: dict = Body(...)):
     if user_id is None or quest_id is None or place_index is None:
         return {"error": "userId, questId and placeIndex required"}
 
-    project_id = creds.project_id
-    quest_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
 
     # Fetch existing quest document
     resp = await asyncio.to_thread(rest_session.get, quest_url)
@@ -1328,9 +1355,7 @@ async def track_visit(payload: dict = Body(...)):
         resp.raise_for_status()
 
     # ----- XP & Badges -----
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    )
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, user_url)
     user_data = {}
     if resp.status_code == 200:
@@ -1361,13 +1386,15 @@ async def track_visit(payload: dict = Body(...)):
             badge_list.append(b)
 
     user_body = {
-        "fields": _encode_fields({
-            "totalXP": total_xp,
-            "level": level,
-            "stats": stats,
-            "badges": badges,
-            "badgesUnlocked": badge_list,
-        })
+        "fields": _encode_fields(
+            {
+                "totalXP": total_xp,
+                "level": level,
+                "stats": stats,
+                "badges": badges,
+                "badgesUnlocked": badge_list,
+            }
+        )
     }
     resp = await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
     if resp.status_code != 200:
@@ -1398,16 +1425,12 @@ async def upload_postcard(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     await check_not_banned(uid)
 
-    project_id = creds.project_id
-    check_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    check_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, check_url)
     if resp.status_code != 200:
         raise HTTPException(status_code=404, detail="Quest not found")
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-    )
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
     body = {"fields": _encode_fields({"postcardUrl": image_url})}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
@@ -1426,7 +1449,9 @@ async def reroll_quest(payload: dict = Body(...)):
     # Reuse generate_quest logic
     lat = payload.get("lat")
     lng = payload.get("lng")
-    return await generate_quest(city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng)
+    return await generate_quest(
+        city=city, moods=moods, time_limit=time_limit, token=token, lat=lat, lng=lng
+    )
 
 
 @app.post("/get-directions")
@@ -1462,7 +1487,6 @@ async def get_directions(payload: dict = Body(...)):
         return {"error": str(e)}
 
 
-
 @app.post("/create-group-quest")
 async def create_group_quest(
     payload: dict = Body(...),
@@ -1477,10 +1501,8 @@ async def create_group_quest(
     await check_not_banned(uid)
 
     # ----- Ownership check -----
-    project_id = creds.project_id
-    cust_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    cust_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, cust_url)
     allowed = False
     if resp.status_code == 200:
@@ -1488,16 +1510,14 @@ async def create_group_quest(
         if data.get("creatorId") == uid or data.get("createdBy") == uid:
             allowed = True
     if not allowed:
-        user_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
-        )
+        user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
         uresp = await asyncio.to_thread(rest_session.get, user_url)
         if uresp.status_code == 200:
             allowed = True
     if not allowed:
         raise HTTPException(status_code=403, detail="You do not own this resource.")
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     active_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/"
         f"databases/(default)/documents/user_active_quest/{user_id}"
@@ -1537,14 +1557,14 @@ async def join_group(
         return {"error": "userId and groupId required"}
     await check_not_banned(uid)
 
-    project_id = creds.project_id
-    active_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
-    )
+    project_id = PROJECT_ID
+    active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_resp = await asyncio.to_thread(rest_session.get, active_url)
     if active_resp.status_code == 200:
         active_fields = _decode_document(active_resp.json())
-        if active_fields.get("status") != "completed" and active_fields.get("groupId") not in (None, group_id):
+        if active_fields.get("status") != "completed" and active_fields.get(
+            "groupId"
+        ) not in (None, group_id):
             return {"error": "active quest already"}
 
     try:
@@ -1580,7 +1600,7 @@ async def track_stop_visit(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     await check_not_banned(uid)
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     group_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/"
         f"databases/(default)/documents/group_quests/{group_id}"
@@ -1610,19 +1630,19 @@ async def track_stop_visit(
     active_fields = {}
     if active_resp.status_code == 200:
         active_fields = _decode_document(active_resp.json())
-    active_fields.update({
-        "groupId": group_id,
-        "questId": fields.get("questId"),
-        "status": "active",
-        "visitedStops": user_progress,
-    })
+    active_fields.update(
+        {
+            "groupId": group_id,
+            "questId": fields.get("questId"),
+            "status": "active",
+            "visitedStops": user_progress,
+        }
+    )
     active_body = {"fields": _encode_fields(active_fields)}
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     # ----- XP & Badges -----
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    )
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, user_url)
     user_data = {}
     if resp.status_code == 200:
@@ -1651,10 +1671,25 @@ async def track_stop_visit(
         if b not in badge_list:
             badge_list.append(b)
 
-    user_body = {"fields": _encode_fields({"totalXP": total_xp, "level": level, "stats": stats, "badges": badges, "badgesUnlocked": badge_list})}
+    user_body = {
+        "fields": _encode_fields(
+            {
+                "totalXP": total_xp,
+                "level": level,
+                "stats": stats,
+                "badges": badges,
+                "badgesUnlocked": badge_list,
+            }
+        )
+    }
     await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
 
-    return {"visitedStops": user_progress, "totalXP": total_xp, "level": level, "badges": badges}
+    return {
+        "visitedStops": user_progress,
+        "totalXP": total_xp,
+        "level": level,
+        "badges": badges,
+    }
 
 
 @app.post("/complete-group-quest")
@@ -1671,7 +1706,7 @@ async def complete_group_quest(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     await check_not_banned(uid)
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     group_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/"
         f"databases/(default)/documents/group_quests/{group_id}"
@@ -1703,7 +1738,7 @@ async def complete_group_quest(
 @app.get("/active-quest/{user_id}")
 async def get_active_quest(user_id: str):
     """Return the current active quest doc for the user."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -1739,7 +1774,7 @@ async def get_active_quest(user_id: str):
 @app.get("/user-xp/{user_id}")
 async def get_user_xp(user_id: str):
     """Return XP and level for the given user."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -1771,10 +1806,8 @@ async def get_user_xp(user_id: str):
 @app.get("/user-badges/{user_id}")
 async def get_user_badges(user_id: str):
     """Return list of badges with metadata for the user."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/badges"
     resp = await asyncio.to_thread(rest_session.get, url)
     badges = []
     if resp.status_code == 200:
@@ -1794,7 +1827,7 @@ async def get_leaderboard(
     timeframe: str = Query("all"),
 ):
     """Return leaderboard entries sorted by the chosen field."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     filters = [
         {
             "fieldFilter": {
@@ -1833,15 +1866,11 @@ async def get_leaderboard(
         "structuredQuery": {
             "from": [{"collectionId": "users"}],
             "where": where,
-            "orderBy": [
-                {"field": {"fieldPath": field}, "direction": "DESCENDING"}
-            ],
+            "orderBy": [{"field": {"fieldPath": field}, "direction": "DESCENDING"}],
             "limit": limit,
         }
     }
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
-    )
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
@@ -1865,7 +1894,7 @@ async def leave_group(payload: dict = Body(...)):
     if not user_id or not group_id:
         return {"error": "userId and groupId required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     group_url = (
         f"https://firestore.googleapis.com/v1/projects/{project_id}/"
         f"databases/(default)/documents/group_quests/{group_id}"
@@ -1888,10 +1917,8 @@ async def leave_group(payload: dict = Body(...)):
 @app.get("/group-quest/{group_id}")
 async def get_group_quest(group_id: str):
     """Fetch a group quest document via Firestore REST."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
@@ -1908,7 +1935,7 @@ async def report_quest(payload: dict = Body(...)):
     if not user_id or not quest_id or not reason:
         return {"error": "userId, questId and reason required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     doc_id = f"{quest_id}_{user_id}"
     report = {
         "userId": user_id,
@@ -1930,14 +1957,14 @@ async def report_quest(payload: dict = Body(...)):
 @app.get("/get-quest-reports")
 async def get_quest_reports():
     """Return recent quest reports for admin review."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_reports:runQuery"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_reports:runQuery"
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "quest_reports"}],
-            "orderBy": [{"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}],
+            "orderBy": [
+                {"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}
+            ],
             "limit": 20,
         }
     }
@@ -1966,7 +1993,7 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
     if not quest_id or not user_id:
         return {"error": "questId and userId required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     doc_id = f"{quest_id}_{user_id}"
     url = f"https://firestore.googleapis.com/v1/projects/real-world-quest-app/databases/(default)/documents:runQuery"
     body = {"fields": _encode_fields({"visible": visible})}
@@ -1991,7 +2018,7 @@ async def ugc_submit(
     image_url = payload.get("imageUrl")
     if not tag or not platform:
         return {"error": "tag and platform required"}
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     cfg_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
     cfg_resp = await asyncio.to_thread(rest_session.get, cfg_url)
     cfg = _decode_document(cfg_resp.json()) if cfg_resp.status_code == 200 else {}
@@ -2014,21 +2041,27 @@ async def ugc_submit(
     if image_url:
         sub_doc["imageUrl"] = image_url
     sub_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_submissions/{doc_id}"
-    await asyncio.to_thread(rest_session.patch, sub_url, json={"fields": _encode_fields(sub_doc)})
+    await asyncio.to_thread(
+        rest_session.patch, sub_url, json={"fields": _encode_fields(sub_doc)}
+    )
     used.append(active_tag)
-    ufields.update({
-        "lastUGCSubmission": datetime.utcnow().isoformat(),
-        "ugcBoostActive": True,
-        "ugcTagsUsed": used,
-    })
-    await asyncio.to_thread(rest_session.patch, user_url, json={"fields": _encode_fields(ufields)})
+    ufields.update(
+        {
+            "lastUGCSubmission": datetime.utcnow().isoformat(),
+            "ugcBoostActive": True,
+            "ugcTagsUsed": used,
+        }
+    )
+    await asyncio.to_thread(
+        rest_session.patch, user_url, json={"fields": _encode_fields(ufields)}
+    )
     return {"status": "ok", "xpMultiplier": cfg.get("xpMultiplier", 1.0)}
 
 
 @app.get("/config/ugcWeeklyTag")
 async def get_weekly_tag():
     """Return current UGC weekly tag configuration."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/config/ugcWeeklyTag"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -2042,14 +2075,16 @@ async def get_community_quests() -> dict[str, list[dict[str, Any]]]:
     Fetches the latest public community quests from Firestore.
     Uses Firestore's REST API with a structuredQuery sorted by completedAt.
     """
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
 
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "community_quests"}],
-            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
-            "limit": 20
+            "orderBy": [
+                {"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}
+            ],
+            "limit": 20,
         }
     }
 
@@ -2061,13 +2096,18 @@ async def get_community_quests() -> dict[str, list[dict[str, Any]]]:
     except requests.RequestException as e:
         error_msg = e.response.text if e.response else str(e)
         print("🔥 Firestore REST error:", error_msg)
-        return JSONResponse(status_code=500, content={"error": "Failed to fetch community quests", "details": error_msg})
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to fetch community quests", "details": error_msg},
+        )
 
     try:
         raw_results = resp.json()
     except Exception as e:
         print("🔥 Failed to parse Firestore response JSON:", str(e))
-        return JSONResponse(status_code=500, content={"error": "Invalid Firestore JSON response"})
+        return JSONResponse(
+            status_code=500, content={"error": "Invalid Firestore JSON response"}
+        )
 
     quests = []
 
@@ -2092,25 +2132,48 @@ async def get_community_quests() -> dict[str, list[dict[str, Any]]]:
     print(f"[🎯] Returning {len(quests)} community quests")
     return {"quests": quests}
 
+
 @app.get("/ugc-feed")
 async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(None)):
     """Return public UGC feed entries with optional filters."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_feed:runQuery"
     filters = []
     if mood:
-        filters.append({"fieldFilter": {"field": {"fieldPath": "mood"}, "op": "EQUAL", "value": {"stringValue": mood}}})
+        filters.append(
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "mood"},
+                    "op": "EQUAL",
+                    "value": {"stringValue": mood},
+                }
+            }
+        )
     if city:
-        filters.append({"fieldFilter": {"field": {"fieldPath": "city"}, "op": "EQUAL", "value": {"stringValue": city}}})
+        filters.append(
+            {
+                "fieldFilter": {
+                    "field": {"fieldPath": "city"},
+                    "op": "EQUAL",
+                    "value": {"stringValue": city},
+                }
+            }
+        )
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "ugc_feed"}],
-            "orderBy": [{"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}],
+            "orderBy": [
+                {"field": {"fieldPath": "timestamp"}, "direction": "DESCENDING"}
+            ],
             "limit": 20,
         }
     }
     if filters:
-        where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
+        where = (
+            filters[0]
+            if len(filters) == 1
+            else {"compositeFilter": {"op": "AND", "filters": filters}}
+        )
         query["structuredQuery"]["where"] = where
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
@@ -2128,6 +2191,7 @@ async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(
         obj["id"] = doc["name"].split("/")[-1]
         posts.append(obj)
     return {"posts": posts}
+
 
 @app.post("/create-checkout-session")
 async def create_checkout_session(payload: dict = Body(...)):
@@ -2155,7 +2219,7 @@ async def create_checkout_session(payload: dict = Body(...)):
 @app.get("/validate-premium/{user_id}")
 async def validate_premium(user_id: str, session_id: str | None = Query(None)):
     """Check premium flag and optionally verify checkout session."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, user_url)
     fields = {}
@@ -2168,8 +2232,11 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
         if stripe_key and session_id != "mock":
             try:
                 import stripe
+
                 stripe.api_key = stripe_key
-                sess = await asyncio.to_thread(stripe.checkout.Session.retrieve, session_id)
+                sess = await asyncio.to_thread(
+                    stripe.checkout.Session.retrieve, session_id
+                )
                 premium = sess.get("payment_status") == "paid"
             except Exception as e:
                 print("Stripe verify error", e)
@@ -2188,7 +2255,7 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
 async def validate_premium_token(uid: str = Depends(require_user)):
     """Return premium status for the authenticated user."""
     await check_not_banned(uid)
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
@@ -2214,20 +2281,26 @@ async def stripe_webhook(request: Request):
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        email = session.get("customer_details", {}).get("email") or session.get("customer_email")
+        email = session.get("customer_details", {}).get("email") or session.get(
+            "customer_email"
+        )
         if email:
             try:
                 user = await asyncio.to_thread(fb_auth.get_user_by_email, email)
                 uid = user.uid
-                project_id = creds.project_id
+                project_id = PROJECT_ID
                 url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
                 resp = await asyncio.to_thread(rest_session.get, url)
-                fields = _decode_document(resp.json()) if resp.status_code == 200 else {}
+                fields = (
+                    _decode_document(resp.json()) if resp.status_code == 200 else {}
+                )
                 if not fields.get("isPremium"):
                     fields["isPremium"] = True
                     body = {"fields": _encode_fields(fields)}
                     await asyncio.to_thread(rest_session.patch, url, json=body)
-                    await log_admin_event("stripe_checkout", {"uid": uid, "session": session.get("id")})
+                    await log_admin_event(
+                        "stripe_checkout", {"uid": uid, "session": session.get("id")}
+                    )
             except Exception as e:
                 print("User email lookup failed", e)
         else:
@@ -2250,7 +2323,7 @@ async def update_active_quest(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     await check_not_banned(uid)
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     fields = {}
@@ -2277,7 +2350,10 @@ async def create_custom_quest(
 
     location_list = payload.get("locationList", [])
     if len(location_list) < 2:
-        return JSONResponse(status_code=400, content={"error": "locationList must have at least 2 entries"})
+        return JSONResponse(
+            status_code=400,
+            content={"error": "locationList must have at least 2 entries"},
+        )
 
     data = {
         "title": payload.get("title") or "Custom Quest",
@@ -2294,7 +2370,9 @@ async def create_custom_quest(
         return {"questId": quest_id}
     except Exception as e:
         print("create_custom_quest error", e)
-        return JSONResponse(status_code=500, content={"error": "Failed to save custom quest"})
+        return JSONResponse(
+            status_code=500, content={"error": "Failed to save custom quest"}
+        )
 
 
 @app.post("/update-custom-quest")
@@ -2308,10 +2386,8 @@ async def update_custom_quest(
         return {"error": "quest_id required"}
     await check_not_banned(uid)
 
-    project_id = creds.project_id
-    own_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    own_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, own_url)
     if resp.status_code != 200:
         raise HTTPException(status_code=404, detail="Quest not found")
@@ -2321,7 +2397,7 @@ async def update_custom_quest(
 
     data = payload.get("data", {})
     data["updatedAt"] = datetime.utcnow().isoformat()
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     body = {"fields": _encode_fields(data)}
 
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{uid}/{quest_id}"
@@ -2346,7 +2422,9 @@ async def get_custom_quest_endpoint(quest_id: str):
 
 
 @app.get("/custom-quests")
-async def list_custom_quests(creatorId: str = Query(...), publicOnly: bool = Query(False)):
+async def list_custom_quests(
+    creatorId: str = Query(...), publicOnly: bool = Query(False)
+):
     """Return custom quests filtered by creator ID."""
     quests = await query_custom_quests_by_creator(creatorId, public_only=publicOnly)
     return {"quests": quests}
@@ -2366,10 +2444,8 @@ async def publish_custom_quest(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     await check_not_banned(uid)
 
-    project_id = creds.project_id
-    own_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    own_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, own_url)
     if resp.status_code != 200:
         raise HTTPException(status_code=404, detail="Quest not found")
@@ -2384,12 +2460,8 @@ async def publish_custom_quest(
     }
     body = {"fields": _encode_fields(patch_fields)}
 
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-    )
-    global_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    global_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     for url in (user_url, global_url):
         resp = await asyncio.to_thread(rest_session.patch, url, json=body)
         if resp.status_code != 200:
@@ -2413,10 +2485,8 @@ async def unpublish_custom_quest(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     await check_not_banned(uid)
 
-    project_id = creds.project_id
-    own_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    own_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, own_url)
     if resp.status_code != 200:
         raise HTTPException(status_code=404, detail="Quest not found")
@@ -2429,12 +2499,8 @@ async def unpublish_custom_quest(
     }
     body = {"fields": _encode_fields(patch_fields)}
 
-    user_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
-    )
-    global_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    global_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     for url in (user_url, global_url):
         resp = await asyncio.to_thread(rest_session.patch, url, json=body)
         if resp.status_code != 200:
@@ -2457,19 +2523,15 @@ async def like_quest(
     await check_not_banned(uid)
     # TODO: enforce one like per user in Firestore security rules  # 🔒 MANUAL FIX NEEDED
 
-    project_id = creds.project_id
-    like_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{quest_id}/{user_id}"
-    )
+    project_id = PROJECT_ID
+    like_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_likes/{quest_id}/{user_id}"
     body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
     resp = await asyncio.to_thread(rest_session.patch, like_url, json=body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
 
-    quest_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     qresp = await asyncio.to_thread(rest_session.get, quest_url)
     if qresp.status_code == 200:
         data = _decode_document(qresp.json())
@@ -2492,18 +2554,14 @@ async def view_quest(
         return {"error": "user_id and quest_id required"}
     await check_not_banned(uid)
 
-    project_id = creds.project_id
-    view_doc = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{quest_id}/{user_id}"
-    )
+    project_id = PROJECT_ID
+    view_doc = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quest_views/{quest_id}/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, view_doc)
     if resp.status_code == 404:
         body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
         await asyncio.to_thread(rest_session.patch, view_doc, json=body)
 
-        quest_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-        )
+        quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
         qresp = await asyncio.to_thread(rest_session.get, quest_url)
         if qresp.status_code == 200:
             data = _decode_document(qresp.json())
@@ -2521,10 +2579,8 @@ async def replay_quest(payload: dict = Body(...)):
     if not quest_id:
         return {"error": "quest_id required"}
 
-    project_id = creds.project_id
-    quest_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
-    )
+    project_id = PROJECT_ID
+    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     qresp = await asyncio.to_thread(rest_session.get, quest_url)
     if qresp.status_code == 200:
         data = _decode_document(qresp.json())
@@ -2543,7 +2599,7 @@ async def create_community_group(payload: dict = Body(...)):
     if not name or not creator:
         return {"error": "name and creator required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     group_id = hashlib.sha1(f"{name}-{datetime.utcnow()}".encode()).hexdigest()[:10]
     doc = {
         "name": name,
@@ -2555,9 +2611,7 @@ async def create_community_group(payload: dict = Body(...)):
         "linked_quests": [],
         "createdAt": datetime.utcnow().isoformat(),
     }
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
-    )
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
     body = {"fields": _encode_fields(doc)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
@@ -2573,10 +2627,8 @@ async def join_community_group(payload: dict = Body(...)):
     if not group_id or not user_id:
         return {"error": "group_id and user_id required"}
 
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
         return {"error": "group not found"}
@@ -2598,10 +2650,8 @@ async def link_quest_to_group(payload: dict = Body(...)):
     if not group_id or not quest_id:
         return {"error": "group_id and quest_id required"}
 
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_groups/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
         return {"error": "group not found"}
@@ -2616,13 +2666,12 @@ async def link_quest_to_group(payload: dict = Body(...)):
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
 
+
 @app.get("/audit-quest-cache")
 async def audit_quest_cache():
     """Return quests with overly long or malformed text."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests:runQuery"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests:runQuery"
     query = {"structuredQuery": {"from": [{"collectionId": "quests"}]}}
     resp = await asyncio.to_thread(rest_session.post, url, json=query)
     if resp.status_code != 200:
@@ -2692,14 +2741,16 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
         if not cached and pid:
             save_place_to_cache(pid, {"tags": tags, "name": name})
         loc = pl["geometry"]["location"]
-        candidates.append({
-            "name": name,
-            "type": pl.get("types", ["Unknown"])[0],
-            "lat": float(loc["lat"]),
-            "lng": float(loc["lng"]),
-            "tags": tags,
-            "rating": pl.get("rating", 0),
-        })
+        candidates.append(
+            {
+                "name": name,
+                "type": pl.get("types", ["Unknown"])[0],
+                "lat": float(loc["lat"]),
+                "lng": float(loc["lng"]),
+                "tags": tags,
+                "rating": pl.get("rating", 0),
+            }
+        )
 
     # simple sort by rating
     candidates.sort(key=lambda x: x["rating"], reverse=True)
@@ -2738,7 +2789,7 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
     legs = route.get("legs", [])
     polyline = route.get("overview_polyline", {}).get("points", "")
 
-    ordered = [selected[0]] + [selected[i+1] for i in order] + [selected[-1]]
+    ordered = [selected[0]] + [selected[i + 1] for i in order] + [selected[-1]]
 
     tag_set = set(override) if override else set()
     if not override:
@@ -2780,31 +2831,34 @@ async def rebuild_quest_cache(payload: dict = Body(...)):
     save_quest_to_firestore(hash_key, quest_obj)
     return {"quest": quest_obj, "hash": hash_key}
 
+
 @app.get("/search-quests")
 async def search_quests(query: str = Query(...), user_id: str | None = None):
     """Search public and user quests by simple keyword matching."""
     tokens = [t.lower() for t in query.split() if t]
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     results = {"public": [], "custom": [], "user": []}
 
     def _matches(obj: dict) -> bool:
-        hay = " ".join([
-            str(obj.get("city", "")),
-            str(obj.get("mood", "")),
-            " ".join(obj.get("tags", [])),
-            str(obj.get("title", "")),
-        ]).lower()
+        hay = " ".join(
+            [
+                str(obj.get("city", "")),
+                str(obj.get("mood", "")),
+                " ".join(obj.get("tags", [])),
+                str(obj.get("title", "")),
+            ]
+        ).lower()
         return any(tok in hay for tok in tokens)
 
     # community quests
     # Run query against the community_quests collection
-    cq_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
-    )
+    cq_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
     cq_query = {
         "structuredQuery": {
             "from": [{"collectionId": "community_quests"}],
-            "orderBy": [{"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}],
+            "orderBy": [
+                {"field": {"fieldPath": "completedAt"}, "direction": "DESCENDING"}
+            ],
             "limit": 20,
         }
     }
@@ -2821,9 +2875,7 @@ async def search_quests(query: str = Query(...), user_id: str | None = None):
 
     # custom quests (published)
     # Published custom quests
-    cust_url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
-    )
+    cust_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
     cust_query = {
         "structuredQuery": {
             "from": [{"collectionId": "custom_quests"}],
@@ -2850,10 +2902,10 @@ async def search_quests(query: str = Query(...), user_id: str | None = None):
 
     # user quests
     if user_id:
-        uq_url = (
-            f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
-        )
-        uq_query = {"structuredQuery": {"from": [{"collectionId": "quests"}], "limit": 20}}
+        uq_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}:runQuery"
+        uq_query = {
+            "structuredQuery": {"from": [{"collectionId": "quests"}], "limit": 20}
+        }
         resp = await asyncio.to_thread(rest_session.post, uq_url, json=uq_query)
         if resp.status_code == 200:
             for item in resp.json():
@@ -2876,7 +2928,7 @@ async def replay_quest(payload: dict = Body(...)):
     if not quest_id or not user_id:
         return {"error": "quest_id and user_id required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, quest_url)
     if resp.status_code != 200:
@@ -2891,7 +2943,9 @@ async def replay_quest(payload: dict = Body(...)):
         patch = {"fields": _encode_fields({"replaysCount": count})}
         await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
-    new_id = hashlib.sha1(f"{user_id}-{datetime.utcnow()}-{quest_id}".encode()).hexdigest()[:12]
+    new_id = hashlib.sha1(
+        f"{user_id}-{datetime.utcnow()}-{quest_id}".encode()
+    ).hexdigest()[:12]
     user_doc = {
         "questIdRef": quest_id,
         "generatedAt": datetime.utcnow().isoformat(),
@@ -2914,7 +2968,9 @@ async def remix_quest(payload: dict = Body(...)):
     if not location or not mood or not user_id:
         return {"error": "location, mood, and user_id required"}
 
-    rebuilt = await rebuild_quest_cache({"city": location, "mood": mood, "tagOverride": tags})
+    rebuilt = await rebuild_quest_cache(
+        {"city": location, "mood": mood, "tagOverride": tags}
+    )
     quest = rebuilt.get("quest")
     quest_id = rebuilt.get("hash")
 
@@ -2923,12 +2979,13 @@ async def remix_quest(payload: dict = Body(...)):
         "generatedAt": datetime.utcnow().isoformat(),
         "questData": quest,
     }
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
     body = {"fields": _encode_fields(user_doc)}
     await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"quest": quest, "userQuestId": quest_id}
+
 
 @app.post("/create-community")
 async def create_community(payload: dict = Body(...)):
@@ -2942,7 +2999,9 @@ async def create_community(payload: dict = Body(...)):
     tags = payload.get("tags", [])
     is_public = bool(payload.get("isPublic", True))
 
-    community_id = hashlib.sha1(f"{owner_id}-{name}-{datetime.utcnow()}".encode()).hexdigest()[:12]
+    community_id = hashlib.sha1(
+        f"{owner_id}-{name}-{datetime.utcnow()}".encode()
+    ).hexdigest()[:12]
     created_at = datetime.utcnow().isoformat()
 
     doc = {
@@ -2957,7 +3016,7 @@ async def create_community(payload: dict = Body(...)):
         "questRefs": [],
         "analytics": {},
     }
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
     body = {"fields": _encode_fields(doc)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
@@ -2980,7 +3039,7 @@ async def join_community(payload: dict = Body(...)):
     if not user_id or not community_id:
         return {"error": "userId and communityId required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -3012,7 +3071,7 @@ async def publish_to_community(payload: dict = Body(...)):
     if not community_id or not quest_id:
         return {"error": "communityId and questId required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -3030,7 +3089,7 @@ async def publish_to_community(payload: dict = Body(...)):
 
 @app.get("/community/{community_id}")
 async def get_community(community_id: str):
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities/{community_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -3053,7 +3112,7 @@ async def get_community(community_id: str):
 
 @app.get("/community-trending")
 async def community_trending():
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/communities:runQuery"
     query = {
         "structuredQuery": {
@@ -3065,7 +3124,9 @@ async def community_trending():
                     "value": {"booleanValue": True},
                 }
             },
-            "orderBy": [{"field": {"fieldPath": "followerCount"}, "direction": "DESCENDING"}],
+            "orderBy": [
+                {"field": {"fieldPath": "followerCount"}, "direction": "DESCENDING"}
+            ],
             "limit": 10,
         }
     }
@@ -3083,8 +3144,9 @@ async def community_trending():
         results.append(data)
     return {"communities": results}
 
+
 async def _verify_admin(user_id: str) -> bool:
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
@@ -3092,8 +3154,9 @@ async def _verify_admin(user_id: str) -> bool:
         return data.get("isAdmin") is True
     return False
 
+
 async def _verify_creator(user_id: str) -> bool:
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/creators/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
@@ -3107,7 +3170,7 @@ async def admin_dashboard(userId: str = Query(...)):
     if not await _verify_admin(userId):
         return JSONResponse(status_code=403, content={"error": "Access denied"})
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
     # quests today
@@ -3158,12 +3221,20 @@ async def admin_dashboard(userId: str = Query(...)):
 
     # total users
     users_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users:runQuery"
-    all_users = await asyncio.to_thread(rest_session.post, users_url, json={"structuredQuery": {"from": [{"collectionId": "users"}]}})
+    all_users = await asyncio.to_thread(
+        rest_session.post,
+        users_url,
+        json={"structuredQuery": {"from": [{"collectionId": "users"}]}},
+    )
     total_users = sum(1 for i in all_users.json() if i.get("document"))
 
     # top cities
     quests_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests:runQuery"
-    q_resp = await asyncio.to_thread(rest_session.post, quests_url, json={"structuredQuery": {"from": [{"collectionId": "quests"}]}})
+    q_resp = await asyncio.to_thread(
+        rest_session.post,
+        quests_url,
+        json={"structuredQuery": {"from": [{"collectionId": "quests"}]}},
+    )
     cities = {}
     moods = {}
     diff = {}
@@ -3231,7 +3302,7 @@ async def admin_resolve_report(payload: dict = Body(...)):
         return JSONResponse(status_code=403, content={"error": "Access denied"})
     if not report_id:
         return {"error": "reportId required"}
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/reports/{report_id}"
     patch = {"fields": _encode_fields({"resolved": True})}
     await asyncio.to_thread(rest_session.patch, url, json=patch)
@@ -3247,7 +3318,7 @@ async def admin_delete_quest(payload: dict = Body(...)):
         return JSONResponse(status_code=403, content={"error": "Access denied"})
     if not quest_id:
         return {"error": "questId required"}
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/{'custom_quests' if qtype=='custom' else 'quests'}/{quest_id}"
     await asyncio.to_thread(rest_session.delete, url)
     return {"status": "deleted"}
@@ -3261,7 +3332,7 @@ async def admin_ban_user(payload: dict = Body(...)):
         return JSONResponse(status_code=403, content={"error": "Access denied"})
     if not target_id:
         return {"error": "targetId required"}
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{target_id}"
     patch = {"fields": _encode_fields({"banned": True})}
     await asyncio.to_thread(rest_session.patch, url, json=patch)
@@ -3274,7 +3345,7 @@ async def admin_ugc_analytics(userId: str = Query(...), week: str = Query(None))
         return JSONResponse(status_code=403, content={"error": "Access denied"})
     if not week:
         week = datetime.utcnow().strftime("%Y-%W")
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/ugc_analytics/{week}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
@@ -3293,12 +3364,16 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
     if days > 0:
         start = (datetime.utcnow() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     run_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
 
     # ===== Users =====
     users_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users:runQuery"
-    all_users = await asyncio.to_thread(rest_session.post, users_url, json={"structuredQuery": {"from": [{"collectionId": "users"}]}})
+    all_users = await asyncio.to_thread(
+        rest_session.post,
+        users_url,
+        json={"structuredQuery": {"from": [{"collectionId": "users"}]}},
+    )
     total_users = sum(1 for i in all_users.json() if i.get("document"))
 
     growth = {}
@@ -3328,7 +3403,11 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
         new_users = total_users
 
     # ===== Quests Generated =====
-    q_query = {"structuredQuery": {"from": [{"collectionId": "user_quests", "allDescendants": True}]}}
+    q_query = {
+        "structuredQuery": {
+            "from": [{"collectionId": "user_quests", "allDescendants": True}]
+        }
+    }
     if start:
         q_query["structuredQuery"]["where"] = {
             "fieldFilter": {
@@ -3348,7 +3427,7 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
         m = data.get("mood")
         d = data.get("difficulty")
         if m:
-            for mpart in str(m).split(','):
+            for mpart in str(m).split(","):
                 moods[mpart] = moods.get(mpart, 0) + 1
         if d:
             diff[d] = diff.get(d, 0) + 1
@@ -3398,7 +3477,11 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
 
     # ===== Promo Codes =====
     promo_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes:runQuery"
-    promo_resp = await asyncio.to_thread(rest_session.post, promo_url, json={"structuredQuery": {"from": [{"collectionId": "promo_codes"}]}})
+    promo_resp = await asyncio.to_thread(
+        rest_session.post,
+        promo_url,
+        json={"structuredQuery": {"from": [{"collectionId": "promo_codes"}]}},
+    )
     promo_counts = {}
     for item in promo_resp.json():
         doc = item.get("document")
@@ -3408,7 +3491,9 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
         key = data.get("code", doc["name"].split("/")[-1])
         promo_counts[key] = data.get("usageCount", 0)
 
-    top_promo = max(promo_counts.items(), key=lambda x: x[1]) if promo_counts else (None, 0)
+    top_promo = (
+        max(promo_counts.items(), key=lambda x: x[1]) if promo_counts else (None, 0)
+    )
 
     return {
         "totalUsers": total_users,
@@ -3425,6 +3510,7 @@ async def admin_analytics(userId: str = Query(...), days: int = Query(30)):
         "topPromo": list(top_promo),
     }
 
+
 @app.post("/submit-featured-quest")
 async def submit_featured_quest(
     payload: dict = Body(...),
@@ -3437,7 +3523,7 @@ async def submit_featured_quest(
     if not await _verify_creator(uid):
         return JSONResponse(status_code=403, content={"error": "not_creator"})
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     quest_id = hashlib.sha1(f"{uid}-{datetime.utcnow()}".encode()).hexdigest()[:16]
     quest_doc = {
         "title": payload.get("title") or "Untitled Quest",
@@ -3453,9 +3539,7 @@ async def submit_featured_quest(
         "remixable": bool(payload.get("remixable", True)),
         "stats": {"completions": 0, "remixes": 0},
     }
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests/{quest_id}"
-    )
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests/{quest_id}"
     body = {"fields": _encode_fields(quest_doc)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
@@ -3478,12 +3562,14 @@ async def submit_featured_quest(
 @app.get("/featured-quests")
 async def get_featured_quests(approved: bool = Query(True)):
     """Return featured quests optionally filtered by approval."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests:runQuery"
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "featured_quests"}],
-            "orderBy": [{"field": {"fieldPath": "createdAt"}, "direction": "DESCENDING"}],
+            "orderBy": [
+                {"field": {"fieldPath": "createdAt"}, "direction": "DESCENDING"}
+            ],
         }
     }
     if approved is not None:
@@ -3526,14 +3612,17 @@ async def admin_review_featured(payload: dict = Body(...)):
         return JSONResponse(status_code=403, content={"error": "Access denied"})
     if not quest_id:
         return {"error": "questId required"}
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/featured_quests/{quest_id}"
-    patch = {"fields": _encode_fields({"isApproved": bool(approved), "adminReviewed": True})}
+    patch = {
+        "fields": _encode_fields({"isApproved": bool(approved), "adminReviewed": True})
+    }
     resp = await asyncio.to_thread(rest_session.patch, url, json=patch)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
     return {"status": "updated"}
+
 
 @app.post("/create-promo-code")
 async def create_promo_code(payload: dict = Body(...)):
@@ -3557,7 +3646,7 @@ async def create_promo_code(payload: dict = Body(...)):
         data["maxUses"] = int(payload["maxUses"])
     if payload.get("xpAmount") is not None:
         data["xpAmount"] = int(payload["xpAmount"])
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes/{code}"
     body = {"fields": _encode_fields(data)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
@@ -3581,7 +3670,7 @@ async def redeem_promo_code(
     if not code:
         return {"error": "code required"}
 
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     code_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/promo_codes/{code}"
     resp = await asyncio.to_thread(rest_session.get, code_url)
     if resp.status_code != 200:
@@ -3595,7 +3684,9 @@ async def redeem_promo_code(
                 return JSONResponse(status_code=400, content={"error": "expired"})
         except Exception:
             pass
-    if code_data.get("maxUses") is not None and code_data.get("usageCount", 0) >= int(code_data.get("maxUses")):
+    if code_data.get("maxUses") is not None and code_data.get("usageCount", 0) >= int(
+        code_data.get("maxUses")
+    ):
         return JSONResponse(status_code=400, content={"error": "maxed"})
 
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
@@ -3625,7 +3716,9 @@ async def redeem_promo_code(
         print("Firestore REST error", presp.text)
         presp.raise_for_status()
     code_data["usageCount"] = code_data.get("usageCount", 0) + 1
-    await asyncio.to_thread(rest_session.patch, code_url, json={"fields": _encode_fields(code_data)})
+    await asyncio.to_thread(
+        rest_session.patch, code_url, json={"fields": _encode_fields(code_data)}
+    )
     return {"status": "redeemed", **effects}
 
 
@@ -3639,7 +3732,9 @@ async def admin_create_custom_quest(payload: dict = Body(...)):
         return {"error": "quest required"}
     try:
         quest_id = await write_custom_quest(quest, user_id)
-        await log_admin_event("admin_create_custom", {"admin": user_id, "questId": quest_id})
+        await log_admin_event(
+            "admin_create_custom", {"admin": user_id, "questId": quest_id}
+        )
         return {"questId": quest_id}
     except Exception as e:
         print("admin_create_custom_quest", e)
@@ -3656,7 +3751,7 @@ async def admin_edit_custom_quest(payload: dict = Body(...)):
     if not quest_id:
         return {"error": "questId required"}
     data["updatedAt"] = datetime.utcnow().isoformat()
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
     body = {"fields": _encode_fields(data)}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
@@ -3668,10 +3763,12 @@ async def admin_edit_custom_quest(payload: dict = Body(...)):
 
 
 @app.delete("/admin/delete-custom-quest")
-async def admin_delete_custom_quest(userId: str = Query(...), questId: str = Query(...)):
+async def admin_delete_custom_quest(
+    userId: str = Query(...), questId: str = Query(...)
+):
     if not await _verify_admin(userId):
         return JSONResponse(status_code=403, content={"error": "Access denied"})
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{questId}"
     await asyncio.to_thread(rest_session.delete, url)
     await log_admin_event("admin_delete_custom", {"admin": userId, "questId": questId})
@@ -3681,10 +3778,8 @@ async def admin_delete_custom_quest(userId: str = Query(...), questId: str = Que
 @app.get("/leaderboard-snapshot/{doc_id}")
 async def get_leaderboard_snapshot(doc_id: str):
     """Return cached leaderboard document."""
-    project_id = creds.project_id
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
-    )
+    project_id = PROJECT_ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
         return {}
@@ -3694,7 +3789,7 @@ async def get_leaderboard_snapshot(doc_id: str):
 @app.post("/refresh-leaderboards")
 async def refresh_leaderboards():
     """Recompute leaderboard snapshots and cache them."""
-    project_id = creds.project_id
+    project_id = PROJECT_ID
     now = datetime.utcnow().isoformat()
     run_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
 
@@ -3725,7 +3820,11 @@ async def refresh_leaderboards():
                     }
                 }
             )
-        where = filters[0] if len(filters) == 1 else {"compositeFilter": {"op": "AND", "filters": filters}}
+        where = (
+            filters[0]
+            if len(filters) == 1
+            else {"compositeFilter": {"op": "AND", "filters": filters}}
+        )
         body = {
             "structuredQuery": {
                 "from": [{"collectionId": "users"}],
@@ -3762,21 +3861,23 @@ async def refresh_leaderboards():
 
     for lb_type, field_path in leaderboard_fields.items():
         for period, days in {"allTime": None, "weekly": 7}.items():
-            since = (datetime.utcnow() - timedelta(days=days)).isoformat() if days else None
+            since = (
+                (datetime.utcnow() - timedelta(days=days)).isoformat() if days else None
+            )
             entries = await query_users(field_path, since)
             doc_id = f"{lb_type}_{period}"
-            doc_url = (
-                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
-            )
+            doc_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
             body = {"fields": _encode_fields({"lastUpdated": now, "entries": entries})}
             await asyncio.to_thread(rest_session.patch, doc_url, json=body)
 
     return {"status": "ok"}
 
+
 @app.get("/status")
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))

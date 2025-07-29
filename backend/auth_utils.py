@@ -1,21 +1,47 @@
 import os
+import json
 import asyncio
 import re
 from fastapi import Depends, HTTPException, Request
+import google.auth.transport.requests
+from google.cloud import secretmanager
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
 import firebase_admin
 from firebase_admin import auth as fb_auth
 from dotenv import load_dotenv
+
 load_dotenv()
-import google.auth
 
 
-# Initialize Firestore REST session
-creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+def _get_authorized_session():
+    try:
+        secret_name = "firestore-key"
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
 
-rest_session = AuthorizedSession(creds)
-PROJECT_ID = creds.project_id
+        # Access the secret payload (JSON string)
+        response = client.access_secret_version(request={"name": name})
+        secret_json_str = response.payload.data.decode("UTF-8")
+        service_account_info = json.loads(secret_json_str)
+
+        # Get credentials from secret payload
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=["https://www.googleapis.com/auth/datastore"],
+        )
+
+        return AuthorizedSession(credentials)
+
+    except Exception as e:
+        print("AUTH INIT FAILED in _get_authorized_session()")
+        print(f"❌ Could not initialize rest_session. Exiting.\n{e}")
+        raise e
+
+
+rest_session = _get_authorized_session()
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 
 # Initialize Firebase Admin if not already
 if not firebase_admin._apps:
@@ -85,9 +111,7 @@ async def verify_token_info(auth_header: str | None) -> tuple[str | None, bool]:
 
 
 async def _get_user_doc(uid: str) -> dict | None:
-    url = (
-        f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/users/{uid}"
-    )
+    url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/users/{uid}"
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code == 200:
         return _decode_document(resp.json())
@@ -121,4 +145,3 @@ def sanitize_input(text: str) -> str:
     sanitized = re.sub(r"[<>]", "", text)
     sanitized = sanitized.replace("\n", " ").strip()
     return sanitized
-
