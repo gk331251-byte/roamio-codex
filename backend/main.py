@@ -32,31 +32,24 @@ app = FastAPI()
 
 
 def _get_authorized_session():
+    """Create an AuthorizedSession using default application credentials."""
     from google.auth.transport.requests import AuthorizedSession
-    from google.oauth2 import service_account
     import traceback
 
     try:
-        path = os.environ.get(
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "/secrets/firestore-key.json",
+        cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if cred_path:
+            print("🔐 GOOGLE_APPLICATION_CREDENTIALS:", cred_path)
+        else:
+            print("🔐 GOOGLE_APPLICATION_CREDENTIALS not set; using metadata")
+
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/datastore"]
         )
-        print("🔐 GOOGLE_APPLICATION_CREDENTIALS:", path)
-
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Credential file not found at: {path}")
-
-        if not os.access(path, os.R_OK):
-            raise PermissionError(f"Credential file not readable: {path}")
-
-        creds = service_account.Credentials.from_service_account_file(
-            path,
-            scopes=["https://www.googleapis.com/auth/datastore"],
-        )
-        print("✅ Credentials loaded successfully.")
+        print("✅ Application default credentials loaded")
         return AuthorizedSession(creds)
 
-    except Exception as e:
+    except Exception:
         print("❌ AUTH INIT FAILED in _get_authorized_session()")
         traceback.print_exc()
         return None
@@ -308,15 +301,18 @@ db = firestore_v1.Client(
 
 # Session for REST-based Firestore calls
 if rest_session is None:
-    try:
-        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
-        rest_session = AuthorizedSession(creds)
-        print("✅ Firestore REST session created")
-    except Exception as cred_err:
-        print("❌ Failed to initialize Firestore defaults:", cred_err)
-        traceback.print_exc()
+    rest_session = _get_authorized_session()
+    if rest_session:
+        try:
+            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+            print("✅ Firestore REST session created")
+        except Exception as cred_err:
+            print("❌ Failed to initialize Firestore defaults:", cred_err)
+            traceback.print_exc()
+            creds = None
+            rest_session = None
+    else:
         creds = None
-        rest_session = None
 else:
     try:
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
