@@ -33,14 +33,37 @@ app = FastAPI()
 
 def _get_authorized_session():
     from google.auth.transport.requests import AuthorizedSession
+    from google.oauth2 import service_account
     import google.auth
 
+    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if cred_path:
+        print("🔑 GOOGLE_APPLICATION_CREDENTIALS:", cred_path)
+    else:
+        print("🔑 GOOGLE_APPLICATION_CREDENTIALS not set")
+
+    # Prefer explicit service account key if provided
+    if cred_path and os.path.exists(cred_path):
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                cred_path,
+                scopes=["https://www.googleapis.com/auth/datastore"],
+            )
+            print("✅ Loaded service account credentials from file")
+            return AuthorizedSession(creds)
+        except Exception:
+            print("❌ Failed loading credentials from file")
+            traceback.print_exc()
+
+    # Fall back to default credentials (e.g., Cloud Run)
     try:
-        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
-        print("✅ Auth credentials loaded. Project:", creds.project_id)
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/datastore"]
+        )
+        print("✅ Loaded default application credentials. Project:", creds.project_id)
         return AuthorizedSession(creds)
-    except Exception as e:
-        print("❌ ERROR: Could not initialize Google AuthorizedSession:")
+    except Exception:
+        print("❌ ERROR: Could not initialize Google AuthorizedSession via defaults")
         traceback.print_exc()
         return None
 
