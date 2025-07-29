@@ -15,6 +15,7 @@ try:
     from datetime import datetime, timedelta
     import asyncio
     import certifi
+    import google.auth
     from google.cloud import firestore_v1, storage
     from google.oauth2 import service_account
     import firebase_admin
