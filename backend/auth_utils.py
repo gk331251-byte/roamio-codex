@@ -3,44 +3,26 @@ import json
 import asyncio
 import re
 from fastapi import Depends, HTTPException, Request
-import google.auth.transport.requests
-from google.cloud import secretmanager
-from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
+from google.oauth2 import service_account
 import firebase_admin
 from firebase_admin import auth as fb_auth
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
-def _get_authorized_session():
-    try:
-        secret_name = "firestore-key"
-        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
-        client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+def get_authorized_session():
+    """Return an AuthorizedSession using credentials from disk."""
+    secret_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not secret_path or not os.path.exists(secret_path):
+        raise FileNotFoundError(f"Credentials file not found at {secret_path}")
 
-        # Access the secret payload (JSON string)
-        response = client.access_secret_version(request={"name": name})
-        secret_json_str = response.payload.data.decode("UTF-8")
-        service_account_info = json.loads(secret_json_str)
-
-        # Get credentials from secret payload
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_info,
-            scopes=["https://www.googleapis.com/auth/datastore"],
-        )
-
-        return AuthorizedSession(credentials)
-
-    except Exception as e:
-        print("AUTH INIT FAILED in _get_authorized_session()")
-        print(f"❌ Could not initialize rest_session. Exiting.\n{e}")
-        raise e
+    creds = service_account.Credentials.from_service_account_file(
+        secret_path,
+        scopes=["https://www.googleapis.com/auth/datastore"],
+    )
+    return AuthorizedSession(creds)
 
 
-rest_session = _get_authorized_session()
+rest_session = get_authorized_session()
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 
 # Initialize Firebase Admin if not already

@@ -25,14 +25,15 @@ from backend.routes import some_router  # or routes if running locally
 import openai
 import googlemaps
 from dotenv import load_dotenv
-from backend.auth_utils import _get_authorized_session
+from backend.auth_utils import get_authorized_session
 
 
 app = FastAPI()
 
 
 print("🔐 Attempting to get rest_session")
-rest_session = _get_authorized_session()
+session = get_authorized_session()
+rest_session = session
 if not rest_session:
     print("❌ Could not initialize rest_session. Exiting.")
     sys.exit(1)
@@ -280,7 +281,7 @@ db = firestore_v1.Client(
 
 # Session for REST-based Firestore calls
 if rest_session is None:
-    rest_session = _get_authorized_session()
+    rest_session = get_authorized_session()
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 
@@ -3875,9 +3876,11 @@ async def refresh_leaderboards():
 
 @app.get("/status")
 @app.get("/health")
+@app.get("/healthz")
 def health_check():
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
