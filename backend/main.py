@@ -1,22 +1,53 @@
-from fastapi import FastAPI, Query, Body, Request, Depends, APIRouter, HTTPException
+from fastapi import Query, Body, Request, Depends, APIRouter, HTTPException
 from typing import Any
 import asyncio
 import requests
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import traceback
 import requests
 import hashlib
 from datetime import datetime, timedelta
 import asyncio
-import googlemaps
-import openai
 import certifi
 from google.cloud import firestore_v1, storage
 from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
 import firebase_admin
 from firebase_admin import auth as fb_auth
+import uvicorn
+print("🔥 Starting backend.main.py")
+
+
+try:
+    import google.auth
+    from google.auth.transport.requests import AuthorizedSession, Request as GoogleRequest
+    from fastapi import FastAPI
+    from backend.routes import some_router  # or routes if running locally
+    import openai
+    import googlemaps
+
+    # Confirm env vars
+    print("🔑 GOOGLE_MAPS_API_KEY:", os.environ.get("GOOGLE_MAPS_API_KEY"))
+    print("🔑 OPENAI_API_KEY:", os.environ.get("OPENAI_API_KEY"))
+
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+    rest_session = AuthorizedSession(creds)
+
+    gmaps = googlemaps.Client(key=os.environ["GOOGLE_MAPS_API_KEY"])
+    openai.api_key = os.environ["OPENAI_API_KEY"]
+
+    app = FastAPI()
+    app.include_router(some_router)
+
+    print("✅ FastAPI app initialized")
+
+except Exception as e:
+    print("💥 Startup error:")
+    traceback.print_exc()
+    import time
+    time.sleep(30)  # prevent immediate crash
+    raise e
 
 
 from dotenv import load_dotenv
@@ -37,10 +68,9 @@ from backend.firestore_utils import (
 )
 from backend.group_utils import create_group_document, add_user_to_group
 
-app = FastAPI()
 
 
-
+#
 # ----- XP & Level Helpers -----
 # Each level is reached every 1000 XP. Pre-generate a list so we can
 # easily look up the next threshold when returning quest results.
@@ -194,7 +224,7 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY") or os.getenv("MAPS_API_KEY")
+gmaps = googlemaps.Client(key=os.environ["GOOGLE_MAPS_API_KEY"])
 try:
     gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
 except Exception as e:
@@ -213,10 +243,8 @@ db = firestore_v1.Client(
 )
 
 # Session for REST-based Firestore calls
-creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-    scopes=["https://www.googleapis.com/auth/datastore"],
-)
+
+creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
 rest_session = AuthorizedSession(creds)
 
 # Initialize Firebase Admin for user lookups
@@ -1861,7 +1889,7 @@ async def toggle_quest_visibility(payload: dict = Body(...)):
 
     project_id = creds.project_id
     doc_id = f"{quest_id}_{user_id}"
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/community_quests/{doc_id}"
+    url = f"https://firestore.googleapis.com/v1/projects/real-world-quest-app/databases/(default)/documents:runQuery"
     body = {"fields": _encode_fields({"visible": visible})}
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
@@ -1947,29 +1975,43 @@ async def get_community_quests() -> dict[str, list[dict[str, Any]]]:
     }
 
     try:
+        print(f"[📡] Sending Firestore request to {url}")
         resp = await asyncio.to_thread(rest_session.post, url, json=query)
         resp.raise_for_status()
+        print("[✅] Firestore query successful")
     except requests.RequestException as e:
-        print("Firestore REST error:", e.response.text if e.response else str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch community quests")
+        error_msg = e.response.text if e.response else str(e)
+        print("🔥 Firestore REST error:", error_msg)
+        return JSONResponse(status_code=500, content={"error": "Failed to fetch community quests", "details": error_msg})
 
-    raw_results = resp.json()
+    try:
+        raw_results = resp.json()
+    except Exception as e:
+        print("🔥 Failed to parse Firestore response JSON:", str(e))
+        return JSONResponse(status_code=500, content={"error": "Invalid Firestore JSON response"})
+
     quests = []
 
     for entry in raw_results:
         doc = entry.get("document")
         if not doc:
+            print("⚠️ Skipping result: missing 'document' field")
             continue
 
-        data = _decode_document(doc)
+        try:
+            data = _decode_document(doc)
+        except Exception as e:
+            print(f"⚠️ Failed to decode Firestore document: {e}")
+            continue
+
         if data.get("visible") is False:
             continue
 
         data["id"] = doc["name"].split("/")[-1]
         quests.append(data)
 
+    print(f"[🎯] Returning {len(quests)} community quests")
     return {"quests": quests}
-
 
 @app.get("/ugc-feed")
 async def get_ugc_feed(mood: str | None = Query(None), city: str | None = Query(None)):
@@ -3652,3 +3694,6 @@ async def refresh_leaderboards():
 
     return {"status": "ok"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}

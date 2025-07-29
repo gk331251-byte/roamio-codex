@@ -8,12 +8,12 @@ import firebase_admin
 from firebase_admin import auth as fb_auth
 from dotenv import load_dotenv
 load_dotenv()
+import google.auth
+
 
 # Initialize Firestore REST session
-creds = service_account.Credentials.from_service_account_file(
-    os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-    scopes=["https://www.googleapis.com/auth/datastore"],
-)
+creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+
 rest_session = AuthorizedSession(creds)
 PROJECT_ID = creds.project_id
 

@@ -13,6 +13,7 @@ fastapi==0.116.1
 frozenlist==1.7.0
 google-api-core==2.25.1
 google-auth==2.40.3
+google-auth-oauthlib
 google-cloud-core==2.4.3
 google-cloud-firestore==2.21.0
 google-cloud-secret-manager==2.24.0
@@ -47,6 +48,5 @@ typing_extensions==4.14.1
 urllib3==2.5.0
 uvicorn==0.35.0
 yarl==1.20.1
-# Added for AuthorizedSession usage in Firestore REST calls
 google-cloud-storage==2.16.0
 firebase-admin==6.5.0
