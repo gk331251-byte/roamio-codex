@@ -39,7 +39,13 @@ try:
     load_dotenv()
     os.environ["SSL_CERT_FILE"] = certifi.where()
 
-    rest_session, _ = get_authorized_session()
+    try:
+        rest_session, _ = get_authorized_session()
+        print("✅ Firestore AuthorizedSession created")
+    except Exception as cred_err:
+        print("❌ Failed to initialize Firestore session:", cred_err)
+        traceback.print_exc()
+        rest_session = None
 
     gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if gmaps_key:
@@ -265,9 +271,23 @@ db = firestore_v1.Client(
 )
 
 # Session for REST-based Firestore calls
-
-creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
-rest_session = AuthorizedSession(creds)
+if rest_session is None:
+    try:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+        rest_session = AuthorizedSession(creds)
+        print("✅ Firestore REST session created")
+    except Exception as cred_err:
+        print("❌ Failed to initialize Firestore defaults:", cred_err)
+        traceback.print_exc()
+        creds = None
+        rest_session = None
+else:
+    try:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+    except Exception as cred_err:
+        print("❌ Failed to load default credentials for Firestore:", cred_err)
+        traceback.print_exc()
+        creds = None
 
 # Initialize Firebase Admin for user lookups
 if not firebase_admin._apps:
