@@ -4,17 +4,15 @@ import hashlib
 from typing import List, Optional
 from datetime import datetime
 
-# Safe initialization with fallback
-rest_session = None
-PROJECT_ID = "real-world-quest-app"  # fallback
-
+# Use centralized session from auth_utils
 try:
-    from backend.lib.google_utils import get_authorized_session
-    rest_session, PROJECT_ID = get_authorized_session()
-    print("✅ Firestore utils session initialized")
+    from auth_utils import get_rest_session, PROJECT_ID
+    print("✅ Firestore utils using centralized session")
 except Exception as e:
-    print(f"⚠️ Firestore utils session failed: {e}")
-    print("⚠️ Using fallback session - some Firestore features will be disabled")
+    print(f"⚠️ Firestore utils import failed: {e}")
+    # Fallback for testing
+    get_rest_session = lambda: None
+    PROJECT_ID = "real-world-quest-app"
 
 
 def _to_value(val):
@@ -66,6 +64,7 @@ def _decode_document(doc: dict) -> dict:
 
 async def write_custom_quest(data: dict, uid: str) -> str:
     """Write a custom quest document and return generated ID."""
+    rest_session = get_rest_session()
     if not rest_session:
         print("⚠️ No REST session available - cannot write custom quest")
         raise RuntimeError("Firestore not available - missing credentials")
@@ -88,6 +87,7 @@ async def write_custom_quest(data: dict, uid: str) -> str:
 
 async def get_custom_quest(quest_id: str) -> Optional[dict]:
     """Get a custom quest by ID."""
+    rest_session = get_rest_session()
     if not rest_session:
         print("⚠️ No REST session available - cannot get custom quest")
         return None
@@ -105,6 +105,7 @@ async def get_custom_quest(quest_id: str) -> Optional[dict]:
 
 async def query_custom_quests_by_creator(uid: str, public_only: bool = False) -> List[dict]:
     """Query custom quests by creator ID."""
+    rest_session = get_rest_session()
     if not rest_session:
         print("⚠️ No REST session available - cannot query custom quests")
         return []

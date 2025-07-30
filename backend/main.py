@@ -11,52 +11,63 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import sys
 import traceback
-import requests
 import hashlib
+import logging
 from datetime import datetime, timedelta
-import asyncio
 import certifi
 from google.cloud import firestore_v1, storage
 import firebase_admin
 from firebase_admin import auth as fb_auth
 import uvicorn
 from fastapi import FastAPI
-#from backend.routes import some_router  # or routes if running locally
 import openai
 import googlemaps
 from dotenv import load_dotenv
-from backend.auth_utils import get_authorized_session
 
-
-app = FastAPI()
-
-@app.on_event("startup")
-async def startup_event():
-    print("🚀 FastAPI startup complete")
-    print(f"📍 Google Maps available: {gmaps is not None}")
-    print(f"🤖 OpenAI available: {openai.api_key is not None}")
-    print(f"🔥 Firestore available: {rest_session is not None}")
-    print(f"📱 Firebase Admin available: {len(firebase_admin._apps) > 0}")
-if '/app' not in sys.path:
-    sys.path.insert(0, '/app')
-
-# Debug path information
-print(f"🔍 Python path: {sys.path}")
-print(f"🔍 Current working directory: {os.getcwd()}")
-print(f"🔍 Contents of /app: {os.listdir('/app') if os.path.exists('/app') else 'Not found'}")
-print(f"🔍 Contents of /app/backend: {os.listdir('/app/backend') if os.path.exists('/app/backend') else 'Not found'}")    
-
-print("🔥 Starting Roamio backend...")
-print(f"🔍 Python path: {sys.path}")
-print(f"🔍 Working directory: {os.getcwd()}")
-
-# Load environment variables and secrets early
+# Load environment variables early
 load_dotenv()
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
+# Add paths for container deployment
+if '/app' not in sys.path:
+    sys.path.insert(0, '/app')
+
+# Import auth_utils after setting up paths
+from auth_utils import get_rest_session, PROJECT_ID
+
+
+app = FastAPI(title="Roamio Backend API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure as needed for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Configure structured logging for startup diagnostics
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+    ]
+)
+
+# Global startup health tracking
+startup_health = {
+    "startup_time": None,
+    "critical_services_ready": False,
+    "services_status": {},
+    "startup_errors": [],
+    "startup_warnings": []
+}
+
 print("🔐 Loading API keys and credentials...")
 
-# Initialize Google Maps with loaded API key
+# Initialize Google Maps early
 gmaps = None
 gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
 if gmaps_key:
@@ -69,7 +80,7 @@ if gmaps_key:
 else:
     print("❌ GOOGLE_MAPS_API_KEY not found")
 
-# Initialize OpenAI
+# Initialize OpenAI early
 openai_key = os.environ.get("OPENAI_API_KEY")
 if openai_key and openai_key.startswith("sk-"):
     openai.api_key = openai_key
@@ -77,18 +88,7 @@ if openai_key and openai_key.startswith("sk-"):
 else:
     print("⚠️ OpenAI API key not found or invalid")
 
-# Get the REST session for Firestore
-try:
-    rest_session = get_authorized_session()
-    if rest_session:
-        print("✅ Firestore REST session initialized")
-    else:
-        print("❌ Failed to initialize Firestore session")
-except Exception as e:
-    print(f"❌ Firestore session error: {e}")
-    rest_session = None
-
-# Initialize Firebase Admin
+# Initialize Firebase Admin early
 try:
     if not firebase_admin._apps:
         firebase_admin.initialize_app()
@@ -98,13 +98,245 @@ except Exception as e:
 
 print("✅ Backend initialization complete!")
 
+@app.on_event("startup")
+async def startup_event():
+    """Comprehensive startup diagnostics and health checks."""
+    global startup_health
+    logger = logging.getLogger(__name__)
+    
+    startup_health["startup_time"] = datetime.utcnow().isoformat()
+    
+    print("\n" + "="*60)
+    print("🚀 ROAMIO BACKEND STARTUP DIAGNOSTICS")
+    print("="*60)
+    
+    # Track overall health
+    health_checks = []
+    critical_failures = []
+    warnings = []
+    
+    # 1. Environment and Path Diagnostics
+    logger.info("🔍 Environment Diagnostics:")
+    logger.info(f"   Working Directory: {os.getcwd()}")
+    logger.info(f"   Python Version: {sys.version}")
+    logger.info(f"   Environment: {'Cloud Run' if '/app' in sys.path else 'Local Development'}")
+    
+    # 2. Google Cloud Credentials Validation
+    logger.info("🔐 Google Cloud Credentials Check:")
+    try:
+        from auth_utils import get_rest_session, PROJECT_ID
+        rest_session = get_rest_session()
+        
+        if rest_session:
+            logger.info("   ✅ Firestore REST session initialized successfully")
+            logger.info(f"   ✅ Project ID: {PROJECT_ID}")
+            
+            # Test actual Firestore connectivity
+            try:
+                test_url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
+                test_resp = await asyncio.to_thread(rest_session.get, test_url)
+                if test_resp.status_code in [200, 403]:  # 403 means authenticated but no permission
+                    logger.info("   ✅ Firestore connectivity test passed")
+                    health_checks.append("firestore_connection")
+                else:
+                    logger.error(f"   ❌ Firestore connectivity test failed: HTTP {test_resp.status_code}")
+                    critical_failures.append("firestore_connection")
+            except Exception as e:
+                logger.error(f"   ❌ Firestore connectivity test error: {str(e)}")
+                critical_failures.append("firestore_connection")
+                
+        else:
+            logger.error("   ❌ Firestore REST session initialization failed")
+            logger.error("   💡 Check Google Cloud credentials and service account permissions")
+            critical_failures.append("firestore_session")
+            
+    except Exception as e:
+        logger.error(f"   ❌ Google Cloud setup error: {str(e)}")
+        critical_failures.append("gcloud_setup")
+    
+    # 3. Google Maps API Validation
+    logger.info("🗺️  Google Maps API Check:")
+    if gmaps:
+        try:
+            # Test geocoding with a simple query
+            test_geocode = gmaps.geocode("New York, NY")
+            if test_geocode and len(test_geocode) > 0:
+                logger.info("   ✅ Google Maps API working (geocoding test passed)")
+                health_checks.append("google_maps")
+            else:
+                logger.warning("   ⚠️ Google Maps API responding but geocoding test failed")
+                warnings.append("google_maps_geocoding")
+        except Exception as e:
+            logger.error(f"   ❌ Google Maps API test failed: {str(e)}")
+            critical_failures.append("google_maps")
+    else:
+        logger.warning("   ⚠️ Google Maps API not initialized - check GOOGLE_MAPS_API_KEY")
+        warnings.append("google_maps_missing")
+    
+    # 4. OpenAI API Validation
+    logger.info("🤖 OpenAI API Check:")
+    if openai.api_key:
+        logger.info("   ✅ OpenAI API key configured")
+        health_checks.append("openai_configured")
+        # Note: We don't test OpenAI on startup to avoid quota usage
+    else:
+        logger.warning("   ⚠️ OpenAI API key not configured - quest narratives will use fallback")
+        warnings.append("openai_missing")
+    
+    # 5. Firebase Admin SDK Check
+    logger.info("🔥 Firebase Admin SDK Check:")
+    try:
+        if firebase_admin._apps:
+            logger.info("   ✅ Firebase Admin SDK initialized")
+            
+            # Test token verification (without actual token)
+            logger.info("   ✅ Firebase Auth ready for token verification")
+            health_checks.append("firebase_admin")
+        else:
+            logger.error("   ❌ Firebase Admin SDK not initialized")
+            critical_failures.append("firebase_admin")
+    except Exception as e:
+        logger.error(f"   ❌ Firebase Admin SDK error: {str(e)}")
+        critical_failures.append("firebase_admin")
+    
+    # 6. API Keys Security Check
+    logger.info("🔒 Security Configuration Check:")
+    sensitive_vars = ["GOOGLE_MAPS_API_KEY", "OPENAI_API_KEY"]
+    for var in sensitive_vars:
+        value = os.environ.get(var)
+        if value:
+            logger.info(f"   ✅ {var}: Configured (***{value[-4:]})")
+        else:
+            logger.info(f"   ⚠️ {var}: Not configured")
+    
+    # 7. Database Module Dependencies Check
+    logger.info("📦 Module Dependencies Check:")
+    module_status = {
+        "auth_utils": False,
+        "firestore_utils": False, 
+        "group_utils": False,
+        "emotion_utils": False,
+        "stripe_utils": False
+    }
+    
+    for module_name in module_status.keys():
+        try:
+            __import__(module_name)
+            logger.info(f"   ✅ {module_name}: Available")
+            module_status[module_name] = True
+        except ImportError:
+            logger.warning(f"   ⚠️ {module_name}: Import failed - using stubs")
+    
+    # 8. Startup Summary
+    print("\n" + "="*60)
+    print("📊 STARTUP HEALTH SUMMARY")
+    print("="*60)
+    
+    logger.info(f"✅ Services Ready: {len(health_checks)}")
+    for check in health_checks:
+        logger.info(f"   • {check}")
+    
+    if warnings:
+        logger.info(f"⚠️  Warnings: {len(warnings)}")
+        for warning in warnings:
+            logger.info(f"   • {warning}")
+    
+    if critical_failures:
+        logger.error(f"❌ Critical Issues: {len(critical_failures)}")
+        for failure in critical_failures:
+            logger.error(f"   • {failure}")
+        
+        if "firestore_session" in critical_failures or "gcloud_setup" in critical_failures:
+            logger.error("🚨 CRITICAL: Database connectivity failed!")
+            logger.error("   Quest generation for authenticated users will fail")
+            logger.error("   Please check Google Cloud credentials and service account permissions")
+    
+    # Overall health status
+    if len(critical_failures) == 0:
+        logger.info("🎉 STARTUP COMPLETE - All critical services ready!")
+        startup_health["critical_services_ready"] = True
+    elif len(critical_failures) <= 2:
+        logger.warning("⚠️  STARTUP COMPLETE - Some services degraded but functional")
+        startup_health["critical_services_ready"] = False
+    else:
+        logger.error("🚨 STARTUP COMPLETE - Multiple critical failures detected!")
+        startup_health["critical_services_ready"] = False
+    
+    # Store results for health endpoint
+    startup_health["services_status"] = {
+        "ready": health_checks,
+        "warnings": warnings,
+        "critical_failures": critical_failures
+    }
+    startup_health["startup_errors"] = critical_failures
+    startup_health["startup_warnings"] = warnings
+    
+    print("="*60 + "\n")
+
+# Health check endpoint for Cloud Run
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for container orchestration."""
+    current_time = datetime.utcnow().isoformat()
+    
+    # For Cloud Run health checks, we need to be less strict
+    # The server should be considered healthy if core services are working
+    critical_failures = startup_health.get("startup_errors", [])
+    services_ready = startup_health.get("services_status", {}).get("ready", [])
+    
+    # Consider healthy if we have Firebase Admin working (core auth service)
+    # Firestore connection issues shouldn't fail health checks in dev/test environments
+    has_core_services = "firebase_admin" in services_ready
+    firestore_only_failure = critical_failures == ["firestore_connection"]
+    
+    if startup_health.get("critical_services_ready") or has_core_services or firestore_only_failure:
+        return {
+            "status": "healthy",
+            "timestamp": current_time,
+            "startup_time": startup_health.get("startup_time"),
+            "services": startup_health.get("services_status", {}),
+            "uptime_seconds": (datetime.utcnow() - datetime.fromisoformat(startup_health.get("startup_time", current_time))).total_seconds() if startup_health.get("startup_time") else 0,
+            "environment": "development" if not os.path.exists("/secrets") else "production"
+        }
+    else:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "timestamp": current_time,
+                "startup_time": startup_health.get("startup_time"),
+                "services": startup_health.get("services_status", {}),
+                "errors": startup_health.get("startup_errors", []),
+                "warnings": startup_health.get("startup_warnings", []),
+                "environment": "development" if not os.path.exists("/secrets") else "production"
+            }
+        )
+
+@app.get("/")
+async def root():
+    """Root endpoint to confirm the API is running."""
+    return {
+        "message": "Roamio Backend API is running",
+        "status": "operational",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+# Debug path information
+print(f"🔍 Python path: {sys.path}")
+print(f"🔍 Current working directory: {os.getcwd()}")
+print(f"🔍 Contents of /app: {os.listdir('/app') if os.path.exists('/app') else 'Not found'}")
+print(f"🔍 Contents of /app/backend: {os.listdir('/app/backend') if os.path.exists('/app/backend') else 'Not found'}")
+
+# Use centralized session from auth_utils
+rest_session = get_rest_session()
+
 
 # Replace with this safe import block:
 print("🔧 Loading backend modules...")
 
 # Safe imports with error handling
 try:
-    from backend.emotion_utils import generate_filtered_quest_payload
+    from emotion_utils import generate_filtered_quest_payload
     print("✅ emotion_utils loaded")
 except Exception as e:
     print(f"⚠️ emotion_utils failed: {e}")
@@ -112,7 +344,7 @@ except Exception as e:
         return {}
 
 try:
-    from backend.stripe_utils import create_subscription_session, verify_webhook
+    from stripe_utils import create_subscription_session, verify_webhook
     print("✅ stripe_utils loaded")
 except Exception as e:
     print(f"⚠️ stripe_utils failed: {e}")
@@ -122,7 +354,7 @@ except Exception as e:
         raise NotImplementedError("Stripe not available")
 
 try:
-    from backend.auth_utils import (
+    from auth_utils import (
         is_premium_user,
         verify_token,
         require_user,
@@ -130,9 +362,9 @@ try:
         check_not_banned,
         sanitize_input,
     )
-    print("✅ auth_utils loaded")
+    print("✅ auth_utils functions loaded")
 except Exception as e:
-    print(f"⚠️ auth_utils failed: {e}")
+    print(f"⚠️ auth_utils functions failed: {e}")
     # Create stub functions
     async def is_premium_user(uid): return False
     async def verify_token(token): return None
@@ -142,7 +374,7 @@ except Exception as e:
     def sanitize_input(text): return str(text).strip()
 
 try:
-    from backend.firestore_utils import (
+    from firestore_utils import (
         write_custom_quest,
         get_custom_quest as fs_get_custom_quest,
         query_custom_quests_by_creator,
@@ -159,7 +391,7 @@ except Exception as e:
         return []
 
 try:
-    from backend.group_utils import create_group_document, add_user_to_group
+    from group_utils import create_group_document, add_user_to_group
     print("✅ group_utils loaded")
 except Exception as e:
     print(f"⚠️ group_utils failed: {e}")
@@ -360,16 +592,8 @@ except Exception as e:
     print("⚠️ Some Firestore features will be disabled")
     db = None
 
-# Session for REST-based Firestore calls
-if rest_session is None:
-    try:
-        rest_session = get_authorized_session()
-        print("✅ REST session initialized (fallback)")
-    except Exception as e:
-        print(f"⚠️ REST session fallback failed: {e}")
-        rest_session = None
-
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
+# Use centralized session and PROJECT_ID from auth_utils
+# (Already imported above)
 
 
 
@@ -382,6 +606,7 @@ def generate_hash_key(*parts: str) -> str:
 def get_cached_quest(hash_key):
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
+    rest_session = get_rest_session()
     resp = rest_session.get(url)
     if resp.status_code == 200:
         return _decode_document(resp.json())
@@ -392,6 +617,7 @@ def save_quest_to_firestore(hash_key, quest_obj):
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
     body = {"fields": _encode_fields(quest_obj)}
+    rest_session = get_rest_session()
     response = rest_session.patch(url, json=body)
     if response.status_code != 200:
         print("Firestore REST Error:", response.text)
@@ -402,6 +628,7 @@ def get_cached_place(place_id: str) -> dict | None:
     """Retrieve a cached place with tags."""
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
+    rest_session = get_rest_session()
     resp = rest_session.get(url)
     if resp.status_code == 200:
         return _decode_document(resp.json())
@@ -412,6 +639,7 @@ def save_place_to_cache(place_id: str, data: dict):
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
     body = {"fields": _encode_fields(data)}
+    rest_session = get_rest_session()
     resp = rest_session.patch(url, json=body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
@@ -421,6 +649,7 @@ def save_place_to_cache(place_id: str, data: dict):
 def get_user_preferred_tags(user_id: str) -> list[str]:
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    rest_session = get_rest_session()
     resp = rest_session.get(url)
     if resp.status_code == 200:
         doc = _decode_document(resp.json())
@@ -507,6 +736,7 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
 def get_user_preferred_tags(user_id: str) -> list[str]:
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    rest_session = get_rest_session()
     resp = rest_session.get(url)
     if resp.status_code == 200:
         doc = _decode_document(resp.json())
@@ -625,6 +855,72 @@ app.add_middleware(
 def read_root():
     return {"message": "Real-World Quest Generator Backend is working!"}
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring and load balancer probes."""
+    logger = logging.getLogger(__name__)
+    
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": {},
+        "warnings": [],
+        "errors": []
+    }
+    
+    # Check Firestore connectivity
+    try:
+        rest_session = get_rest_session()
+        if rest_session:
+            test_url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
+            test_resp = await asyncio.to_thread(rest_session.get, test_url)
+            if test_resp.status_code in [200, 403]:
+                health_status["services"]["firestore"] = "operational"
+            else:
+                health_status["services"]["firestore"] = "degraded"
+                health_status["errors"].append(f"Firestore HTTP {test_resp.status_code}")
+        else:
+            health_status["services"]["firestore"] = "unavailable"
+            health_status["errors"].append("Firestore session not initialized")
+    except Exception as e:
+        health_status["services"]["firestore"] = "error" 
+        health_status["errors"].append(f"Firestore: {str(e)}")
+    
+    # Check Google Maps API
+    if gmaps:
+        health_status["services"]["google_maps"] = "operational"
+    else:
+        health_status["services"]["google_maps"] = "unavailable"
+        health_status["warnings"].append("Google Maps API not configured")
+    
+    # Check OpenAI
+    if openai.api_key:
+        health_status["services"]["openai"] = "configured"
+    else:
+        health_status["services"]["openai"] = "unavailable"
+        health_status["warnings"].append("OpenAI API not configured")
+    
+    # Check Firebase Admin
+    if firebase_admin._apps:
+        health_status["services"]["firebase_admin"] = "operational"
+    else:
+        health_status["services"]["firebase_admin"] = "unavailable"
+        health_status["errors"].append("Firebase Admin SDK not initialized")
+    
+    # Determine overall status
+    if health_status["errors"]:
+        health_status["status"] = "unhealthy" if len(health_status["errors"]) > 2 else "degraded"
+    elif health_status["warnings"]:
+        health_status["status"] = "degraded"
+    
+    # Return appropriate HTTP status
+    if health_status["status"] == "unhealthy":
+        return JSONResponse(status_code=503, content=health_status)
+    elif health_status["status"] == "degraded":
+        return JSONResponse(status_code=200, content=health_status)
+    else:
+        return health_status
+
 
 @app.post("/generate-quest")
 async def generate_quest(
@@ -638,8 +934,18 @@ async def generate_quest(
     lng: float | None = Body(None),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
+    # Configure request logging
+    request_id = hashlib.md5(f"{user_id or 'anonymous'}-{datetime.utcnow()}".encode()).hexdigest()[:8]
+    logger = logging.getLogger(__name__)
+    logger.info(f"[{request_id}] Quest generation request - city: {city}, moods: {moods}, user: {user_id}")
+    
+    # Validate required parameters
     if not city or not moods:
-        return {"error": "City and mood list are required."}
+        logger.error(f"[{request_id}] Missing required parameters - city: {bool(city)}, moods: {bool(moods)}")
+        return JSONResponse(
+            status_code=400, 
+            content={"error": "City and mood list are required.", "request_id": request_id}
+        )
 
     preferred = get_user_preferred_tags(user_id) if user_id else []
 
@@ -648,62 +954,239 @@ async def generate_quest(
     user_level = 1
     user_age = 0
     prefers_clean = False
+    # Validate session before proceeding with any operations
     if user_id:
-        usage_count = await get_daily_usage(user_id)
-        user_is_premium = await check_premium(user_id)
+        logger.info(f"[{request_id}] Processing authenticated request for user: {user_id}")
+        
+        # Check session availability early
+        rest_session = get_rest_session()
+        if not rest_session:
+            logger.error(f"[{request_id}] Firestore session unavailable - cannot process authenticated request")
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Service temporarily unavailable - database connection failed",
+                    "request_id": request_id,
+                    "retry_after": 30
+                }
+            )
+            
+        try:
+            usage_count = await get_daily_usage(user_id)
+            user_is_premium = await check_premium(user_id)
+            logger.info(f"[{request_id}] User status - premium: {user_is_premium}, usage: {usage_count}")
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Failed to fetch user status: {str(e)}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Failed to validate user account",
+                    "request_id": request_id
+                }
+            )
+            
         if not user_is_premium:
-            # fetch level from Firestore
-            project_id = PROJECT_ID
-            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-            resp = await asyncio.to_thread(rest_session.get, url)
-            if resp.status_code == 200:
-                user_doc = _decode_document(resp.json())
-                user_level = int(user_doc.get("level", 1))
-                dob = user_doc.get("dateOfBirth")
-                if dob:
-                    user_age = calculate_age(dob)
+            try:
+                # fetch level from Firestore
+                project_id = PROJECT_ID
+                url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+                resp = await asyncio.to_thread(rest_session.get, url)
+                
+                if resp.status_code == 200:
+                    user_doc = _decode_document(resp.json())
+                    user_level = int(user_doc.get("level", 1))
+                    dob = user_doc.get("dateOfBirth")
+                    if dob:
+                        user_age = calculate_age(dob)
+                    else:
+                        user_age = int(user_doc.get("age", 0))
+                    prefers_clean = bool(user_doc.get("prefersCleanMode", False))
+                    logger.info(f"[{request_id}] User profile - level: {user_level}, age: {user_age}, clean: {prefers_clean}")
+                elif resp.status_code == 404:
+                    logger.warning(f"[{request_id}] User document not found - using defaults")
                 else:
-                    user_age = int(user_doc.get("age", 0))
-                prefers_clean = bool(user_doc.get("prefersCleanMode", False))
+                    logger.error(f"[{request_id}] Failed to fetch user document - status: {resp.status_code}")
+                    
+            except Exception as e:
+                logger.error(f"[{request_id}] Error fetching user profile: {str(e)}")
+                # Continue with defaults rather than failing
+                
             if usage_count >= 3:
+                logger.info(f"[{request_id}] Daily limit reached for user: {user_id} ({usage_count}/3)")
                 return JSONResponse(
-                    status_code=403, content={"error": "Daily quest limit reached"}
+                    status_code=403, 
+                    content={
+                        "error": "Daily quest limit reached", 
+                        "request_id": request_id,
+                        "usage_count": usage_count,
+                        "limit": 3
+                    }
                 )
+                
             # difficulty gating
             req_diff = difficulty.title()
             required_level = (
                 1 if req_diff == "Easy" else 3 if req_diff == "Medium" else 6
             )
             if user_level < required_level:
+                logger.info(f"[{request_id}] Difficulty locked - user level {user_level} < required {required_level}")
                 raise HTTPException(
                     status_code=403,
                     detail="You haven't unlocked {} quests yet.".format(req_diff),
                 )
+    else:
+        logger.info(f"[{request_id}] Processing anonymous request")
 
+    # Geocoding with comprehensive error handling
     try:
         if lat is not None and lng is not None:
+            logger.info(f"[{request_id}] Using provided coordinates: {lat}, {lng}")
             city_location = {"lat": float(lat), "lng": float(lng)}
         else:
+            logger.info(f"[{request_id}] Geocoding city: {city}")
+            
+            # Check if gmaps client is available
+            if not gmaps:
+                logger.error(f"[{request_id}] Google Maps client not initialized")
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Location services temporarily unavailable",
+                        "request_id": request_id,
+                        "detail": "Google Maps API not configured"
+                    }
+                )
+                
             geocode = gmaps.geocode(city)
+            
+            if not geocode or len(geocode) == 0:
+                logger.error(f"[{request_id}] No geocoding results for city: {city}")
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Location not found",
+                        "request_id": request_id,
+                        "city": city,
+                        "suggestion": "Please check the city name and try again"
+                    }
+                )
+                
             city_location = geocode[0]["geometry"]["location"]
+            logger.info(f"[{request_id}] Geocoded to: {city_location}")
+            
+    except googlemaps.exceptions.ApiError as e:
+        logger.error(f"[{request_id}] Google Maps API error: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Location service error",
+                "request_id": request_id,
+                "detail": "Google Maps API quota exceeded or invalid API key"
+            }
+        )
+    except googlemaps.exceptions.Timeout as e:
+        logger.error(f"[{request_id}] Google Maps timeout: {e}")
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": "Location service timeout",
+                "request_id": request_id,
+                "detail": "Please try again in a moment"
+            }
+        )
     except Exception as e:
-        print(f"Geocoding error: {e}")
-        return {"error": "Failed to locate city center."}
+        logger.error(f"[{request_id}] Geocoding error: {str(e)}")
+        logger.error(f"[{request_id}] Geocoding traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to locate city center",
+                "request_id": request_id,
+                "city": city
+            }
+        )
 
+    # Places API search with comprehensive error handling and fallback
     attempts = 0
     fallback_city = None
     selected = []
+    places_results = []
+    
+    logger.info(f"[{request_id}] Starting Places API search near {city_location}")
+    
     while attempts < 2:
         try:
+            logger.info(f"[{request_id}] Places API attempt {attempts + 1}/2")
+            
+            # Validate gmaps client before making request
+            if not gmaps:
+                logger.error(f"[{request_id}] Google Maps client not available for Places API")
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Places service temporarily unavailable",
+                        "request_id": request_id,
+                        "detail": "Google Maps API client not configured"
+                    }
+                )
+            
             response = gmaps.places_nearby(
                 location=(city_location["lat"], city_location["lng"]),
                 radius=2000,
                 type="tourist_attraction",
             )
             places_results = response.get("results", [])
+            logger.info(f"[{request_id}] Places API returned {len(places_results)} results")
+            
+            if len(places_results) == 0:
+                logger.warning(f"[{request_id}] No places found for location {city_location}")
+            break
+            
+        except googlemaps.exceptions.ApiError as e:
+            logger.error(f"[{request_id}] Places API error (attempt {attempts + 1}): {e}")
+            if "OVER_QUERY_LIMIT" in str(e):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Service temporarily overloaded",
+                        "request_id": request_id,
+                        "detail": "Please try again later",
+                        "retry_after": 60
+                    }
+                )
+            elif "REQUEST_DENIED" in str(e):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Places service configuration error",
+                        "request_id": request_id,
+                        "detail": "API access denied"
+                    }
+                )
+        except googlemaps.exceptions.Timeout as e:
+            logger.error(f"[{request_id}] Places API timeout (attempt {attempts + 1}): {e}")
+            if attempts == 1:  # Last attempt
+                return JSONResponse(
+                    status_code=504,
+                    content={
+                        "error": "Places service timeout",
+                        "request_id": request_id,
+                        "detail": "Service taking too long to respond"
+                    }
+                )
         except Exception as e:
-            print(f"Places API error: {e}")
-            return {"error": "Failed to fetch places"}
+            logger.error(f"[{request_id}] Places API unexpected error (attempt {attempts + 1}): {str(e)}")
+            logger.error(f"[{request_id}] Places API traceback: {traceback.format_exc()}")
+            if attempts == 1:  # Last attempt
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Failed to fetch nearby places",
+                        "request_id": request_id,
+                        "location": city
+                    }
+                )
 
         candidates = []
         for place in places_results:
@@ -756,7 +1239,9 @@ async def generate_quest(
                     }
                 )
             except Exception as e:
-                print("Skipping place", e)
+                logger.warning(f"[{request_id}] Skipping place due to processing error: {str(e)}")
+                
+        logger.info(f"[{request_id}] Processed {len(places_results)} places, found {len(candidates)} candidates")
         candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
 
         selected = []
@@ -769,39 +1254,72 @@ async def generate_quest(
             if len(selected) >= 5:
                 break
 
+        logger.info(f"[{request_id}] Selected {len(selected)} diverse places for quest")
+        
         if len(selected) >= 3:
             break
 
+        # Try fallback city if not enough places found
         fallback_city = CITY_FALLBACK_MAP.get(city.lower())
         if not fallback_city:
+            logger.warning(f"[{request_id}] No fallback city available for {city}")
             break
+            
+        logger.info(f"[{request_id}] Trying fallback city: {fallback_city}")
         attempts += 1
+        
         try:
             geo = gmaps.geocode(fallback_city)
+            if not geo or len(geo) == 0:
+                logger.error(f"[{request_id}] Fallback city geocoding failed: no results")
+                break
             city_location = geo[0]["geometry"]["location"]
             city = fallback_city
+            logger.info(f"[{request_id}] Fallback geocoding successful: {city_location}")
         except Exception as e:
-            print("Fallback geocode error", e)
+            logger.error(f"[{request_id}] Fallback geocode error: {str(e)}")
             break
 
+    # Final validation of selected places
     if len(selected) < 3:
-        return {"error": "Not enough matching places"}
+        logger.error(f"[{request_id}] Insufficient places found - only {len(selected)}/3 required")
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "Not enough suitable places found",
+                "request_id": request_id,
+                "places_found": len(selected),
+                "places_required": 3,
+                "location": city,
+                "suggestion": "Try a different city or adjust your preferences"
+            }
+        )
+    
+    logger.info(f"[{request_id}] Quest generation proceeding with {len(selected)} places")
 
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
     hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
-    cached = get_cached_quest(hash_key)
-    if cached:
-        if ((user_age and user_age < 21) or prefers_clean) and "age21+" in cached.get(
-            "tags", []
-        ):
-            cached = None
-    if cached:
-        print("Using cached quest")
-        result = {"quest": cached}
-        if fallback_city:
-            result["fallbackCity"] = fallback_city
-        return result
+    # Check for cached quest with proper error handling
+    try:
+        cached = get_cached_quest(hash_key)
+        if cached:
+            if ((user_age and user_age < 21) or prefers_clean) and "age21+" in cached.get(
+                "tags", []
+            ):
+                cached = None
+                logger.info(f"[{request_id}] Cached quest filtered out due to age restrictions")
+        if cached:
+            logger.info(f"[{request_id}] Using cached quest: {hash_key}")
+            result = {"quest": cached, "request_id": request_id}
+            if fallback_city:
+                result["fallbackCity"] = fallback_city
+            return result
+        else:
+            logger.info(f"[{request_id}] No cached quest found, generating new one")
+    except Exception as e:
+        logger.error(f"[{request_id}] Error checking quest cache: {str(e)}")
+        # Continue with quest generation instead of failing
 
     if lat is not None and lng is not None:
         origin = f"{lat},{lng}"
@@ -811,7 +1329,21 @@ async def generate_quest(
         waypoints = [f"{p['lat']},{p['lng']}" for p in selected[1:-1]]
     destination = f"{selected[-1]['lat']},{selected[-1]['lng']}"
 
+    # Generate route with comprehensive error handling
+    logger.info(f"[{request_id}] Generating walking directions for {len(selected)} places")
+    
     try:
+        if not gmaps:
+            logger.error(f"[{request_id}] Google Maps client not available for directions")
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Directions service temporarily unavailable",
+                    "request_id": request_id,
+                    "detail": "Google Maps API client not configured"
+                }
+            )
+            
         directions = gmaps.directions(
             origin,
             destination,
@@ -819,9 +1351,50 @@ async def generate_quest(
             optimize_waypoints=True,
             mode="walking",
         )
+        
+        if not directions or len(directions) == 0:
+            logger.error(f"[{request_id}] No directions found for route")
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "Unable to create walking route",
+                    "request_id": request_id,
+                    "detail": "Places may be too far apart or unreachable on foot"
+                }
+            )
+            
+        logger.info(f"[{request_id}] Successfully generated directions")
+        
+    except googlemaps.exceptions.ApiError as e:
+        logger.error(f"[{request_id}] Directions API error: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Directions service error",
+                "request_id": request_id,
+                "detail": "Google Directions API error"
+            }
+        )
+    except googlemaps.exceptions.Timeout as e:
+        logger.error(f"[{request_id}] Directions timeout: {e}")
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": "Directions service timeout",
+                "request_id": request_id,
+                "detail": "Route calculation taking too long"
+            }
+        )
     except Exception as e:
-        print("Directions error", e)
-        raise HTTPException(status_code=500, detail="Failed to retrieve directions")
+        logger.error(f"[{request_id}] Directions error: {str(e)}")
+        logger.error(f"[{request_id}] Directions traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to retrieve directions",
+                "request_id": request_id
+            }
+        )
 
     route = directions[0]
     waypoint_order = route.get("waypoint_order", [])
@@ -852,24 +1425,30 @@ async def generate_quest(
         [sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"]
     )
 
+    # Generate quest narrative with error handling
     if openai.api_key:
         prompt = (
             f"Write a short playful quest including these places: {place_names}. "
             f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
         )
+        logger.info(f"[{request_id}] Generating quest narrative with OpenAI")
+        
         try:
             completion = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
             )
             quest_text = completion.choices[0].message.content.strip()
+            logger.info(f"[{request_id}] Successfully generated quest narrative")
         except Exception as e:
-            print("OpenAI error", e)
+            logger.error(f"[{request_id}] OpenAI error: {str(e)}")
             quest_text = (
                 f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
                 f"and ends at {ordered[-1]['name']}!"
             )
+            logger.info(f"[{request_id}] Using fallback quest narrative")
     else:
+        logger.info(f"[{request_id}] OpenAI not configured, using default narrative")
         quest_text = (
             f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
             f"and ends at {ordered[-1]['name']}!"
@@ -911,12 +1490,29 @@ async def generate_quest(
         "flagged": False,
     }
 
-    save_quest_to_firestore(hash_key, quest_obj)
+    # Save quest and update usage with error handling
+    try:
+        logger.info(f"[{request_id}] Saving quest to Firestore")
+        save_quest_to_firestore(hash_key, quest_obj)
+        logger.info(f"[{request_id}] Quest saved successfully")
+    except Exception as e:
+        logger.error(f"[{request_id}] Failed to save quest to Firestore: {str(e)}")
+        # Continue anyway - user gets quest even if caching fails
+        
     if user_id:
-        await increment_daily_usage(user_id)
-    result = {"quest": quest_obj}
+        try:
+            await increment_daily_usage(user_id)
+            logger.info(f"[{request_id}] Updated daily usage for user: {user_id}")
+        except Exception as e:
+            logger.error(f"[{request_id}] Failed to increment daily usage: {str(e)}")
+            # Continue anyway - user gets quest even if usage tracking fails
+    
+    # Prepare final response
+    result = {"quest": quest_obj, "request_id": request_id}
     if fallback_city:
         result["fallbackCity"] = fallback_city
+        
+    logger.info(f"[{request_id}] Quest generation completed successfully")
     return result
 
 
@@ -992,6 +1588,7 @@ async def log_admin_event(event: str, payload: dict):
             }
         )
     }
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, url, json=body)
 
 
@@ -1019,6 +1616,7 @@ async def increment_daily_usage(user_id: str) -> int:
         count = int(doc.get("count", 0))
     count += 1
     body = {"fields": _encode_fields({"count": count})}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return count
 
@@ -1183,6 +1781,7 @@ async def complete_quest(payload: dict = Body(...)):
         }
     )
     quest_body = {"fields": _encode_fields(quest_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, quest_url, json=quest_body)
 
     user_update = {
@@ -1211,7 +1810,8 @@ async def complete_quest(payload: dict = Body(...)):
                 }
             )
         }
-        await asyncio.to_thread(rest_session.patch, b_url, json=body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, b_url, json=body)
 
     postcard_url = None
     prompt_raw = (
@@ -1239,7 +1839,8 @@ async def complete_quest(payload: dict = Body(...)):
     if postcard_url:
         quest_doc["postcardUrl"] = postcard_url
         patch_body = {"fields": _encode_fields({"postcardUrl": postcard_url})}
-        await asyncio.to_thread(rest_session.patch, quest_url, json=patch_body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, quest_url, json=patch_body)
 
     if payload.get("public"):
         feed_id = f"{quest_id}_{user_id}"
@@ -1352,6 +1953,7 @@ def test_write():
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
     body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
+    rest_session = get_rest_session()
     resp = rest_session.patch(url, json=body)
     if resp.status_code == 200:
         return {"status": "Document written!"}
@@ -1624,6 +2226,7 @@ async def create_group_quest(
     }
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_body = {"fields": _encode_fields(active_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     return {"groupId": group_id}
@@ -1665,6 +2268,7 @@ async def join_group(
         "startedAt": datetime.utcnow().isoformat(),
     }
     active_body = {"fields": _encode_fields(active_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     return {"status": "joined", "questId": group_doc.get("questId")}
@@ -1708,7 +2312,8 @@ async def track_stop_visit(
         progress[user_id] = user_progress
         fields["progress"] = progress
         body = {"fields": _encode_fields(fields)}
-        await asyncio.to_thread(rest_session.patch, group_url, json=body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, group_url, json=body)
 
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_resp = await asyncio.to_thread(rest_session.get, active_url)
@@ -1724,6 +2329,7 @@ async def track_stop_visit(
         }
     )
     active_body = {"fields": _encode_fields(active_fields)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     # ----- XP & Badges -----
@@ -1768,6 +2374,7 @@ async def track_stop_visit(
             }
         )
     }
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, user_url, json=user_body)
 
     return {
@@ -1807,6 +2414,7 @@ async def complete_group_quest(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     fields["completed"] = True
     body = {"fields": _encode_fields(fields)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, group_url, json=body)
 
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
@@ -1816,6 +2424,7 @@ async def complete_group_quest(
         "status": "completed",
     }
     active_body = {"fields": _encode_fields(active_fields)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     return {"status": "completed"}
@@ -1851,6 +2460,7 @@ async def get_active_quest(user_id: str):
             group_ok = not gdata.get("completed")
 
     if not quest_ok or not group_ok:
+        rest_session = get_rest_session()
         await asyncio.to_thread(rest_session.delete, url)
         return {}
 
@@ -1993,9 +2603,11 @@ async def leave_group(payload: dict = Body(...)):
         progress.pop(user_id, None)
         fields.update({"members": members, "progress": progress})
         body = {"fields": _encode_fields(fields)}
-        await asyncio.to_thread(rest_session.patch, group_url, json=body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, group_url, json=body)
 
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.delete, active_url)
     return {"status": "left"}
 
@@ -2332,7 +2944,8 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
         if premium:
             fields["isPremium"] = True
             body = {"fields": _encode_fields(fields)}
-            await asyncio.to_thread(rest_session.patch, user_url, json=body)
+            rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"isPremium": premium}
 
@@ -2376,6 +2989,7 @@ async def stripe_webhook(request: Request):
                 uid = user.uid
                 project_id = PROJECT_ID
                 url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
+                rest_session = get_rest_session()
                 resp = await asyncio.to_thread(rest_session.get, url)
                 fields = (
                     _decode_document(resp.json()) if resp.status_code == 200 else {}
@@ -2383,6 +2997,7 @@ async def stripe_webhook(request: Request):
                 if not fields.get("isPremium"):
                     fields["isPremium"] = True
                     body = {"fields": _encode_fields(fields)}
+                    rest_session = get_rest_session()
                     await asyncio.to_thread(rest_session.patch, url, json=body)
                     await log_admin_event(
                         "stripe_checkout", {"uid": uid, "session": session.get("id")}
@@ -2623,7 +3238,8 @@ async def like_quest(
         data = _decode_document(qresp.json())
         count = data.get("likesCount", 0) + 1
         patch = {"fields": _encode_fields({"likesCount": count})}
-        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
     return {"status": "liked"}
 
@@ -2645,6 +3261,7 @@ async def view_quest(
     resp = await asyncio.to_thread(rest_session.get, view_doc)
     if resp.status_code == 404:
         body = {"fields": _encode_fields({"timestamp": datetime.utcnow().isoformat()})}
+        rest_session = get_rest_session()
         await asyncio.to_thread(rest_session.patch, view_doc, json=body)
 
         quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{quest_id}"
@@ -2653,7 +3270,8 @@ async def view_quest(
             data = _decode_document(qresp.json())
             count = data.get("viewsCount", 0) + 1
             patch = {"fields": _encode_fields({"viewsCount": count})}
-            await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+            rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
     return {"status": "viewed"}
 
@@ -2672,7 +3290,8 @@ async def replay_quest(payload: dict = Body(...)):
         data = _decode_document(qresp.json())
         count = data.get("replaysCount", 0) + 1
         patch = {"fields": _encode_fields({"replaysCount": count})}
-        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
     return {"status": "replayed"}
 
@@ -2724,7 +3343,8 @@ async def join_community_group(payload: dict = Body(...)):
         members.append(user_id)
         data["members"] = members
         body = {"fields": _encode_fields(data)}
-        await asyncio.to_thread(rest_session.patch, url, json=body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "joined"}
 
 
@@ -2749,6 +3369,7 @@ async def link_quest_to_group(payload: dict = Body(...)):
         data["upcoming_quest"] = quest_id
     data["linked_quests"] = linked
     body = {"fields": _encode_fields(data)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, url, json=body)
     return {"status": "linked"}
 
@@ -3027,7 +3648,8 @@ async def replay_quest(payload: dict = Body(...)):
     if "replaysCount" in quest_data:
         count = quest_data.get("replaysCount", 0) + 1
         patch = {"fields": _encode_fields({"replaysCount": count})}
-        await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, quest_url, json=patch)
 
     new_id = hashlib.sha1(
         f"{user_id}-{datetime.utcnow()}-{quest_id}".encode()
@@ -3039,6 +3661,7 @@ async def replay_quest(payload: dict = Body(...)):
     }
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{new_id}"
     body = {"fields": _encode_fields(user_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"quest": quest_data, "userQuestId": new_id}
@@ -3068,6 +3691,7 @@ async def remix_quest(payload: dict = Body(...)):
     project_id = PROJECT_ID
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
     body = {"fields": _encode_fields(user_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, user_url, json=body)
 
     return {"quest": quest, "userQuestId": quest_id}
@@ -3113,6 +3737,7 @@ async def create_community(payload: dict = Body(...)):
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{owner_id}/joinedCommunities/{community_id}"
     join_doc = {"communityId": community_id, "joinedAt": created_at}
     join_body = {"fields": _encode_fields(join_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, user_url, json=join_body)
 
     return {"communityId": community_id}
@@ -3140,11 +3765,13 @@ async def join_community(payload: dict = Body(...)):
         updated = True
     if updated:
         body = {"fields": _encode_fields(data)}
-        await asyncio.to_thread(rest_session.patch, url, json=body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, url, json=body)
 
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/joinedCommunities/{community_id}"
     join_doc = {"communityId": community_id, "joinedAt": datetime.utcnow().isoformat()}
     join_body = {"fields": _encode_fields(join_doc)}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, user_url, json=join_body)
 
     return {"status": "joined"}
@@ -3168,7 +3795,8 @@ async def publish_to_community(payload: dict = Body(...)):
         refs.append(quest_id)
         data["questRefs"] = refs
         body = {"fields": _encode_fields(data)}
-        await asyncio.to_thread(rest_session.patch, url, json=body)
+        rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, url, json=body)
 
     return {"status": "published"}
 
@@ -3391,6 +4019,7 @@ async def admin_resolve_report(payload: dict = Body(...)):
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/reports/{report_id}"
     patch = {"fields": _encode_fields({"resolved": True})}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, url, json=patch)
     return {"status": "resolved"}
 
@@ -3406,6 +4035,7 @@ async def admin_delete_quest(payload: dict = Body(...)):
         return {"error": "questId required"}
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/{'custom_quests' if qtype=='custom' else 'quests'}/{quest_id}"
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.delete, url)
     return {"status": "deleted"}
 
@@ -3421,6 +4051,7 @@ async def admin_ban_user(payload: dict = Body(...)):
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{target_id}"
     patch = {"fields": _encode_fields({"banned": True})}
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, url, json=patch)
     return {"status": "banned"}
 
@@ -3640,7 +4271,8 @@ async def submit_featured_quest(
         if quest_id not in ids:
             ids.append(quest_id)
             patch = {"fields": _encode_fields({"featuredQuestIds": ids})}
-            await asyncio.to_thread(rest_session.patch, creator_url, json=patch)
+            rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, creator_url, json=patch)
 
     return {"questId": quest_id}
 
@@ -3856,6 +4488,7 @@ async def admin_delete_custom_quest(
         return JSONResponse(status_code=403, content={"error": "Access denied"})
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/custom_quests/{questId}"
+    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.delete, url)
     await log_admin_event("admin_delete_custom", {"admin": userId, "questId": questId})
     return {"status": "deleted"}
@@ -3954,15 +4587,16 @@ async def refresh_leaderboards():
             doc_id = f"{lb_type}_{period}"
             doc_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/leaderboards/{doc_id}"
             body = {"fields": _encode_fields({"lastUpdated": now, "entries": entries})}
-            await asyncio.to_thread(rest_session.patch, doc_url, json=body)
+            rest_session = get_rest_session()
+    await asyncio.to_thread(rest_session.patch, doc_url, json=body)
 
     return {"status": "ok"}
 
 
 @app.get("/status")
-@app.get("/health")
 @app.get("/healthz")
-def health_check():
+def simple_health_check():
+    """Simple health check for basic monitoring."""
     return {"status": "ok"}
 
 

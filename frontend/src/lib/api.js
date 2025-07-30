@@ -17,24 +17,35 @@ export async function generateQuest(city, mood, timeLimit, token, userId, startL
 
   const url = `${BASE_URL}/generate-quest`;
 
+  // Build the payload correctly for the backend
+  const payload = {
+    city,
+    moods: mood,  // Backend expects 'moods', not 'mood'
+    time_limit: timeLimit,
+    token,
+    user_id: userId,
+    difficulty,
+  };
+
+  // Add lat/lng if startLocation is provided
+  if (startLocation && startLocation.lat && startLocation.lng) {
+    payload.lat = parseFloat(startLocation.lat);
+    payload.lng = parseFloat(startLocation.lng);
+  }
+
+  console.log('🚀 Sending quest payload:', payload); // Debug log
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      city,
-      moods: mood,
-      time_limit: timeLimit,
-      token,
-      user_id: userId,
-      start_location: startLocation,
-      difficulty,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error('❌ Backend error:', errorText);
     throw new Error(`Failed to generate quest: ${errorText}`);
   }
 

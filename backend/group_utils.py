@@ -4,10 +4,8 @@ from datetime import datetime
 from typing import Tuple
 import asyncio
 
-from backend.lib.google_utils import get_authorized_session
-from backend.firestore_utils import _encode_fields, _decode_document
-
-rest_session, PROJECT_ID = get_authorized_session()
+from auth_utils import get_rest_session, PROJECT_ID
+from firestore_utils import _encode_fields, _decode_document
 
 async def create_group_document(user_id: str, quest_id: str, display_name: str) -> Tuple[str, dict]:
     """Helper to create group quest and return groupId and document body."""
@@ -23,6 +21,7 @@ async def create_group_document(user_id: str, quest_id: str, display_name: str) 
     }
     url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/group_quests/{group_id}"
     body = {"fields": _encode_fields(group_doc)}
+    rest_session = get_rest_session()
     resp = await asyncio.to_thread(rest_session.patch, url, json=body)
     if resp.status_code != 200:
         print("Firestore REST error", resp.text)
@@ -35,6 +34,7 @@ async def add_user_to_group(user_id: str, group_id: str, display_name: str) -> d
         f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/"
         f"databases/(default)/documents/group_quests/{group_id}"
     )
+    rest_session = get_rest_session()
     resp = await asyncio.to_thread(rest_session.get, url)
     if resp.status_code != 200:
         raise RuntimeError("Group not found")

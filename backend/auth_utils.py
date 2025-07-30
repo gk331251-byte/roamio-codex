@@ -88,21 +88,35 @@ def load_api_keys():
         print("⚠️ OpenAI API key not found")
 
 
-# Initialize session - but don't crash if it fails
-rest_session = None
-try:
-    # Load API keys first
-    load_api_keys()
+# Centralized session management
+_rest_session = None
+_session_initialized = False
+
+def get_rest_session():
+    """Get the global REST session, initializing it if necessary."""
+    global _rest_session, _session_initialized
     
-    # Initialize session
-    rest_session = get_authorized_session()
-    if rest_session:
-        print("✅ REST session initialized")
-    else:
-        print("⚠️ REST session is None - some features will be disabled")
-except Exception as e:
-    print(f"⚠️ REST session initialization failed: {e}")
-    rest_session = None
+    if not _session_initialized:
+        try:
+            # Load API keys first
+            load_api_keys()
+            
+            # Initialize session
+            _rest_session = get_authorized_session()
+            if _rest_session:
+                print("✅ REST session initialized (centralized)")
+            else:
+                print("⚠️ REST session is None - some features will be disabled")
+        except Exception as e:
+            print(f"⚠️ REST session initialization failed: {e}")
+            _rest_session = None
+        finally:
+            _session_initialized = True
+    
+    return _rest_session
+
+# Backward compatibility - initialize on import
+rest_session = get_rest_session()
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 
