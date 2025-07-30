@@ -4,6 +4,7 @@ import asyncio
 import re
 from fastapi import Depends, HTTPException, Request
 from google.auth.transport.requests import AuthorizedSession
+import requests
 from google.oauth2 import service_account
 from google.auth import default
 import firebase_admin
@@ -52,7 +53,8 @@ def get_authorized_session():
         return AuthorizedSession(creds)
     except Exception as e:
         print(f"⚠️ Failed to load default credentials: {e}")
-        return None
+        print("⚠️ Falling back to unauthenticated session")
+        return requests.Session()
 
 
 def load_secret_from_file(secret_path: str, env_var_name: str) -> str | None:

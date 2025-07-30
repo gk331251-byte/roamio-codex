@@ -14,7 +14,7 @@ if '/app' not in sys.path:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def test_auth_utils_import():
-    """Test importing get_rest_session from auth_utils."""
+    """Test importing get_rest_session from backend.auth_utils."""
     print("🧪 Testing auth_utils import...")
     
     try:
@@ -38,7 +38,7 @@ def test_auth_utils_import():
             return False
             
         print("  Attempting direct import like line 36...")
-        from auth_utils import get_rest_session, PROJECT_ID
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         print("  ✅ Direct import successful")
         
         print("  Testing function call...")
@@ -67,13 +67,13 @@ def test_circular_import():
         print("  ✅ FastAPI imported successfully")
         
         print("  Testing auth_utils import...")
-        from auth_utils import get_rest_session
+        from backend.auth_utils import get_rest_session
         print("  ✅ auth_utils imported successfully")
         
         print("  Testing combined import (simulating main.py)...")
         # This simulates what main.py does
         from fastapi import FastAPI
-        from auth_utils import get_rest_session, PROJECT_ID
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         
         app = FastAPI()
         session = get_rest_session()

@@ -78,8 +78,8 @@ def test_container_environment():
                     sys.path.insert(0, backend_dir)
                 
                 # Now test the import
-                print("    Executing: from auth_utils import get_rest_session, PROJECT_ID")
-                from auth_utils import get_rest_session, PROJECT_ID
+                print("    Executing: from backend.auth_utils import get_rest_session, PROJECT_ID")
+                from backend.auth_utils import get_rest_session, PROJECT_ID
                 
                 print("    ✅ Container environment import successful!")
                 print(f"    get_rest_session: {callable(get_rest_session)}")
@@ -126,7 +126,7 @@ def test_docker_python_path():
         
         # Test import
         print("  Testing import with Docker paths...")
-        from auth_utils import get_rest_session, PROJECT_ID
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         
         print("  ✅ Docker path import successful!")
         return True

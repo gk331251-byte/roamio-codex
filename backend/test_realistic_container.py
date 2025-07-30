@@ -42,8 +42,8 @@ def test_dockerfile_environment():
         os.environ["SSL_CERT_FILE"] = certifi.where()
         
         # This is the critical line 36 test
-        print("  Executing line 36: from auth_utils import get_rest_session, PROJECT_ID")
-        from auth_utils import get_rest_session, PROJECT_ID
+        print("  Executing line 36: from backend.auth_utils import get_rest_session, PROJECT_ID")
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         
         print("  ✅ Dockerfile environment import successful!")
         print(f"  get_rest_session: {callable(get_rest_session)}")
@@ -123,7 +123,7 @@ def test_import_order():
         for module in modules_to_remove:
             del sys.modules[module]
         
-        from auth_utils import get_rest_session, PROJECT_ID
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         print("  ✅ Test 1 passed")
         
         # Test 2: Import FastAPI components first, then auth_utils
@@ -135,7 +135,7 @@ def test_import_order():
             del sys.modules[module]
         
         from fastapi import FastAPI, HTTPException
-        from auth_utils import get_rest_session, PROJECT_ID
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         print("  ✅ Test 2 passed")
         
         return True
