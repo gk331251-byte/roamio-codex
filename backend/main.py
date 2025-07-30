@@ -21,7 +21,7 @@ import firebase_admin
 from firebase_admin import auth as fb_auth
 import uvicorn
 from fastapi import FastAPI
-from backend.routes import some_router  # or routes if running locally
+#from backend.routes import some_router  # or routes if running locally
 import openai
 import googlemaps
 from dotenv import load_dotenv
@@ -30,78 +30,146 @@ from backend.auth_utils import get_authorized_session
 
 app = FastAPI()
 
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 FastAPI startup complete")
+    print(f"📍 Google Maps available: {gmaps is not None}")
+    print(f"🤖 OpenAI available: {openai.api_key is not None}")
+    print(f"🔥 Firestore available: {rest_session is not None}")
+    print(f"📱 Firebase Admin available: {len(firebase_admin._apps) > 0}")
+if '/app' not in sys.path:
+    sys.path.insert(0, '/app')
 
-print("🔐 Attempting to get rest_session")
-session = get_authorized_session()
-rest_session = session
-if not rest_session:
-    print("❌ Could not initialize rest_session. Exiting.")
-    sys.exit(1)
+# Debug path information
+print(f"🔍 Python path: {sys.path}")
+print(f"🔍 Current working directory: {os.getcwd()}")
+print(f"🔍 Contents of /app: {os.listdir('/app') if os.path.exists('/app') else 'Not found'}")
+print(f"🔍 Contents of /app/backend: {os.listdir('/app/backend') if os.path.exists('/app/backend') else 'Not found'}")    
 
+print("🔥 Starting Roamio backend...")
+print(f"🔍 Python path: {sys.path}")
+print(f"🔍 Working directory: {os.getcwd()}")
 
-def log_startup_debug():
-    print("🔥 DEBUG: Starting FastAPI app")
-    print("🔑 GOOGLE_MAPS_API_KEY set:", bool(os.environ.get("GOOGLE_MAPS_API_KEY")))
-    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    print(
-        "🔑 GOOGLE_APPLICATION_CREDENTIALS path:", cred_path or "(using Secret Manager)"
-    )
-    print("⚙️  PORT:", os.environ.get("PORT", "8080"))
+# Load environment variables and secrets early
+load_dotenv()
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
+print("🔐 Loading API keys and credentials...")
 
-try:
-    log_startup_debug()
-    load_dotenv()
-    os.environ["SSL_CERT_FILE"] = certifi.where()
-
-    gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
-    if gmaps_key:
-        try:
-            gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
-            print("✅ Google Maps Client initialized")
-        except Exception as e:
-            print("❌ Google Maps init failed:", e)
-            gmaps = None
-    else:
-        print("❌ GOOGLE_MAPS_API_KEY not set")
+# Initialize Google Maps with loaded API key
+gmaps = None
+gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+if gmaps_key:
+    try:
+        gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
+        print("✅ Google Maps Client initialized")
+    except Exception as e:
+        print(f"❌ Google Maps init failed: {e}")
         gmaps = None
+else:
+    print("❌ GOOGLE_MAPS_API_KEY not found")
 
+# Initialize OpenAI
+openai_key = os.environ.get("OPENAI_API_KEY")
+if openai_key and openai_key.startswith("sk-"):
+    openai.api_key = openai_key
+    print("✅ OpenAI API key set")
+else:
+    print("⚠️ OpenAI API key not found or invalid")
+
+# Get the REST session for Firestore
+try:
+    rest_session = get_authorized_session()
+    if rest_session:
+        print("✅ Firestore REST session initialized")
+    else:
+        print("❌ Failed to initialize Firestore session")
+except Exception as e:
+    print(f"❌ Firestore session error: {e}")
+    rest_session = None
+
+# Initialize Firebase Admin
+try:
     if not firebase_admin._apps:
         firebase_admin.initialize_app()
-    print("✅ Firebase Admin initialized")
-
-    openai.api_key = os.environ.get("OPENAI_API_KEY")
-
-    app.include_router(some_router)
-
-    print("✅ FastAPI app initialized")
-    if os.environ.get("DIAG_SLEEP") == "1":
-        print("⏳ Sleeping 60s for diagnostics...")
-        import time
-
-        time.sleep(60)
-
+        print("✅ Firebase Admin initialized")
 except Exception as e:
-    print("💥 FATAL STARTUP ERROR 💥")
-    traceback.print_exc()
-    raise e
+    print(f"❌ Firebase Admin init failed: {e}")
 
-from backend.emotion_utils import generate_filtered_quest_payload
-from backend.stripe_utils import create_subscription_session, verify_webhook
-from backend.auth_utils import (
-    is_premium_user,
-    verify_token,
-    require_user,
-    require_admin,
-    check_not_banned,
-    sanitize_input,
-)
-from backend.firestore_utils import (
-    write_custom_quest,
-    get_custom_quest as fs_get_custom_quest,
-    query_custom_quests_by_creator,
-)
-from backend.group_utils import create_group_document, add_user_to_group
+print("✅ Backend initialization complete!")
+
+
+# Replace with this safe import block:
+print("🔧 Loading backend modules...")
+
+# Safe imports with error handling
+try:
+    from backend.emotion_utils import generate_filtered_quest_payload
+    print("✅ emotion_utils loaded")
+except Exception as e:
+    print(f"⚠️ emotion_utils failed: {e}")
+    def generate_filtered_quest_payload(*args, **kwargs):
+        return {}
+
+try:
+    from backend.stripe_utils import create_subscription_session, verify_webhook
+    print("✅ stripe_utils loaded")
+except Exception as e:
+    print(f"⚠️ stripe_utils failed: {e}")
+    def create_subscription_session(*args, **kwargs):
+        raise NotImplementedError("Stripe not available")
+    def verify_webhook(*args, **kwargs):
+        raise NotImplementedError("Stripe not available")
+
+try:
+    from backend.auth_utils import (
+        is_premium_user,
+        verify_token,
+        require_user,
+        require_admin,
+        check_not_banned,
+        sanitize_input,
+    )
+    print("✅ auth_utils loaded")
+except Exception as e:
+    print(f"⚠️ auth_utils failed: {e}")
+    # Create stub functions
+    async def is_premium_user(uid): return False
+    async def verify_token(token): return None
+    async def require_user(request): raise HTTPException(401, "Auth disabled")
+    async def require_admin(uid): raise HTTPException(403, "Auth disabled")
+    async def check_not_banned(uid): return uid
+    def sanitize_input(text): return str(text).strip()
+
+try:
+    from backend.firestore_utils import (
+        write_custom_quest,
+        get_custom_quest as fs_get_custom_quest,
+        query_custom_quests_by_creator,
+    )
+    print("✅ firestore_utils loaded")
+except Exception as e:
+    print(f"⚠️ firestore_utils failed: {e}")
+    # Create stub functions
+    async def write_custom_quest(data, uid):
+        raise NotImplementedError("Firestore not available")
+    async def fs_get_custom_quest(quest_id):
+        return None
+    async def query_custom_quests_by_creator(creator_id, public_only=False):
+        return []
+
+try:
+    from backend.group_utils import create_group_document, add_user_to_group
+    print("✅ group_utils loaded")
+except Exception as e:
+    print(f"⚠️ group_utils failed: {e}")
+    # Create stub functions
+    async def create_group_document(user_id, quest_id, display_name):
+        raise NotImplementedError("Group utils not available")
+    async def add_user_to_group(user_id, group_id, display_name):
+        raise NotImplementedError("Group utils not available")
+
+print("🔧 Backend modules loading complete")
 
 
 #
@@ -261,12 +329,18 @@ if "CODEX_PROXY_URL" in os.environ:
 
 # === Load API keys from env (Codex-compatible) ===
 #
-gmaps = googlemaps.Client(key=os.environ["GOOGLE_MAPS_API_KEY"])
-try:
-    gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
-except Exception as e:
-    print("Google Maps disabled:", e)
-    gmaps = None
+if not gmaps:
+    try:
+        gmaps_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+        if gmaps_key:
+            gmaps = googlemaps.Client(key=gmaps_key, timeout=10)
+            print("✅ Google Maps Client initialized (fallback)")
+        else:
+            print("❌ No Google Maps key for fallback init")
+            gmaps = None
+    except Exception as e:
+        print("Google Maps fallback disabled:", e)
+        gmaps = None
 openai_key = os.getenv("OPENAI_API_KEY")
 if openai_key and openai_key.startswith("sk-"):
     openai.api_key = openai_key
@@ -275,19 +349,28 @@ else:
 
 # === Initialize Firestore using REST transport to avoid gRPC SSL issues ===
 
-db = firestore_v1.Client(
-    client_options={"api_endpoint": "https://firestore.googleapis.com"}
-)
+db = None
+try:
+    db = firestore_v1.Client(
+        client_options={"api_endpoint": "https://firestore.googleapis.com"}
+    )
+    print("✅ Firestore client initialized")
+except Exception as e:
+    print(f"⚠️ Firestore client initialization failed: {e}")
+    print("⚠️ Some Firestore features will be disabled")
+    db = None
 
 # Session for REST-based Firestore calls
 if rest_session is None:
-    rest_session = get_authorized_session()
+    try:
+        rest_session = get_authorized_session()
+        print("✅ REST session initialized (fallback)")
+    except Exception as e:
+        print(f"⚠️ REST session fallback failed: {e}")
+        rest_session = None
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 
-# Initialize Firebase Admin for user lookups
-if not firebase_admin._apps:
-    firebase_admin.initialize_app()
 
 
 def generate_hash_key(*parts: str) -> str:
@@ -645,7 +728,7 @@ async def generate_quest(
                     "bar" in tags
                     or "night-club" in tags
                     or "liquor-store" in tags
-                    or typ in ["bar", "night_club"]
+                    or place.get("types", ["Unknown"])[0] in ["bar", "night_club"]
                 )
                 if (user_age and user_age < 21) or prefers_clean:
                     if is_restricted:
@@ -1379,6 +1462,7 @@ async def track_visit(payload: dict = Body(...)):
         new_badges.append("adventurer")
     if stats.get("totalQuestsCompleted", 0) >= 5:
         new_badges.append("explorer")
+    badge_list = user_data.get("badgesUnlocked", [])
     unlocked_now = compute_badge_unlocks(stats, level, badge_list)
     new_badges.extend([b for b in unlocked_now if b not in new_badges])
     for b in new_badges:
@@ -1665,6 +1749,7 @@ async def track_stop_visit(
         new_badges.append("adventurer")
     if stats.get("totalQuestsCompleted", 0) >= 5:
         new_badges.append("explorer")
+    badge_list = user_data.get("badgesUnlocked", [])
     unlocked_now = compute_badge_unlocks(stats, level, badge_list)
     new_badges.extend([b for b in unlocked_now if b not in new_badges])
     for b in new_badges:
@@ -3883,4 +3968,5 @@ def health_check():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    print(f"🚀 Starting server on port {port}")
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")

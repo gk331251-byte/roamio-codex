@@ -3,9 +3,18 @@ import asyncio
 import hashlib
 from typing import List, Optional
 from datetime import datetime
-from backend.lib.google_utils import get_authorized_session
 
-rest_session, PROJECT_ID = get_authorized_session()
+# Safe initialization with fallback
+rest_session = None
+PROJECT_ID = "real-world-quest-app"  # fallback
+
+try:
+    from backend.lib.google_utils import get_authorized_session
+    rest_session, PROJECT_ID = get_authorized_session()
+    print("✅ Firestore utils session initialized")
+except Exception as e:
+    print(f"⚠️ Firestore utils session failed: {e}")
+    print("⚠️ Using fallback session - some Firestore features will be disabled")
 
 
 def _to_value(val):
@@ -57,70 +66,96 @@ def _decode_document(doc: dict) -> dict:
 
 async def write_custom_quest(data: dict, uid: str) -> str:
     """Write a custom quest document and return generated ID."""
-    quest_id = hashlib.sha1(f"{uid}-{os.urandom(8).hex()}".encode()).hexdigest()[:12]
-    data = dict(data)
-    data["creatorId"] = uid
-    data["createdAt"] = datetime.utcnow().isoformat()
-    body = {"fields": _encode_fields(data)}
-    url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/custom_quests/{quest_id}"
-    resp = await asyncio.to_thread(rest_session.patch, url, json=body)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Firestore error {resp.text}")
-    return quest_id
+    if not rest_session:
+        print("⚠️ No REST session available - cannot write custom quest")
+        raise RuntimeError("Firestore not available - missing credentials")
+    
+    try:
+        quest_id = hashlib.sha1(f"{uid}-{os.urandom(8).hex()}".encode()).hexdigest()[:12]
+        data = dict(data)
+        data["creatorId"] = uid
+        data["createdAt"] = datetime.utcnow().isoformat()
+        body = {"fields": _encode_fields(data)}
+        url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/custom_quests/{quest_id}"
+        resp = await asyncio.to_thread(rest_session.patch, url, json=body)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Firestore error {resp.text}")
+        return quest_id
+    except Exception as e:
+        print(f"⚠️ Error writing custom quest: {e}")
+        raise RuntimeError(f"Failed to write custom quest: {str(e)}")
 
 
 async def get_custom_quest(quest_id: str) -> Optional[dict]:
-    url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/custom_quests/{quest_id}"
-    resp = await asyncio.to_thread(rest_session.get, url)
-    if resp.status_code != 200:
+    """Get a custom quest by ID."""
+    if not rest_session:
+        print("⚠️ No REST session available - cannot get custom quest")
         return None
-    return _decode_document(resp.json())
+    
+    try:
+        url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/custom_quests/{quest_id}"
+        resp = await asyncio.to_thread(rest_session.get, url)
+        if resp.status_code != 200:
+            return None
+        return _decode_document(resp.json())
+    except Exception as e:
+        print(f"⚠️ Error getting custom quest: {e}")
+        return None
 
 
 async def query_custom_quests_by_creator(uid: str, public_only: bool = False) -> List[dict]:
-    query = {
-        "structuredQuery": {
-            "from": [{"collectionId": "custom_quests"}],
-            "where": {
-                "fieldFilter": {
-                    "field": {"fieldPath": "creatorId"},
-                    "op": "EQUAL",
-                    "value": {"stringValue": uid},
-                }
-            },
-        }
-    }
-    if public_only:
-        query["structuredQuery"]["where"] = {
-            "compositeFilter": {
-                "op": "AND",
-                "filters": [
-                    {
-                        "fieldFilter": {
-                            "field": {"fieldPath": "creatorId"},
-                            "op": "EQUAL",
-                            "value": {"stringValue": uid},
-                        }
-                    },
-                    {
-                        "fieldFilter": {
-                            "field": {"fieldPath": "isPublic"},
-                            "op": "EQUAL",
-                            "value": {"booleanValue": True},
-                        }
-                    },
-                ]
+    """Query custom quests by creator ID."""
+    if not rest_session:
+        print("⚠️ No REST session available - cannot query custom quests")
+        return []
+    
+    try:
+        query = {
+            "structuredQuery": {
+                "from": [{"collectionId": "custom_quests"}],
+                "where": {
+                    "fieldFilter": {
+                        "field": {"fieldPath": "creatorId"},
+                        "op": "EQUAL",
+                        "value": {"stringValue": uid},
+                    }
+                },
             }
         }
-    url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents:runQuery"
-    resp = await asyncio.to_thread(rest_session.post, url, json=query)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Firestore error {resp.text}")
-    results = []
-    for item in resp.json():
-        doc = item.get("document")
-        if doc:
-            obj = _decode_document(doc)
-            obj["id"] = doc["name"].split("/")[-1]
-            results.append(obj)
-    return results
+        if public_only:
+            query["structuredQuery"]["where"] = {
+                "compositeFilter": {
+                    "op": "AND",
+                    "filters": [
+                        {
+                            "fieldFilter": {
+                                "field": {"fieldPath": "creatorId"},
+                                "op": "EQUAL",
+                                "value": {"stringValue": uid},
+                            }
+                        },
+                        {
+                            "fieldFilter": {
+                                "field": {"fieldPath": "isPublic"},
+                                "op": "EQUAL",
+                                "value": {"booleanValue": True},
+                            }
+                        },
+                    ]
+                }
+            }
+        url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents:runQuery"
+        resp = await asyncio.to_thread(rest_session.post, url, json=query)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Firestore error {resp.text}")
+        results = []
+        for item in resp.json():
+            doc = item.get("document")
+            if doc:
+                obj = _decode_document(doc)
+                obj["id"] = doc["name"].split("/")[-1]
+                results.append(obj)
+        return results
+    except Exception as e:
+        print(f"⚠️ Error querying custom quests: {e}")
+        return []
