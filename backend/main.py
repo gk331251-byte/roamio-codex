@@ -33,7 +33,7 @@ if '/app' not in sys.path:
     sys.path.insert(0, '/app')
 
 # Import auth_utils after setting up paths
-from auth_utils import get_rest_session, PROJECT_ID
+from auth_utils import get_rest_session, PROJECT_ID, rest_session
 
 
 app = FastAPI(title="Roamio Backend API", version="1.0.0")
@@ -124,17 +124,16 @@ async def startup_event():
     # 2. Google Cloud Credentials Validation
     logger.info("🔐 Google Cloud Credentials Check:")
     try:
-        from auth_utils import get_rest_session, PROJECT_ID
-        rest_session = get_rest_session()
-        
-        if rest_session:
+        session = get_rest_session()
+
+        if session:
             logger.info("   ✅ Firestore REST session initialized successfully")
             logger.info(f"   ✅ Project ID: {PROJECT_ID}")
-            
+
             # Test actual Firestore connectivity
             try:
                 test_url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
-                test_resp = await asyncio.to_thread(rest_session.get, test_url)
+                test_resp = await asyncio.to_thread(session.get, test_url)
                 if test_resp.status_code in [200, 403]:  # 403 means authenticated but no permission
                     logger.info("   ✅ Firestore connectivity test passed")
                     health_checks.append("firestore_connection")
@@ -325,10 +324,11 @@ async def root():
 print(f"🔍 Python path: {sys.path}")
 print(f"🔍 Current working directory: {os.getcwd()}")
 print(f"🔍 Contents of /app: {os.listdir('/app') if os.path.exists('/app') else 'Not found'}")
+
 print(f"🔍 Contents of /app/backend: {os.listdir('/app/backend') if os.path.exists('/app/backend') else 'Not found'}")
 
 # Use centralized session from auth_utils
-rest_session = get_rest_session()
+# `rest_session` imported above is initialized in auth_utils
 
 
 # Replace with this safe import block:
@@ -1588,8 +1588,8 @@ async def log_admin_event(event: str, payload: dict):
             }
         )
     }
-    rest_session = get_rest_session()
-    await asyncio.to_thread(rest_session.patch, url, json=body)
+    session = get_rest_session()
+    await asyncio.to_thread(session.patch, url, json=body)
 
 
 async def get_daily_usage(user_id: str) -> int:
@@ -1616,8 +1616,8 @@ async def increment_daily_usage(user_id: str) -> int:
         count = int(doc.get("count", 0))
     count += 1
     body = {"fields": _encode_fields({"count": count})}
-    rest_session = get_rest_session()
-    await asyncio.to_thread(rest_session.patch, url, json=body)
+    session = get_rest_session()
+    await asyncio.to_thread(session.patch, url, json=body)
     return count
 
 
