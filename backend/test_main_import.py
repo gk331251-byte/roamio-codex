@@ -27,7 +27,7 @@ def test_main_py_line_36():
         print("  Environment setup complete")
         
         # Test the exact import from line 36
-        print("  Executing: from auth_utils import get_rest_session, PROJECT_ID")
+        print("  Executing: from backend.auth_utils import get_rest_session, PROJECT_ID")
         from backend.auth_utils import get_rest_session, PROJECT_ID
         
         print("  ✅ Line 36 import successful!")

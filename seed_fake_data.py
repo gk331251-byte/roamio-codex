@@ -4,7 +4,7 @@ import random
 from datetime import datetime
 from uuid import uuid4
 
-from backend.lib.google_utils import get_authorized_session
+from backend.auth_utils import get_rest_session, PROJECT_ID
 
 try:
     from faker import Faker
@@ -14,8 +14,8 @@ except Exception:
 
 from backend.firestore_utils import _encode_fields
 
-# Initialize REST session using service account or default credentials
-rest_session, PROJECT_ID = get_authorized_session()
+# Initialize REST session using centralized auth utils
+rest_session = get_rest_session()
 BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
 
 NAMES = [

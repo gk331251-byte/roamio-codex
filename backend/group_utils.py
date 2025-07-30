@@ -5,7 +5,7 @@ from typing import Tuple
 import asyncio
 
 from backend.auth_utils import get_rest_session, PROJECT_ID
-from firestore_utils import _encode_fields, _decode_document
+from backend.firestore_utils import _encode_fields, _decode_document
 
 async def create_group_document(user_id: str, quest_id: str, display_name: str) -> Tuple[str, dict]:
     """Helper to create group quest and return groupId and document body."""

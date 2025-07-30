@@ -4,15 +4,8 @@ import hashlib
 from typing import List, Optional
 from datetime import datetime
 
-# Use centralized session from auth_utils
-try:
-    from backend.auth_utils import get_rest_session, PROJECT_ID
-    print("✅ Firestore utils using centralized session")
-except Exception as e:
-    print(f"⚠️ Firestore utils import failed: {e}")
-    # Fallback for testing
-    get_rest_session = lambda: None
-    PROJECT_ID = "real-world-quest-app"
+# Use centralized session from backend.auth_utils
+from backend.auth_utils import get_rest_session, PROJECT_ID
 
 
 def _to_value(val):

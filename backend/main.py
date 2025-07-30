@@ -327,8 +327,8 @@ print(f"🔍 Contents of /app: {os.listdir('/app') if os.path.exists('/app') els
 
 print(f"🔍 Contents of /app/backend: {os.listdir('/app/backend') if os.path.exists('/app/backend') else 'Not found'}")
 
-# Use centralized session from auth_utils
-# `rest_session` imported above is initialized in auth_utils
+# Use centralized session from backend.auth_utils
+# `rest_session` imported above is initialized in backend.auth_utils
 
 
 # Replace with this safe import block:
@@ -374,7 +374,7 @@ except Exception as e:
     def sanitize_input(text): return str(text).strip()
 
 try:
-    from firestore_utils import (
+    from backend.firestore_utils import (
         write_custom_quest,
         get_custom_quest as fs_get_custom_quest,
         query_custom_quests_by_creator,
@@ -391,7 +391,7 @@ except Exception as e:
         return []
 
 try:
-    from group_utils import create_group_document, add_user_to_group
+    from backend.group_utils import create_group_document, add_user_to_group
     print("✅ group_utils loaded")
 except Exception as e:
     print(f"⚠️ group_utils failed: {e}")
@@ -592,7 +592,7 @@ except Exception as e:
     print("⚠️ Some Firestore features will be disabled")
     db = None
 
-# Use centralized session and PROJECT_ID from auth_utils
+# Use centralized session and PROJECT_ID from backend.auth_utils
 # (Already imported above)
 
 
