@@ -58,12 +58,11 @@ def _decode_document(doc: dict) -> dict:
 async def write_custom_quest(data: dict, uid: str) -> str:
     """Write a custom quest document and return generated ID."""
     rest_session = get_rest_session()
-    if not rest_session:
-        print("⚠️ No REST session available - cannot write custom quest")
-        raise RuntimeError("Firestore not available - missing credentials")
-    
+
     try:
-        quest_id = hashlib.sha1(f"{uid}-{os.urandom(8).hex()}".encode()).hexdigest()[:12]
+        quest_id = hashlib.sha1(f"{uid}-{os.urandom(8).hex()}".encode()).hexdigest()[
+            :12
+        ]
         data = dict(data)
         data["creatorId"] = uid
         data["createdAt"] = datetime.utcnow().isoformat()
@@ -81,10 +80,7 @@ async def write_custom_quest(data: dict, uid: str) -> str:
 async def get_custom_quest(quest_id: str) -> Optional[dict]:
     """Get a custom quest by ID."""
     rest_session = get_rest_session()
-    if not rest_session:
-        print("⚠️ No REST session available - cannot get custom quest")
-        return None
-    
+
     try:
         url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/custom_quests/{quest_id}"
         resp = await asyncio.to_thread(rest_session.get, url)
@@ -96,13 +92,12 @@ async def get_custom_quest(quest_id: str) -> Optional[dict]:
         return None
 
 
-async def query_custom_quests_by_creator(uid: str, public_only: bool = False) -> List[dict]:
+async def query_custom_quests_by_creator(
+    uid: str, public_only: bool = False
+) -> List[dict]:
     """Query custom quests by creator ID."""
     rest_session = get_rest_session()
-    if not rest_session:
-        print("⚠️ No REST session available - cannot query custom quests")
-        return []
-    
+
     try:
         query = {
             "structuredQuery": {
@@ -135,7 +130,7 @@ async def query_custom_quests_by_creator(uid: str, public_only: bool = False) ->
                                 "value": {"booleanValue": True},
                             }
                         },
-                    ]
+                    ],
                 }
             }
         url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents:runQuery"
