@@ -116,7 +116,24 @@ def get_rest_session():
     return _rest_session
 
 # Backward compatibility - initialize on import
-rest_session = get_rest_session()
+# auth_utils.py
+_rest_session = None
+_session_initialized = False
+
+def get_rest_session():
+    global _rest_session, _session_initialized
+    if not _session_initialized:
+        try:
+            load_api_keys()
+            _rest_session = get_authorized_session()
+            _session_initialized = True
+            print("✅ Lazy REST session initialized")
+        except Exception as e:
+            print(f"❌ REST session error: {e}")
+    return _rest_session
+
+# DO NOT do this:
+# rest_session = get_rest_session()
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") or "real-world-quest-app"
 

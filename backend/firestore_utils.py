@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Use centralized session from auth_utils
 try:
-    from auth_utils import get_rest_session, PROJECT_ID
+    from backend.auth_utils import get_rest_session, PROJECT_ID
     print("✅ Firestore utils using centralized session")
 except Exception as e:
     print(f"⚠️ Firestore utils import failed: {e}")

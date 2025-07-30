@@ -33,7 +33,7 @@ if '/app' not in sys.path:
     sys.path.insert(0, '/app')
 
 # Import auth_utils after setting up paths
-from auth_utils import get_rest_session, PROJECT_ID, rest_session
+from backend.auth_utils import get_rest_session, PROJECT_ID
 
 
 app = FastAPI(title="Roamio Backend API", version="1.0.0")
@@ -354,7 +354,7 @@ except Exception as e:
         raise NotImplementedError("Stripe not available")
 
 try:
-    from auth_utils import (
+    from backend.auth_utils import (
         is_premium_user,
         verify_token,
         require_user,

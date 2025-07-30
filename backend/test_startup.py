@@ -18,7 +18,7 @@ def test_imports():
     
     try:
         print("  Testing auth_utils...")
-        from auth_utils import get_rest_session, PROJECT_ID
+        from backend.auth_utils import get_rest_session, PROJECT_ID
         print("  ✅ auth_utils imported successfully")
     except Exception as e:
         print(f"  ❌ auth_utils failed: {e}")
