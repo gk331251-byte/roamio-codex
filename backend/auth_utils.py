@@ -13,15 +13,15 @@ from firebase_admin import auth as fb_auth
 
 def get_authorized_session():
     """Return an AuthorizedSession using credentials from Cloud Run secrets or default."""
-    
+
     # First, try to read from Cloud Run mounted secret
     secret_path = "/secrets/firestore/key"
     if os.path.exists(secret_path):
         print("✅ Using Cloud Run mounted secret for credentials")
         try:
-            with open(secret_path, 'r') as f:
+            with open(secret_path, "r") as f:
                 secret_data = json.load(f)
-            
+
             creds = service_account.Credentials.from_service_account_info(
                 secret_data,
                 scopes=["https://www.googleapis.com/auth/datastore"],
@@ -30,7 +30,7 @@ def get_authorized_session():
             return AuthorizedSession(creds)
         except Exception as e:
             print(f"⚠️ Failed to load Cloud Run secret: {e}")
-    
+
     # Fallback to environment variable path
     secret_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if secret_path and os.path.exists(secret_path):
@@ -44,7 +44,7 @@ def get_authorized_session():
             return AuthorizedSession(creds)
         except Exception as e:
             print(f"⚠️ Failed to load credentials from file: {e}")
-    
+
     # Fallback to default credentials (for Cloud Run with service account)
     try:
         print("⚠️ Trying default credentials")
@@ -62,11 +62,11 @@ def load_secret_from_file(secret_path: str, env_var_name: str) -> str | None:
     # Try Cloud Run mounted secret first
     if os.path.exists(secret_path):
         try:
-            with open(secret_path, 'r') as f:
+            with open(secret_path, "r") as f:
                 return f.read().strip()
         except Exception as e:
             print(f"⚠️ Failed to read secret from {secret_path}: {e}")
-    
+
     # Fallback to environment variable
     return os.environ.get(env_var_name)
 
@@ -74,15 +74,17 @@ def load_secret_from_file(secret_path: str, env_var_name: str) -> str | None:
 # Load API keys from secrets or environment
 def load_api_keys():
     """Load API keys from Cloud Run secrets or environment variables."""
-    google_maps_key = load_secret_from_file("/secrets/places/key", "GOOGLE_MAPS_API_KEY")
+    google_maps_key = load_secret_from_file(
+        "/secrets/places/key", "GOOGLE_MAPS_API_KEY"
+    )
     openai_key = load_secret_from_file("/secrets/openai/key", "OPENAI_API_KEY")
-    
+
     if google_maps_key:
         os.environ["GOOGLE_MAPS_API_KEY"] = google_maps_key
         print("✅ Google Maps API key loaded")
     else:
         print("⚠️ Google Maps API key not found")
-    
+
     if openai_key:
         os.environ["OPENAI_API_KEY"] = openai_key
         print("✅ OpenAI API key loaded")
@@ -91,48 +93,28 @@ def load_api_keys():
 
 
 # Centralized session management
-_rest_session = None
+_rest_session: AuthorizedSession | None = None
 _session_initialized = False
 
-def get_rest_session():
-    """Get the global REST session, initializing it if necessary."""
-    global _rest_session, _session_initialized
-    
-    if not _session_initialized:
-        try:
-            # Load API keys first
-            load_api_keys()
-            
-            # Initialize session
-            _rest_session = get_authorized_session()
-            if _rest_session:
-                print("✅ REST session initialized (centralized)")
-            else:
-                print("⚠️ REST session is None - some features will be disabled")
-        except Exception as e:
-            print(f"⚠️ REST session initialization failed: {e}")
-            _rest_session = None
-        finally:
-            _session_initialized = True
-    
-    return _rest_session
 
-# Backward compatibility - initialize on import
-# auth_utils.py
-_rest_session = None
-_session_initialized = False
-
-def get_rest_session():
+def get_rest_session() -> AuthorizedSession:
+    """Return the global REST session or raise if initialization fails."""
     global _rest_session, _session_initialized
-    if not _session_initialized:
+
+    if not _session_initialized or _rest_session is None:
         try:
             load_api_keys()
             _rest_session = get_authorized_session()
+            if not _rest_session:
+                raise RuntimeError("REST session could not be created")
+            print("✅ REST session initialized")
             _session_initialized = True
-            print("✅ Lazy REST session initialized")
-        except Exception as e:
-            print(f"❌ REST session error: {e}")
+        except Exception as e:  # noqa: PERF203
+            _session_initialized = False
+            raise RuntimeError(f"REST session initialization failed: {e}") from e
+
     return _rest_session
+
 
 # DO NOT do this:
 # rest_session = get_rest_session()
@@ -175,13 +157,15 @@ def _decode_document(doc: dict) -> dict:
 
 async def is_premium_user(uid: str) -> bool:
     """Check the user's premium status from Firestore."""
-    if not rest_session:
-        print("⚠️ No REST session available - cannot check premium status")
+    try:
+        session = get_rest_session()
+    except Exception as e:
+        print(f"⚠️ No REST session available - cannot check premium status: {e}")
         return False
-    
+
     try:
         url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/users/{uid}"
-        resp = await asyncio.to_thread(rest_session.get, url)
+        resp = await asyncio.to_thread(session.get, url)
         if resp.status_code == 200:
             data = _decode_document(resp.json())
             return data.get("isPremium") is True
@@ -201,7 +185,7 @@ async def verify_token(auth_header: str | None) -> str | None:
         if not firebase_admin._apps:
             print("⚠️ Firebase Admin not initialized - cannot verify token")
             return None
-            
+
         decoded = await asyncio.to_thread(fb_auth.verify_id_token, token)
         return decoded.get("uid")
     except Exception as e:
@@ -219,7 +203,7 @@ async def verify_token_info(auth_header: str | None) -> tuple[str | None, bool]:
         if not firebase_admin._apps:
             print("⚠️ Firebase Admin not initialized - cannot verify token info")
             return None, False
-            
+
         decoded = await asyncio.to_thread(fb_auth.verify_id_token, token)
         provider = decoded.get("firebase", {}).get("sign_in_provider")
         return decoded.get("uid"), provider == "anonymous"
@@ -229,13 +213,15 @@ async def verify_token_info(auth_header: str | None) -> tuple[str | None, bool]:
 
 
 async def _get_user_doc(uid: str) -> dict | None:
-    if not rest_session:
-        print("⚠️ No REST session available - cannot get user doc")
+    try:
+        session = get_rest_session()
+    except Exception as e:
+        print(f"⚠️ No REST session available - cannot get user doc: {e}")
         return None
-    
+
     try:
         url = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents/users/{uid}"
-        resp = await asyncio.to_thread(rest_session.get, url)
+        resp = await asyncio.to_thread(session.get, url)
         if resp.status_code == 200:
             return _decode_document(resp.json())
         return None
