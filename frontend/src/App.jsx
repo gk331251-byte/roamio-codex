@@ -79,6 +79,9 @@ function App() {
           } else if (!quest || !groupOk) {
             if (data.groupId) await leaveGroup(data.groupId, user.uid);
           }
+        } else if (location.pathname === '/') {
+          // If user is onboarded and on landing page, redirect to main quest interface
+          navigate('/home');
         }
       } catch (err) {
         console.error('resume failed', err);

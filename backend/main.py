@@ -33,7 +33,10 @@ if "/app" not in sys.path:
     sys.path.insert(0, "/app")
 
 # Import auth_utils after setting up paths
-from backend.auth_utils import get_rest_session, PROJECT_ID
+try:
+    from backend.auth_utils import get_rest_session, PROJECT_ID
+except ImportError:
+    from auth_utils import get_rest_session, PROJECT_ID
 
 
 app = FastAPI(title="Roamio Backend API", version="1.0.0")
@@ -41,6 +44,8 @@ app = FastAPI(title="Roamio Backend API", version="1.0.0")
 # Add CORS middleware
 allowed_origins = [
     os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"),
+    "http://localhost:5174",  # Additional port for development
+    "http://localhost:3000",  # Common React dev port
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -1011,6 +1016,14 @@ async def generate_quest(
     lng: float | None = Body(None),
 ):
     """Generate a quest using tag-based filtering and optional GPT text."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     # Configure request logging
     request_id = hashlib.md5(
         f"{user_id or 'anonymous'}-{datetime.utcnow()}".encode()
@@ -1214,6 +1227,7 @@ async def generate_quest(
     fallback_city = None
     selected = []
     places_results = []
+    candidates = []  # Initialize candidates outside the loop to prevent UnboundLocalError
 
     logger.info(f"[{request_id}] Starting Places API search near {city_location}")
 
@@ -1304,6 +1318,7 @@ async def generate_quest(
                     },
                 )
 
+        # Process places results after successful API call
         candidates = []
         for place in places_results:
             try:
@@ -1699,6 +1714,10 @@ def _decode_document(doc: dict) -> dict:
 
 async def check_premium(user_id: str) -> bool:
     """Return True if the user has premium status."""
+    rest_session = get_rest_session()
+    if not rest_session:
+        return False
+    
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -1728,6 +1747,10 @@ async def log_admin_event(event: str, payload: dict):
 
 async def get_daily_usage(user_id: str) -> int:
     """Retrieve today's quest generation count for the user."""
+    rest_session = get_rest_session()
+    if not rest_session:
+        return 0
+    
     today = datetime.utcnow().strftime("%Y-%m-%d")
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
@@ -1740,6 +1763,10 @@ async def get_daily_usage(user_id: str) -> int:
 
 async def increment_daily_usage(user_id: str) -> int:
     """Increment and return today's quest generation count."""
+    rest_session = get_rest_session()
+    if not rest_session:
+        return 0
+    
     today = datetime.utcnow().strftime("%Y-%m-%d")
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
@@ -2132,6 +2159,14 @@ async def get_user_quests(userId: str = Query(...)):
 @app.get("/get-quest/{quest_id}")
 async def get_quest(quest_id: str):
     """Fetch a quest document via Firestore REST."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2144,6 +2179,14 @@ async def get_quest(quest_id: str):
 @app.post("/track-visit")
 async def track_visit(payload: dict = Body(...)):
     """Update visited quest indices and award XP."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     place_index = payload.get("placeIndex")
@@ -2379,6 +2422,14 @@ async def join_group(
         return {"error": "userId and groupId required"}
     await check_not_banned(uid)
 
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+
     project_id = PROJECT_ID
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_resp = await asyncio.to_thread(rest_session.get, active_url)
@@ -2414,6 +2465,14 @@ async def track_stop_visit(
     uid: str = Depends(require_user),
 ):
     """Track a stop visit for a group quest."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     group_id = payload.get("groupId")
     user_id = payload.get("userId")
     place_index = payload.get("placeIndex")
@@ -2446,8 +2505,7 @@ async def track_stop_visit(
         progress[user_id] = user_progress
         fields["progress"] = progress
         body = {"fields": _encode_fields(fields)}
-        rest_session = get_rest_session()
-    await asyncio.to_thread(rest_session.patch, group_url, json=body)
+        await asyncio.to_thread(rest_session.patch, group_url, json=body)
 
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     active_resp = await asyncio.to_thread(rest_session.get, active_url)
@@ -2463,7 +2521,6 @@ async def track_stop_visit(
         }
     )
     active_body = {"fields": _encode_fields(active_fields)}
-    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     # ----- XP & Badges -----
@@ -2525,6 +2582,14 @@ async def complete_group_quest(
     uid: str = Depends(require_user),
 ):
     """Mark a group quest as completed by a user."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     group_id = payload.get("groupId")
     user_id = payload.get("userId")
     if not group_id or not user_id:
@@ -2548,7 +2613,6 @@ async def complete_group_quest(
         raise HTTPException(status_code=403, detail="You do not own this resource.")
     fields["completed"] = True
     body = {"fields": _encode_fields(fields)}
-    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, group_url, json=body)
 
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
@@ -2558,7 +2622,6 @@ async def complete_group_quest(
         "status": "completed",
     }
     active_body = {"fields": _encode_fields(active_fields)}
-    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.patch, active_url, json=active_body)
 
     return {"status": "completed"}
@@ -2567,6 +2630,14 @@ async def complete_group_quest(
 @app.get("/active-quest/{user_id}")
 async def get_active_quest(user_id: str):
     """Return the current active quest doc for the user."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2594,7 +2665,6 @@ async def get_active_quest(user_id: str):
             group_ok = not gdata.get("completed")
 
     if not quest_ok or not group_ok:
-        rest_session = get_rest_session()
         await asyncio.to_thread(rest_session.delete, url)
         return {}
 
@@ -2604,6 +2674,14 @@ async def get_active_quest(user_id: str):
 @app.get("/user-xp/{user_id}")
 async def get_user_xp(user_id: str):
     """Return XP and level for the given user."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2719,6 +2797,14 @@ async def get_leaderboard(
 @app.post("/leave-group")
 async def leave_group(payload: dict = Body(...)):
     """Remove a user from a group and clear their active quest."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     user_id = payload.get("userId")
     group_id = payload.get("groupId")
     if not user_id or not group_id:
@@ -2737,11 +2823,9 @@ async def leave_group(payload: dict = Body(...)):
         progress.pop(user_id, None)
         fields.update({"members": members, "progress": progress})
         body = {"fields": _encode_fields(fields)}
-        rest_session = get_rest_session()
-    await asyncio.to_thread(rest_session.patch, group_url, json=body)
+        await asyncio.to_thread(rest_session.patch, group_url, json=body)
 
     active_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
-    rest_session = get_rest_session()
     await asyncio.to_thread(rest_session.delete, active_url)
     return {"status": "left"}
 
@@ -2749,6 +2833,14 @@ async def leave_group(payload: dict = Body(...)):
 @app.get("/group-quest/{group_id}")
 async def get_group_quest(group_id: str):
     """Fetch a group quest document via Firestore REST."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2761,6 +2853,14 @@ async def get_group_quest(group_id: str):
 @app.post("/report-quest")
 async def report_quest(payload: dict = Body(...)):
     """Receive a quest report and store in Firestore."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     reason = payload.get("reason")
@@ -3051,6 +3151,14 @@ async def create_checkout_session(payload: dict = Body(...)):
 @app.get("/validate-premium/{user_id}")
 async def validate_premium(user_id: str, session_id: str | None = Query(None)):
     """Check premium flag and optionally verify checkout session."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     project_id = PROJECT_ID
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, user_url)
@@ -3087,6 +3195,14 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
 @app.post("/validate-premium")
 async def validate_premium_token(uid: str = Depends(require_user)):
     """Return premium status for the authenticated user."""
+    # Validate session availability early
+    rest_session = get_rest_session()
+    if not rest_session:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Service temporarily unavailable"}
+        )
+    
     await check_not_banned(uid)
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"

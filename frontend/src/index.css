@@ -1,8 +1,103 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 @import "tailwindcss";
 
+/* Custom Design Tokens for Sage Theme */
+@theme {
+  /* Sage Color Palette */
+  --color-sage-50: #f6f7f4;
+  --color-sage-100: #e9eee4;
+  --color-sage-200: #d4deca;
+  --color-sage-300: #b4c5a7;
+  --color-sage-400: #92a982;
+  --color-sage-500: #738563;
+  --color-sage-600: #5a6b4d;
+  --color-sage-700: #48543f;
+  --color-sage-800: #3b4434;
+  --color-sage-900: #32392c;
+  --color-sage-950: #1a1e16;
+  
+  /* Earth Clay Colors */
+  --color-earth-clay-50: #fdf7f0;
+  --color-earth-clay-100: #f9eadb;
+  --color-earth-clay-200: #f2d3b6;
+  --color-earth-clay-300: #e8b485;
+  --color-earth-clay-400: #dc8f52;
+  --color-earth-clay-500: #d4722f;
+  --color-earth-clay-600: #c55d25;
+  --color-earth-clay-700: #a34722;
+  --color-earth-clay-800: #833a22;
+  --color-earth-clay-900: #6a311e;
+  
+  /* Earth Sand Colors */
+  --color-earth-sand-50: #faf9f7;
+  --color-earth-sand-100: #f3f1ed;
+  --color-earth-sand-200: #e7e3da;
+  --color-earth-sand-300: #d5cfc1;
+  --color-earth-sand-400: #c0b5a1;
+  --color-earth-sand-500: #a89881;
+  --color-earth-sand-600: #947d66;
+  --color-earth-sand-700: #7a6653;
+  --color-earth-sand-800: #655547;
+  --color-earth-sand-900: #53473c;
+  
+  /* Earth Forest Colors */
+  --color-earth-forest-50: #f3f6f3;
+  --color-earth-forest-100: #e3eae2;
+  --color-earth-forest-200: #c8d6c6;
+  --color-earth-forest-300: #a3b99f;
+  --color-earth-forest-400: #789574;
+  --color-earth-forest-500: #567653;
+  --color-earth-forest-600: #425d40;
+  --color-earth-forest-700: #364a34;
+  --color-earth-forest-800: #2d3c2b;
+  --color-earth-forest-900: #263225;
+  
+  /* Custom Shadows */
+  --shadow-sage: 0 4px 6px -1px rgb(115 133 99 / 0.1), 0 2px 4px -1px rgb(115 133 99 / 0.06);
+  --shadow-sage-md: 0 10px 15px -3px rgb(115 133 99 / 0.1), 0 4px 6px -2px rgb(115 133 99 / 0.05);
+  --shadow-sage-lg: 0 20px 25px -5px rgb(115 133 99 / 0.1), 0 10px 10px -5px rgb(115 133 99 / 0.04);
+  --shadow-sage-xl: 0 25px 50px -12px rgb(115 133 99 / 0.25);
+  --shadow-earth: 0 4px 6px -1px rgb(212 114 47 / 0.1), 0 2px 4px -1px rgb(212 114 47 / 0.06);
+  
+  /* Custom Radius */
+  --radius-xs: 0.125rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+  
+  /* Custom Spacing */
+  --spacing-18: 4.5rem;
+  --spacing-88: 22rem;
+  --spacing-128: 32rem;
+  
+  /* Custom Animations */
+  --animate-fade-in: fade-in 0.5s ease-in-out;
+  --animate-slide-up: slide-up 0.3s ease-out;
+  --animate-slide-down: slide-down 0.3s ease-out;
+  --animate-scale-in: scale-in 0.2s ease-out;
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes slide-up {
+  0% { transform: translateY(10px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-down {
+  0% { transform: translateY(-10px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes scale-in {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
 
 body {
   margin: 0;
@@ -17,6 +112,11 @@ html {
   height: 100%;
 }
 
-button {
-  @apply rounded-full px-4 py-2 font-bold transition;
+@layer components {
+  button {
+    border-radius: 9999px;
+    padding: 0.5rem 1rem;
+    font-weight: 700;
+    transition: all 0.15s ease-in-out;
+  }
 }
