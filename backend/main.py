@@ -35,9 +35,9 @@ if "/app" not in sys.path:
 
 # Import auth_utils after setting up paths
 try:
-    from backend.auth_utils import get_rest_session, PROJECT_ID
+    from backend.auth_utils import get_rest_session, PROJECT_ID, load_api_keys
 except ImportError:
-    from auth_utils import get_rest_session, PROJECT_ID
+    from auth_utils import get_rest_session, PROJECT_ID, load_api_keys
 
 
 app = FastAPI(title="Roamio Backend API", version="1.0.0")
@@ -88,6 +88,13 @@ startup_health = {
 }
 
 print("🔐 Loading API keys and credentials...")
+
+# Load API keys from Cloud Run secrets or environment variables
+try:
+    load_api_keys()
+    print("✅ API keys loaded from secrets/environment")
+except Exception as e:
+    print(f"⚠️ Failed to load API keys: {e}")
 
 # Initialize Google Maps early
 gmaps = None
