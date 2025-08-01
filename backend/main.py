@@ -36,23 +36,43 @@ if "/app" not in sys.path:
 # Import auth_utils after setting up paths
 try:
     from backend.auth_utils import get_rest_session, PROJECT_ID, load_api_keys
+    from backend.emotion_utils import (
+        get_mood_fallbacks, detect_location_type, determine_quest_type,
+        calculate_adaptive_radius, generate_smart_fallback_message,
+        filter_and_score_places, LOCATION_INTELLIGENCE
+    )
 except ImportError:
     from auth_utils import get_rest_session, PROJECT_ID, load_api_keys
+    from emotion_utils import (
+        get_mood_fallbacks, detect_location_type, determine_quest_type,
+        calculate_adaptive_radius, generate_smart_fallback_message,
+        filter_and_score_places, LOCATION_INTELLIGENCE
+    )
 
 
 app = FastAPI(title="Roamio Backend API", version="1.0.0")
 
-# Add CORS middleware with enhanced configuration
+# Add CORS middleware with enhanced configuration for production and development
 allowed_origins = [
+    # Production domains
+    "https://real-world-quest-app.web.app",
+    "https://real-world-quest-app.firebaseapp.com", 
+    # Development domains
     os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"),
-    "http://localhost:5174",  # Additional port for development
-    "http://localhost:3000",  # Common React dev port
-    "http://localhost:4173",  # Vite preview port
-    "*",  # Allow all origins for development (remove in production)
+    "http://localhost:5174",
+    "http://localhost:3000", 
+    "http://localhost:4173",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
 ]
+
+# Allow all origins in development, specific origins in production
+is_development = os.getenv("ENVIRONMENT", "development") == "development"
+cors_origins = ["*"] if is_development else allowed_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Temporarily allow all origins for debugging
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -474,7 +494,27 @@ except Exception as e:
     async def check_not_banned(uid):
         return uid
 
-    def sanitize_input(text):
+def is_age_restricted(name, tags):
+    """Check if a place is age-restricted (21+)."""
+    if not name or not tags:
+        return False
+    
+    name_lower = name.lower()
+    
+    # Check for age-restricted tags
+    restricted_tags = {"bar", "night-club", "liquor-store", "brewery", "winery"}
+    if any(tag in tags for tag in restricted_tags):
+        return True
+    
+    # Check for age-restricted keywords in name
+    restricted_keywords = ["bar", "pub", "brewery", "winery", "club", "lounge", "tavern"]
+    if any(keyword in name_lower for keyword in restricted_keywords):
+        return True
+    
+    return False
+
+
+def sanitize_input(text):
         return str(text).strip()
 
 
@@ -1040,16 +1080,7 @@ async def health_check():
 
 
 @app.post("/generate-quest")
-async def generate_quest(
-    city: str = Body(...),
-    moods: list[str] = Body(...),
-    time_limit: int = Body(...),
-    token: str = Body(...),
-    user_id: str | None = Body(None),
-    difficulty: str = Body("Easy"),
-    lat: float | None = Body(None),
-    lng: float | None = Body(None),
-):
+async def generate_quest(request: Request):
     """Generate a quest using tag-based filtering and optional GPT text."""
     # Validate session availability early
     rest_session = get_rest_session()
@@ -1058,6 +1089,28 @@ async def generate_quest(
             status_code=503,
             content={"error": "Service temporarily unavailable"}
         )
+    
+    try:
+        # Parse request body
+        body = await request.json()
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Invalid JSON in request body",
+                "detail": str(e)
+            }
+        )
+    
+    # Extract parameters with default values
+    city = body.get("city")
+    moods = body.get("moods")
+    time_limit = body.get("time_limit") or body.get("timeLimit")  # Support both formats
+    token = body.get("token")
+    user_id = body.get("user_id") or body.get("userId")  # Support both formats
+    difficulty = body.get("difficulty", "Easy")
+    lat = body.get("lat")
+    lng = body.get("lng")
     
     # Configure request logging
     request_id = hashlib.md5(
@@ -1068,16 +1121,52 @@ async def generate_quest(
         f"[{request_id}] Quest generation request - city: {city}, moods: {moods}, user: {user_id}"
     )
 
-    # Validate required parameters
-    if not city or not moods:
+    # Enhanced validation with detailed error messages
+    validation_errors = []
+    
+    if not city or (isinstance(city, str) and city.strip() == ""):
+        validation_errors.append("city is required and cannot be empty")
+    
+    if not moods or not isinstance(moods, list) or len(moods) == 0:
+        validation_errors.append("moods must be a non-empty array")
+    
+    # Handle time_limit conversion and validation
+    try:
+        if isinstance(time_limit, str):
+            time_limit = int(time_limit)
+        elif not isinstance(time_limit, int):
+            raise ValueError("Invalid type")
+            
+        if time_limit <= 0:
+            validation_errors.append("timeLimit must be a positive number")
+    except (ValueError, TypeError):
+        validation_errors.append("timeLimit must be a valid positive number")
+        time_limit = None
+    
+    if validation_errors:
         logger.error(
-            f"[{request_id}] Missing required parameters - city: {bool(city)}, moods: {bool(moods)}"
+            f"[{request_id}] Validation failed - city: '{city}', moods: {moods}, time_limit: {time_limit}"
         )
         return JSONResponse(
             status_code=400,
             content={
-                "error": "City and mood list are required.",
+                "error": f"Invalid input: {', '.join(validation_errors)}",
                 "request_id": request_id,
+                "received_data": {
+                    "city": city,
+                    "moods": moods,
+                    "time_limit": time_limit,
+                    "city_type": type(city).__name__,
+                    "moods_type": type(moods).__name__,
+                    "time_limit_type": type(time_limit).__name__
+                },
+                "help": {
+                    "expected_format": {
+                        "city": "string (e.g., 'New York')",
+                        "moods": "array of strings (e.g., ['Adventurous', 'Chill'])",
+                        "timeLimit": "positive integer (e.g., 90)"
+                    }
+                }
             },
         )
 
@@ -1257,53 +1346,171 @@ async def generate_quest(
             },
         )
 
-    # Places API search with comprehensive error handling and fallback
-    attempts = 0
-    fallback_city = None
+    # Intelligent quest generation with progressive fallbacks
+    logger.info(f"[{request_id}] Starting intelligent quest generation for {city}")
+    
+    # Validate gmaps client early
+    if not gmaps:
+        logger.error(f"[{request_id}] Google Maps client not available for Places API")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Places service temporarily unavailable",
+                "request_id": request_id,
+                "detail": "Google Maps API client not configured",
+            },
+        )
+
+    # Initialize variables for intelligent fallback system
+    original_moods = moods.copy()
+    current_moods = moods.copy()
     selected = []
     places_results = []
-    candidates = []  # Initialize candidates outside the loop to prevent UnboundLocalError
+    location_attempts = 0
+    mood_attempts = 0
+    adaptation_messages = []
+    final_radius = 2000
+    quest_type_info = None
+    location_type = "suburban"  # Default assumption
 
-    logger.info(f"[{request_id}] Starting Places API search near {city_location}")
-
-    while attempts < 2:
+    # Progressive search with radius expansion and mood fallbacks
+    while len(selected) < 1 and location_attempts < 4:  # At least 1 place needed
+        logger.info(f"[{request_id}] Search attempt {location_attempts + 1}/4")
+        
+        # Calculate adaptive radius based on attempts and location intelligence
+        final_radius = calculate_adaptive_radius(2000, location_type, location_attempts, time_limit)
+        
+        if location_attempts > 0:
+            radius_km = final_radius / 1000
+            logger.info(f"[{request_id}] Expanding search area to {radius_km:.0f}km")
+            adaptation_messages.append(f"Expanding search area to {radius_km:.0f}km...")
+        
         try:
-            logger.info(f"[{request_id}] Places API attempt {attempts + 1}/2")
-
-            # Validate gmaps client before making request
-            if not gmaps:
-                logger.error(
-                    f"[{request_id}] Google Maps client not available for Places API"
-                )
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "error": "Places service temporarily unavailable",
-                        "request_id": request_id,
-                        "detail": "Google Maps API client not configured",
-                    },
-                )
-
+            # Search for places with current radius and settings
             response = gmaps.places_nearby(
                 location=(city_location["lat"], city_location["lng"]),
-                radius=2000,
+                radius=final_radius,
                 type="tourist_attraction",
             )
             places_results = response.get("results", [])
-            logger.info(
-                f"[{request_id}] Places API returned {len(places_results)} results"
-            )
-
+            
+            logger.info(f"[{request_id}] Found {len(places_results)} places in {final_radius/1000:.0f}km radius")
+            
             if len(places_results) == 0:
-                logger.warning(
-                    f"[{request_id}] No places found for location {city_location}"
-                )
-            break
+                location_attempts += 1
+                continue
+                
+            # Detect location type for intelligent adaptation
+            if location_attempts == 0:  # Only detect once
+                location_type = detect_location_type(places_results)
+                logger.info(f"[{request_id}] Detected location type: {location_type}")
+                
+                # Suggest location-appropriate moods if needed
+                location_info = LOCATION_INTELLIGENCE.get(location_type, {})
+                preferred_moods = location_info.get("preferred_moods", [])
+                
+                # If original moods don't match location type well, suggest adaptation
+                mood_match = any(mood.lower() in preferred_moods for mood in original_moods)
+                if not mood_match and preferred_moods:
+                    suggested_mood = preferred_moods[0]
+                    if suggested_mood not in [m.lower() for m in current_moods]:
+                        current_moods.append(suggested_mood.title())
+                        adaptation_messages.append(f"Added {suggested_mood} mood for better local matches")
+            # Process places with current mood preferences
+            mood_tags = set()
+            for mood in current_moods:
+                if mood.lower() == "weird":
+                    mood_tags.update(["occult", "weird"])
+                elif mood.lower() in ["food", "foodie"]:
+                    mood_tags.update(["bar", "restaurant"])
+                elif mood.lower() in ["adventure", "adventurous"]:
+                    mood_tags.update(["hike", "outdoors", "scenic"])
+                elif mood.lower() == "cozy":
+                    mood_tags.update(["bookstore", "cafe", "quiet"])
+                elif mood.lower() == "quirky":
+                    mood_tags.update(["vintage", "oddity-shop"])
+                elif mood.lower() in ["drinks", "bar"]:
+                    mood_tags.update(["bar", "brewery"])
+                elif mood.lower() == "historic":
+                    mood_tags.update(["historic", "museum"])
+                elif mood.lower() in ["artsy", "art"]:
+                    mood_tags.update(["art", "gallery", "museum"])
+                elif mood.lower() == "chill":
+                    mood_tags.update(["park", "cafe", "quiet"])
+                elif mood.lower() == "romantic":
+                    mood_tags.update(["restaurant", "scenic", "historic"])
+                elif mood.lower() == "cultural":
+                    mood_tags.update(["museum", "art", "historic"])
+                elif mood.lower() == "nature":
+                    mood_tags.update(["park", "hike", "scenic"])
+
+            # Score and select places
+            candidates = []
+            for place in places_results:
+                try:
+                    name = place.get("name", "Unnamed Place")
+                    if "establishment" in place.get("types", []):
+                        tags = compute_place_tags(place)
+                        is_restricted = is_age_restricted(name, tags)
+                        
+                        if is_restricted and user_age < 21:
+                            continue
+                            
+                        # Score based on tag overlap
+                        overlap = len(mood_tags.intersection(tags))
+                        if len(mood_tags) == 0:
+                            overlap = 1
+                            
+                        if overlap <= 0:
+                            continue
+                            
+                        loc = place["geometry"]["location"]
+                        typ = place.get("types", ["Unknown"])[0]
+                        candidates.append({
+                            "name": name,
+                            "type": typ,
+                            "lat": float(loc["lat"]),
+                            "lng": float(loc["lng"]),
+                            "tags": tags,
+                            "isAgeRestricted": is_restricted,
+                            "score": overlap,
+                            "rating": place.get("rating", 0),
+                        })
+                except Exception as e:
+                    logger.warning(f"[{request_id}] Skipping place processing error: {str(e)}")
+
+            # Sort and select diverse places
+            candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
+            selected = []
+            seen_types = set()
+            
+            for c in candidates:
+                if c["type"] in seen_types:
+                    continue
+                selected.append(c)
+                seen_types.add(c["type"])
+                if len(selected) >= 5:
+                    break
+                    
+            logger.info(f"[{request_id}] Found {len(selected)} suitable places with current moods")
+            
+            # If still not enough places, try mood fallbacks
+            if len(selected) < 1 and mood_attempts < 3:
+                mood_fallbacks = get_mood_fallbacks(current_moods)
+                if mood_attempts < len(mood_fallbacks):
+                    old_moods = current_moods.copy()
+                    current_moods = mood_fallbacks[mood_attempts]
+                    logger.info(f"[{request_id}] Trying mood fallback: {old_moods} → {current_moods}")
+                    adaptation_messages.append(f"Adapting mood from {', '.join(old_moods)} to {', '.join(current_moods)} for better options")
+                    mood_attempts += 1
+                    continue
+            
+            # If we have at least one place, break out of the loop
+            if len(selected) >= 1:
+                break
 
         except googlemaps.exceptions.ApiError as e:
-            logger.error(
-                f"[{request_id}] Places API error (attempt {attempts + 1}): {e}"
-            )
+            logger.error(f"[{request_id}] Places API error: {e}")
             if "OVER_QUERY_LIMIT" in str(e):
                 return JSONResponse(
                     status_code=503,
@@ -1323,158 +1530,55 @@ async def generate_quest(
                         "detail": "API access denied",
                     },
                 )
-        except googlemaps.exceptions.Timeout as e:
-            logger.error(
-                f"[{request_id}] Places API timeout (attempt {attempts + 1}): {e}"
-            )
-            if attempts == 1:  # Last attempt
-                return JSONResponse(
-                    status_code=504,
-                    content={
-                        "error": "Places service timeout",
-                        "request_id": request_id,
-                        "detail": "Service taking too long to respond",
-                    },
-                )
         except Exception as e:
-            logger.error(
-                f"[{request_id}] Places API unexpected error (attempt {attempts + 1}): {str(e)}"
-            )
-            logger.error(
-                f"[{request_id}] Places API traceback: {traceback.format_exc()}"
-            )
-            if attempts == 1:  # Last attempt
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "error": "Failed to fetch nearby places",
-                        "request_id": request_id,
-                        "location": city,
-                    },
-                )
+            logger.error(f"[{request_id}] Places search error: {str(e)}")
+            
+        location_attempts += 1
 
-        # Process places results after successful API call
-        candidates = []
-        for place in places_results:
-            try:
-                name = place.get("name")
-                if not name or is_chain(name):
-                    continue
-                pid = place.get("place_id")
-                cached_place = get_cached_place(pid) if pid else None
-                details = None
-                if not cached_place and pid:
-                    try:
-                        details = gmaps.place(pid)
-                    except Exception:
-                        details = None
-                tags = (
-                    cached_place.get("tags")
-                    if cached_place
-                    else compute_place_tags(place, details)
-                )
-                is_restricted = (
-                    "bar" in tags
-                    or "night-club" in tags
-                    or "liquor-store" in tags
-                    or place.get("types", ["Unknown"])[0] in ["bar", "night_club"]
-                )
-                if (user_age and user_age < 21) or prefers_clean:
-                    if is_restricted:
-                        continue
-                if not cached_place and pid:
-                    save_place_to_cache(pid, {"tags": tags, "name": name})
-                if preferred:
-                    overlap = len(set(tags) & set(preferred))
-                else:
-                    overlap = 1
-                if overlap <= 0:
-                    continue
-                loc = place["geometry"]["location"]
-                typ = place.get("types", ["Unknown"])[0]
-                candidates.append(
-                    {
-                        "name": name,
-                        "type": typ,
-                        "lat": float(loc["lat"]),
-                        "lng": float(loc["lng"]),
-                        "tags": tags,
-                        "isAgeRestricted": is_restricted,
-                        "score": overlap,
-                        "rating": place.get("rating", 0),
-                    }
-                )
-            except Exception as e:
-                logger.warning(
-                    f"[{request_id}] Skipping place due to processing error: {str(e)}"
-                )
-
-        logger.info(
-            f"[{request_id}] Processed {len(places_results)} places, found {len(candidates)} candidates"
+    # Determine appropriate quest type based on what we found
+    if len(selected) >= 1:
+        quest_type_info = determine_quest_type(len(selected), time_limit, current_moods)
+        
+        # Limit places to what the quest type needs
+        places_needed = quest_type_info["places_needed"]
+        if len(selected) > places_needed:
+            selected = selected[:places_needed]
+            
+        # Generate user-friendly adaptation message
+        adaptation_message = generate_smart_fallback_message(
+            original_moods, current_moods, final_radius, quest_type_info["type"]
         )
-        candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
-
-        selected = []
-        seen_types = set()
-        for c in candidates:
-            if c["type"] in seen_types:
-                continue
-            selected.append(c)
-            seen_types.add(c["type"])
-            if len(selected) >= 5:
-                break
-
-        logger.info(f"[{request_id}] Selected {len(selected)} diverse places for quest")
-
-        if len(selected) >= 3:
-            break
-
-        # Try fallback city if not enough places found
-        fallback_city = CITY_FALLBACK_MAP.get(city.lower())
-        if not fallback_city:
-            logger.warning(f"[{request_id}] No fallback city available for {city}")
-            break
-
-        logger.info(f"[{request_id}] Trying fallback city: {fallback_city}")
-        attempts += 1
-
-        try:
-            geo = gmaps.geocode(fallback_city)
-            if not geo or len(geo) == 0:
-                logger.error(
-                    f"[{request_id}] Fallback city geocoding failed: no results"
-                )
-                break
-            city_location = geo[0]["geometry"]["location"]
-            city = fallback_city
-            logger.info(
-                f"[{request_id}] Fallback geocoding successful: {city_location}"
-            )
-        except Exception as e:
-            logger.error(f"[{request_id}] Fallback geocode error: {str(e)}")
-            break
-
-    # Final validation of selected places
-    if len(selected) < 3:
-        logger.error(
-            f"[{request_id}] Insufficient places found - only {len(selected)}/3 required"
-        )
+        
+        logger.info(f"[{request_id}] Quest generation successful: {quest_type_info['type']} with {len(selected)} places")
+        logger.info(f"[{request_id}] Adaptations: {adaptation_message}")
+        
+    else:
+        # Ultimate fallback - provide discovery suggestions
+        logger.warning(f"[{request_id}] No suitable places found after all fallbacks")
         return JSONResponse(
-            status_code=422,
+            status_code=200,  # Changed to 200 since we're providing helpful alternatives
             content={
-                "error": "Not enough suitable places found",
+                "quest_type": "Discovery Quest",
+                "message": "We're still exploring this area! Here are some suggestions:",
+                "suggestions": [
+                    "Try searching in a nearby larger city",
+                    "Consider broader moods like 'Chill' or 'Adventurous'",
+                    "This might be perfect for a nature-focused quest - try 'Outdoorsy' mood",
+                    f"Extend your time limit beyond {time_limit} minutes for wider exploration"
+                ],
+                "fallback_search": {
+                    "expanded_radius": f"{final_radius/1000:.0f}km",
+                    "tried_moods": current_moods,
+                    "location_type": location_type
+                },
                 "request_id": request_id,
-                "places_found": len(selected),
-                "places_required": 3,
-                "location": city,
-                "suggestion": "Try a different city or adjust your preferences",
+                "adaptations": adaptation_messages
             },
         )
 
-    logger.info(
-        f"[{request_id}] Quest generation proceeding with {len(selected)} places"
-    )
-
+    # At this point, selected places are already available from the intelligent quest generation above
+    # Continue with hash key generation and caching logic
+    
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
     hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
@@ -1492,8 +1596,9 @@ async def generate_quest(
         if cached:
             logger.info(f"[{request_id}] Using cached quest: {hash_key}")
             result = {"quest": cached, "request_id": request_id}
-            if fallback_city:
-                result["fallbackCity"] = fallback_city
+            # Add adaptation information if available
+            if 'adaptation_message' in locals():
+                result["adaptations"] = adaptation_message
             return result
         else:
             logger.info(f"[{request_id}] No cached quest found, generating new one")
@@ -1609,34 +1714,34 @@ async def generate_quest(
         [sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"]
     )
 
-    # Generate quest narrative with error handling
-    if openai.api_key:
-        prompt = (
-            f"Write a short playful quest including these places: {place_names}. "
-            f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
-        )
-        logger.info(f"[{request_id}] Generating quest narrative with OpenAI")
-
-        try:
-            completion = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            quest_text = completion.choices[0].message.content.strip()
-            logger.info(f"[{request_id}] Successfully generated quest narrative")
-        except Exception as e:
-            logger.error(f"[{request_id}] OpenAI error: {str(e)}")
-            quest_text = (
-                f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
-                f"and ends at {ordered[-1]['name']}!"
-            )
-            logger.info(f"[{request_id}] Using fallback quest narrative")
-    else:
-        logger.info(f"[{request_id}] OpenAI not configured, using default narrative")
-        quest_text = (
-            f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
-            f"and ends at {ordered[-1]['name']}!"
-        )
+    # Generate quest narrative with error handling (temporarily disabled OpenAI for debugging)
+    logger.info(f"[{request_id}] Using fallback quest narrative for faster response")
+    quest_text = (
+        f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
+        f"and ends at {ordered[-1]['name']}!"
+    )
+    
+    # TODO: Re-enable OpenAI once other issues are resolved
+    # if openai.api_key:
+    #     prompt = (
+    #         f"Write a short playful quest including these places: {place_names}. "
+    #         f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
+    #     )
+    #     logger.info(f"[{request_id}] Generating quest narrative with OpenAI")
+    #     try:
+    #         from openai import OpenAI
+    #         client = OpenAI(api_key=openai.api_key, timeout=10.0)
+    #         completion = client.chat.completions.create(
+    #             model="gpt-4",
+    #             messages=[{"role": "user", "content": prompt}],
+    #             max_tokens=300,
+    #             timeout=10
+    #         )
+    #         quest_text = completion.choices[0].message.content.strip()
+    #         logger.info(f"[{request_id}] Successfully generated quest narrative")
+    #     except Exception as e:
+    #         logger.error(f"[{request_id}] OpenAI error: {str(e)}")
+    #         quest_text = fallback_text
 
     route_legs = [
         {
@@ -1670,8 +1775,18 @@ async def generate_quest(
         "tagSource": "auto",
         "tags": list(tag_set),
         "city": city,
-        "mood": ",".join(moods),
+        "mood": ",".join(current_moods if 'current_moods' in locals() else moods),
+        "originalMoods": ",".join(original_moods if 'original_moods' in locals() else moods),
         "flagged": False,
+        "intelligence": {
+            "questType": quest_type_info["type"] if 'quest_type_info' in locals() and quest_type_info else "Standard Quest",
+            "questDescription": quest_type_info["description"] if 'quest_type_info' in locals() and quest_type_info else f"A complete {time_limit}-minute adventure",
+            "locationType": location_type if 'location_type' in locals() else "suburban",
+            "searchRadius": f"{final_radius/1000:.0f}km" if 'final_radius' in locals() else "2km",
+            "adaptationMessage": adaptation_message if 'adaptation_message' in locals() else "Perfect matches found for your preferences!",
+            "moodAdaptations": current_moods != original_moods if 'current_moods' in locals() and 'original_moods' in locals() else False,
+            "radiusExpanded": final_radius > 2000 if 'final_radius' in locals() else False
+        }
     }
 
     # Save quest and update usage with error handling
@@ -1693,8 +1808,15 @@ async def generate_quest(
 
     # Prepare final response
     result = {"quest": quest_obj, "request_id": request_id}
-    if fallback_city:
-        result["fallbackCity"] = fallback_city
+    
+    # Add adaptation information if available
+    if 'adaptation_message' in locals():
+        result["adaptations"] = adaptation_message
+    if 'current_moods' in locals() and current_moods != original_moods:
+        result["moodAdaptations"] = {
+            "original": original_moods,
+            "adapted": current_moods
+        }
 
     logger.info(f"[{request_id}] Quest generation completed successfully")
     return result
@@ -2075,20 +2197,101 @@ async def complete_quest(payload: dict = Body(...)):
 
 @app.get("/places")
 def get_places(city: str = Query(...)):
-    geocode_result = gmaps.geocode(city)
-    if not geocode_result:
-        return {"error": "City not found"}
+    """Enhanced location analysis with intelligent mood recommendations."""
+    if not gmaps:
+        return {"error": "Location services temporarily unavailable"}
+    
+    try:
+        # Geocode the city
+        geocode_result = gmaps.geocode(city)
+        if not geocode_result:
+            return {"error": "City not found", "city": city}
 
-    location = geocode_result[0]["geometry"]["location"]
+        location = geocode_result[0]["geometry"]["location"]
+        formatted_address = geocode_result[0].get("formatted_address", city)
 
-    places_result = gmaps.places_nearby(
-        location=(location["lat"], location["lng"]),
-        radius=5000,
-        type="tourist_attraction",
-    )
+        # Search for places with expanding radius for better coverage
+        all_places = []
+        radii = [2000, 5000, 10000]  # 2km, 5km, 10km
+        
+        for radius in radii:
+            places_result = gmaps.places_nearby(
+                location=(location["lat"], location["lng"]),
+                radius=radius,
+                type="tourist_attraction",
+            )
+            places = places_result.get("results", [])
+            all_places.extend(places)
+            if len(all_places) >= 10:  # Good coverage found
+                break
 
-    place_names = [place["name"] for place in places_result.get("results", [])]
-    return {"city": city, "places": place_names}
+        # Detect location type and get recommendations
+        location_type = detect_location_type(all_places)
+        location_info = LOCATION_INTELLIGENCE.get(location_type, {})
+        
+        # Count places by category for better insights
+        place_categories = {}
+        quality_places = 0
+        
+        for place in all_places[:20]:  # Analyze top 20 places
+            place_types = place.get("types", [])
+            rating = place.get("rating", 0)
+            
+            if rating >= 4.0:
+                quality_places += 1
+                
+            for place_type in place_types:
+                if place_type in ["establishment", "point_of_interest"]:
+                    continue
+                place_categories[place_type] = place_categories.get(place_type, 0) + 1
+
+        # Generate mood recommendations based on available places
+        recommended_moods = location_info.get("preferred_moods", [])
+        
+        # Add specific mood recommendations based on place analysis
+        if place_categories.get("restaurant", 0) > 3:
+            if "foodie" not in recommended_moods:
+                recommended_moods.append("foodie")
+        
+        if place_categories.get("museum", 0) > 1 or place_categories.get("art_gallery", 0) > 0:
+            if "cultural" not in recommended_moods:
+                recommended_moods.append("cultural")
+                
+        if place_categories.get("park", 0) > 2 or place_categories.get("natural_feature", 0) > 0:
+            if "nature" not in recommended_moods:
+                recommended_moods.append("nature")
+
+        # Limit to top 5 mood recommendations
+        recommended_moods = recommended_moods[:5]
+
+        return {
+            "city": city,
+            "formatted_address": formatted_address,
+            "location": {
+                "lat": location["lat"],
+                "lng": location["lng"]
+            },
+            "analysis": {
+                "total_places": len(all_places),
+                "quality_places": quality_places,
+                "location_type": location_type,
+                "search_radius_km": min(10, (radii[min(len(radii)-1, len(all_places)//5)] / 1000)),
+                "place_categories": dict(sorted(place_categories.items(), key=lambda x: x[1], reverse=True)[:8])
+            },
+            "recommendations": {
+                "moods": recommended_moods,
+                "message": f"{len(all_places)} locations found in this {location_type} area",
+                "quest_potential": "excellent" if quality_places > 5 else "good" if quality_places > 2 else "moderate"
+            },
+            "sample_places": [place["name"] for place in all_places[:8]]
+        }
+        
+    except Exception as e:
+        return {
+            "error": "Failed to analyze location", 
+            "city": city,
+            "detail": str(e)
+        }
 
 
 @app.post("/generate-postcard")
