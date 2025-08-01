@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ /app/backend/
 
 COPY backend/main.py /app/main.py
+COPY backend/openai_safety.py /app/openai_safety.py
 
 RUN touch /app/__init__.py
 RUN touch /app/backend/__init__.py

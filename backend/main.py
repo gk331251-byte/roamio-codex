@@ -419,6 +419,23 @@ async def ping() -> dict[str, Any]:
         upstream = None
     return {"status": "ok", "upstream_status": upstream}
 
+@app.get("/openai-status")
+async def openai_status():
+    """Get OpenAI usage statistics and safety status."""
+    try:
+        from openai_safety import openai_safety_manager
+        stats = openai_safety_manager.get_usage_stats()
+        return {
+            "status": "operational",
+            "usage_stats": stats,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
 # Debug path information
 print(f"🔍 Python path: {sys.path}")
@@ -1714,34 +1731,22 @@ async def generate_quest(request: Request):
         [sanitize_input(p["name"]) for p in ordered if p.get("type") != "start"]
     )
 
-    # Generate quest narrative with error handling (temporarily disabled OpenAI for debugging)
-    logger.info(f"[{request_id}] Using fallback quest narrative for faster response")
-    quest_text = (
+    # Generate quest narrative using OpenAI Safety Manager (now with short prompts)
+    fallback_text = (
         f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
         f"and ends at {ordered[-1]['name']}!"
     )
     
-    # TODO: Re-enable OpenAI once other issues are resolved
-    # if openai.api_key:
-    #     prompt = (
-    #         f"Write a short playful quest including these places: {place_names}. "
-    #         f"Keep it under 300 tokens. Style: {', '.join(sanitize_input(m) for m in moods)}"
-    #     )
-    #     logger.info(f"[{request_id}] Generating quest narrative with OpenAI")
-    #     try:
-    #         from openai import OpenAI
-    #         client = OpenAI(api_key=openai.api_key, timeout=10.0)
-    #         completion = client.chat.completions.create(
-    #             model="gpt-4",
-    #             messages=[{"role": "user", "content": prompt}],
-    #             max_tokens=300,
-    #             timeout=10
-    #         )
-    #         quest_text = completion.choices[0].message.content.strip()
-    #         logger.info(f"[{request_id}] Successfully generated quest narrative")
-    #     except Exception as e:
-    #         logger.error(f"[{request_id}] OpenAI error: {str(e)}")
-    #         quest_text = fallback_text
+    try:
+        from openai_safety import openai_safety_manager
+        quest_text, generation_method = await openai_safety_manager.generate_quest_narrative(
+            place_names, moods, request_id
+        )
+        logger.info(f"[{request_id}] Quest narrative generated using {generation_method}")
+    except Exception as e:
+        logger.error(f"[{request_id}] OpenAI Safety Manager error: {str(e)}")
+        quest_text = fallback_text
+        generation_method = "template_error"
 
     route_legs = [
         {
@@ -1758,7 +1763,8 @@ async def generate_quest(request: Request):
     if any(p.get("isAgeRestricted") for p in ordered):
         tag_set.add("age21+")
 
-    gen_method = "gpt" if openai.api_key else "template"
+    # Use the generation method returned by the safety manager
+    gen_method = generation_method if 'generation_method' in locals() else ("gpt" if openai.api_key else "template")
 
     quest_obj = {
         "questText": quest_text,

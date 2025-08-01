@@ -6,6 +6,9 @@ import { db } from "../firebase";
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import PlaceItem from "./PlaceItem";
 import RouteMap from "./RouteMap";
+import LocationDetection from "./LocationDetection/LocationDetection";
+import { logError, logUserActionError } from "../lib/errorLogger";
+import googleMapsLoader from "../services/googleMapsLoader";
 
 const _toQuestObj = (doc) => {
   if (!doc || !doc.fields) return doc;
@@ -137,9 +140,10 @@ const QuestHome = () => {
   const [city, setCity] = useState("");
   const [mood, setMood] = useState([]);
   const [timeLimit, setTimeLimit] = useState(90);
-  const [coords, setCoords] = useState(null);
   const [startLocation, setStartLocation] = useState(null);
-  const [gpsMsg, setGpsMsg] = useState("");
+  const [detectedLocation, setDetectedLocation] = useState(null);
+  const [suggestedMoods, setSuggestedMoods] = useState([]);
+  const [locationError, setLocationError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [questResult, setQuestResult] = useState(null);
@@ -211,32 +215,59 @@ const QuestHome = () => {
     })();
   }, [user]);
 
+  // Initialize Google Maps autocomplete
   useEffect(() => {
-    if (!window.google || !window.google.maps || !window.google.maps.places) return;
-    const input = document.getElementById('start-address');
-    if (!input || input._ac) return;
-    const ac = new window.google.maps.places.Autocomplete(input);
-    input._ac = ac;
-    ac.addListener('place_changed', () => {
-      const p = ac.getPlace();
-      if (!p.geometry) return;
-      const { lat, lng } = p.geometry.location.toJSON();
-      setStartLocation({ address: p.formatted_address, lat, lng, placeId: p.place_id });
-      setCity(p.formatted_address);
-    });
+    const initAutocomplete = async () => {
+      try {
+        await googleMapsLoader.waitForReady();
+        
+        const input = document.getElementById('start-address');
+        if (!input || input._ac) return;
+        
+        const ac = new window.google.maps.places.Autocomplete(input);
+        input._ac = ac;
+        
+        ac.addListener('place_changed', () => {
+          const p = ac.getPlace();
+          if (!p.geometry) return;
+          const { lat, lng } = p.geometry.location.toJSON();
+          setStartLocation({ address: p.formatted_address, lat, lng, placeId: p.place_id });
+          setCity(p.formatted_address);
+        });
+      } catch (error) {
+        console.error('Failed to initialize Google Maps autocomplete:', error);
+        logError(error, {
+          type: 'googleMapsAutocompleteError',
+          component: 'QuestHome'
+        });
+      }
+    };
+    
+    initAutocomplete();
   }, []);
 
-  useEffect(() => {
-    if (!coords || !window.google || !window.google.maps) return;
-    const geocoder = new window.google.maps.Geocoder();
-    geocoder.geocode({ location: coords }, (res, status) => {
-      if (status === 'OK' && res[0]) {
-        const { formatted_address, place_id } = res[0];
-        setStartLocation({ address: formatted_address, lat: coords.lat, lng: coords.lng, placeId: place_id });
-        setCity(formatted_address);
-      }
+  // Handle successful location detection
+  const handleLocationDetected = (locationData) => {
+    setDetectedLocation(locationData);
+    setStartLocation({
+      address: locationData.formattedAddress,
+      lat: locationData.lat,
+      lng: locationData.lng,
+      placeId: locationData.placeId
     });
-  }, [coords]);
+    setCity(locationData.city);
+    setSuggestedMoods(locationData.suggestedMoods || []);
+    setLocationError(null);
+  };
+
+  // Handle location detection errors
+  const handleLocationError = (error) => {
+    setLocationError(error);
+    logUserActionError(new Error(error.message), 'location_detection', {
+      errorType: error.type,
+      canRetry: error.canRetry
+    });
+  };
 
   const handleLogin = async () => {
     const auth = getAuth();
@@ -249,23 +280,16 @@ const QuestHome = () => {
     }
   };
 
-  const requestGps = () => {
-    if (!navigator.geolocation) {
-      setGpsMsg("Geolocation not supported");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        setGpsMsg("");
-      },
-      (err) => {
-        console.error("Geolocation error", err);
-        setCoords(null);
-        setGpsMsg("Location not shared — routing may be less accurate");
+  // Auto-select suggested moods when location is detected
+  useEffect(() => {
+    if (suggestedMoods.length > 0 && mood.length === 0) {
+      // Auto-select the top suggested mood if none are selected
+      const topSuggestion = suggestedMoods[0];
+      if (topSuggestion) {
+        setMood([topSuggestion.value]);
       }
-    );
-  };
+    }
+  }, [suggestedMoods, mood.length]);
 
   const handleGenerate = async () => {
     setError("");
@@ -276,8 +300,22 @@ const QuestHome = () => {
       return;
     }
 
-    if ((!startLocation && !coords) || !Array.isArray(mood) || mood.length === 0 || isNaN(timeLimit)) {
-      setError("Please enter a valid starting location and select at least one mood.");
+    // Validate location - check for either manual input or detected location
+    const hasManualLocation = city && city.trim();
+    const hasDetectedLocation = startLocation && startLocation.address;
+    
+    if (!hasManualLocation && !hasDetectedLocation) {
+      setError("Please enter a location or use location detection.");
+      return;
+    }
+
+    if (!Array.isArray(mood) || mood.length === 0) {
+      setError("Please select at least one mood for your quest.");
+      return;
+    }
+
+    if (isNaN(timeLimit) || timeLimit < 30) {
+      setError("Please select a valid time limit for your quest.");
       return;
     }
 
@@ -285,8 +323,25 @@ const QuestHome = () => {
     try {
       const token = await user.getIdToken();
       
-      // Use either startLocation or coords for the city
-      const questCity = startLocation ? startLocation.address : city;
+      // Determine the best city string to use
+      let questCity;
+      let locationData = null;
+      
+      if (hasDetectedLocation) {
+        questCity = detectedLocation?.city || startLocation.address;
+        locationData = startLocation;
+      } else {
+        questCity = city.trim();
+      }
+
+      console.log('🚀 Generating quest with:', {
+        city: questCity,
+        mood,
+        timeLimit,
+        difficulty,
+        hasDetectedLocation,
+        locationData
+      });
       
       const result = await generateQuest(
         questCity,
@@ -294,23 +349,46 @@ const QuestHome = () => {
         Number(timeLimit),
         token,
         user.uid,
-        startLocation,
+        locationData,
         difficulty
       );
+      
       if (result.error) {
         console.error('❌ API error:', result);
         setError(result.error || 'Something went wrong generating your quest.');
+        logError(new Error(result.error), {
+          type: 'questGenerationError',
+          city: questCity,
+          mood,
+          timeLimit,
+          difficulty
+        });
         return;
       }
+      
       if (result.fallbackCity) {
-        alert(
-          `That location isn't supported yet. Showing results near ${result.fallbackCity} instead.`
-        );
+        setError(`That location isn't fully supported yet. Showing results near ${result.fallbackCity} instead.`);
+        // Don't return, continue with the fallback results
+        setTimeout(() => setError(""), 5000); // Clear after 5 seconds
       }
+      
       setQuestResult(result);
     } catch (err) {
-      console.error('❌ API error:', err);
-      setError('Something went wrong generating your quest.');
+      console.error('❌ Quest generation failed:', err);
+      const errorMessage = err.message.includes('Invalid input') 
+        ? 'Please check your location and mood selections.'
+        : 'Something went wrong generating your quest. Please try again.';
+      setError(errorMessage);
+      
+      logError(err, {
+        type: 'questGenerationException',
+        city: city || 'unknown',
+        mood,
+        timeLimit,
+        difficulty,
+        hasDetectedLocation,
+        hasManualLocation
+      });
     } finally {
       setLoading(false);
     }
@@ -443,13 +521,15 @@ const QuestHome = () => {
                 Where's your adventure?
               </h2>
               
-              <div className="space-y-4">
+              <div className="space-y-6">
+                {/* Manual Location Input */}
                 <div className="relative">
                   <input
                     id="start-address"
                     type="text"
                     placeholder="Enter your starting location..."
-                    defaultValue={city}
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
                     className="w-full px-6 py-4 pl-14 text-lg border-2 border-sage-200 rounded-2xl focus:border-sage-500 focus:outline-none focus:ring-4 focus:ring-sage-500/20 transition-all duration-200"
                   />
                   <svg className="absolute left-5 top-5 w-6 h-6 text-sage-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -457,22 +537,22 @@ const QuestHome = () => {
                   </svg>
                 </div>
                 
-                <button
-                  type="button"
-                  onClick={requestGps}
-                  className="flex items-center space-x-2 text-sage-600 hover:text-sage-700 font-medium transition-colors"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-                  </svg>
-                  <span>{coords ? '📍 Location Set' : 'Use My Current Location'}</span>
-                </button>
+                {/* OR Divider */}
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-300"></div>
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-white text-gray-500">OR</span>
+                  </div>
+                </div>
                 
-                {gpsMsg && (
-                  <p className="text-amber-600 text-sm bg-amber-50 px-4 py-2 rounded-lg border border-amber-200">
-                    {gpsMsg}
-                  </p>
-                )}
+                {/* Location Detection */}
+                <LocationDetection
+                  onLocationDetected={handleLocationDetected}
+                  onError={handleLocationError}
+                  showMoodSuggestions={true}
+                />
               </div>
             </div>
 
@@ -486,6 +566,46 @@ const QuestHome = () => {
                 </span>
                 What's your vibe? <span className="text-sm font-normal text-gray-500 ml-2">(Choose up to 3)</span>
               </h2>
+              
+              {/* Location-Based Mood Recommendations */}
+              {suggestedMoods.length > 0 && (
+                <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl border border-blue-200">
+                  <div className="flex items-center space-x-2 mb-3">
+                    <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                    <h3 className="font-semibold text-blue-800">💡 Recommended for your area:</h3>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {suggestedMoods.map((suggestedMood, index) => {
+                      const isAlreadySelected = mood.includes(suggestedMood.value);
+                      return (
+                        <button
+                          key={index}
+                          onClick={() => !isAlreadySelected && toggleMood(suggestedMood.value)}
+                          disabled={isAlreadySelected}
+                          className={`inline-flex items-center space-x-2 px-4 py-2 rounded-xl font-medium transition-all duration-200 ${
+                            isAlreadySelected
+                              ? 'bg-sage-100 text-sage-700 border border-sage-300 cursor-default'
+                              : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-100 hover:border-blue-400 cursor-pointer transform hover:scale-105'
+                          }`}
+                        >
+                          <span>{suggestedMood.icon}</span>
+                          <span>{suggestedMood.label}</span>
+                          {isAlreadySelected && (
+                            <svg className="w-4 h-4 text-sage-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-blue-600 mt-2">
+                    Based on nearby {suggestedMoods[0]?.reason || 'places'}
+                  </p>
+                </div>
+              )}
               
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
                 {moodOptions.map((option) => {
@@ -653,7 +773,7 @@ const QuestHome = () => {
             <div className="text-center">
               <button
                 onClick={handleGenerate}
-                disabled={loading || !mood.length || (!startLocation && !coords)}
+                disabled={loading || !mood.length || (!startLocation && !city.trim())}
                 className="bg-gradient-to-r from-sage-500 to-sage-600 hover:from-sage-600 hover:to-sage-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed text-white px-12 py-4 rounded-2xl font-bold text-xl shadow-sage-lg hover:shadow-sage-xl transition-all duration-200 transform hover:scale-105 disabled:transform-none"
               >
                 {loading ? (
@@ -671,10 +791,10 @@ const QuestHome = () => {
                 )}
               </button>
               
-              {(!mood.length || (!startLocation && !coords)) && (
+              {(!mood.length || (!startLocation && !city.trim())) && (
                 <p className="text-gray-500 text-sm mt-3">
-                  {!mood.length && "Select at least one mood"}{!mood.length && (!startLocation && !coords) && " and "}
-                  {(!startLocation && !coords) && "enter a location"} to continue
+                  {!mood.length && "Select at least one mood"}{!mood.length && (!startLocation && !city.trim()) && " and "}
+                  {(!startLocation && !city.trim()) && "enter a location"} to continue
                 </p>
               )}
             </div>

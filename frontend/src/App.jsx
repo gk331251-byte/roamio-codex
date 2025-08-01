@@ -43,10 +43,27 @@ import UGCAnalytics from "./pages/admin/UGCAnalytics";
 import FeaturedReview from "./pages/admin/FeaturedReview";
 import CookieConsent from "react-cookie-consent";
 
+// Error boundary test component (development only)
+import ErrorBoundaryTest from "./components/ErrorBoundary/ErrorBoundaryTest";
 
-function App() {
+// Error handling imports
+import { ErrorProvider } from "./contexts/ErrorContext";
+import { ErrorBoundary, RouteErrorBoundary } from "./components/ErrorBoundary";
+import ErrorToast from "./components/ErrorToast/ErrorToast";
+import { logError } from "./lib/errorLogger";
+import { useGoogleMaps } from "./hooks/useGoogleMaps";
+
+
+function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
+  
+  // Initialize Google Maps API early
+  const { isLoading: mapsLoading, error: mapsError } = useGoogleMaps({
+    libraries: ['places', 'geometry'],
+    autoLoad: true
+  });
+  
   useEffect(() => {
     const auth = getAuth();
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -56,6 +73,11 @@ function App() {
           await signInAnonymously(auth);
         } catch (err) {
           console.error('guest sign-in failed', err);
+          logError(err, { 
+            type: 'authError', 
+            action: 'signInAnonymously',
+            component: 'App'
+          });
         }
         return;
       }
@@ -85,6 +107,11 @@ function App() {
         }
       } catch (err) {
         console.error('resume failed', err);
+        logError(err, {
+          type: 'navigationError',
+          action: 'appInitialization',
+          component: 'App'
+        });
       }
     });
     return () => unsub();
@@ -92,46 +119,210 @@ function App() {
 
   return (
     <>
-      {location.pathname !== '/' && location.pathname !== '/onboarding' && <Header />}
+      {location.pathname !== '/' && location.pathname !== '/onboarding' && (
+        <RouteErrorBoundary routeName="Header">
+          <Header />
+        </RouteErrorBoundary>
+      )}
+      
       <Routes>
-        <Route path="/" element={<WelcomePage />} />
-        <Route path="/landing" element={<LandingPage />} />
-        <Route path="/home" element={<QuestHome />} />
-        <Route path="/onboarding" element={<OnboardingFlow />} />
-        <Route path="/quest-details" element={<QuestDetails />} />
-        <Route path="/quest/:city/:mood/route" element={<QuestRoute />} />
-        <Route path="/history" element={<QuestHistory />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/gallery" element={<PostcardGalleryPage />} />
-        <Route path="/live" element={<QuestLivePage />} />
-        <Route path="/group/:groupId" element={<GroupQuestView />} />
-        <Route path="/community" element={<CommunityFeed />} />
-        <Route path="/community/new" element={<CreateCommunity />} />
-        <Route path="/community/:id" element={<CommunityPage />} />
-        <Route path="/ugc-feed" element={<UGCFeed />} />
-        <Route path="/explore" element={<Explore />} />
-        <Route path="/admin" element={<AdminDashboard />} />
-        <Route path="/admin/analytics" element={<AnalyticsDashboard />} />
-        <Route path="/admin/quest-editor" element={<AdminQuestEditor />} />
-        <Route path="/quest-plus" element={<Pricing />} />
-        <Route path="/pricing" element={<Pricing />} />
-        <Route path="/custom" element={<CustomQuestBuilder />} />
-        <Route path="/custom/edit/:questId" element={<CustomQuestBuilder />} />
-        <Route path="/q/:questId" element={<PublicQuestPage />} />
-        <Route path="/tag-editor/:questId" element={<TagEditor />} />
-        <Route path="/terms" element={<Terms />} />
-        <Route path="/privacy" element={<Privacy />} />
-        <Route path="/creator-dashboard" element={<CreatorDashboard />} />
-        <Route path="/creator-dashboard/submit-quest" element={<CreatorSubmitQuest />} />
-        <Route path="/featured" element={<Featured />} />
-        <Route path="/leaderboard" element={<LeaderboardPage />} />
-        <Route path="/admin/ugc-analytics" element={<UGCAnalytics />} />
-        <Route path="/admin/featured-review" element={<FeaturedReview />} />
-        <Route path="/ugc-submit" element={<UGCSubmitForm />} />
-        <Route path="/payment-success" element={<PaymentSuccess />} />
-        <Route path="/payment-failed" element={<PaymentFailed />} />
+        <Route path="/" element={
+          <RouteErrorBoundary routeName="Welcome">
+            <WelcomePage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/landing" element={
+          <RouteErrorBoundary routeName="Landing">
+            <LandingPage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/home" element={
+          <RouteErrorBoundary routeName="QuestHome">
+            <QuestHome />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/onboarding" element={
+          <RouteErrorBoundary routeName="Onboarding">
+            <OnboardingFlow />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/quest-details" element={
+          <RouteErrorBoundary routeName="QuestDetails">
+            <QuestDetails />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/quest/:city/:mood/route" element={
+          <RouteErrorBoundary routeName="QuestRoute">
+            <QuestRoute />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/history" element={
+          <RouteErrorBoundary routeName="QuestHistory">
+            <QuestHistory />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/profile" element={
+          <RouteErrorBoundary routeName="Profile">
+            <Profile />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/gallery" element={
+          <RouteErrorBoundary routeName="Gallery">
+            <PostcardGalleryPage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/live" element={
+          <RouteErrorBoundary routeName="QuestLive">
+            <QuestLivePage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/group/:groupId" element={
+          <RouteErrorBoundary routeName="GroupQuest">
+            <GroupQuestView />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/community" element={
+          <RouteErrorBoundary routeName="Community">
+            <CommunityFeed />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/community/new" element={
+          <RouteErrorBoundary routeName="CreateCommunity">
+            <CreateCommunity />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/community/:id" element={
+          <RouteErrorBoundary routeName="CommunityPage">
+            <CommunityPage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/ugc-feed" element={
+          <RouteErrorBoundary routeName="UGCFeed">
+            <UGCFeed />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/explore" element={
+          <RouteErrorBoundary routeName="Explore">
+            <Explore />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/admin" element={
+          <RouteErrorBoundary routeName="Admin">
+            <AdminDashboard />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/admin/analytics" element={
+          <RouteErrorBoundary routeName="Analytics">
+            <AnalyticsDashboard />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/admin/quest-editor" element={
+          <RouteErrorBoundary routeName="QuestEditor">
+            <AdminQuestEditor />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/quest-plus" element={
+          <RouteErrorBoundary routeName="Pricing">
+            <Pricing />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/pricing" element={
+          <RouteErrorBoundary routeName="Pricing">
+            <Pricing />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/custom" element={
+          <RouteErrorBoundary routeName="CustomQuest">
+            <CustomQuestBuilder />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/custom/edit/:questId" element={
+          <RouteErrorBoundary routeName="CustomQuestEdit">
+            <CustomQuestBuilder />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/q/:questId" element={
+          <RouteErrorBoundary routeName="PublicQuest">
+            <PublicQuestPage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/tag-editor/:questId" element={
+          <RouteErrorBoundary routeName="TagEditor">
+            <TagEditor />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/terms" element={
+          <RouteErrorBoundary routeName="Terms">
+            <Terms />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/privacy" element={
+          <RouteErrorBoundary routeName="Privacy">
+            <Privacy />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/creator-dashboard" element={
+          <RouteErrorBoundary routeName="CreatorDashboard">
+            <CreatorDashboard />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/creator-dashboard/submit-quest" element={
+          <RouteErrorBoundary routeName="CreatorSubmit">
+            <CreatorSubmitQuest />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/featured" element={
+          <RouteErrorBoundary routeName="Featured">
+            <Featured />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/leaderboard" element={
+          <RouteErrorBoundary routeName="Leaderboard">
+            <LeaderboardPage />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/admin/ugc-analytics" element={
+          <RouteErrorBoundary routeName="UGCAnalytics">
+            <UGCAnalytics />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/admin/featured-review" element={
+          <RouteErrorBoundary routeName="FeaturedReview">
+            <FeaturedReview />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/ugc-submit" element={
+          <RouteErrorBoundary routeName="UGCSubmit">
+            <UGCSubmitForm />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/payment-success" element={
+          <RouteErrorBoundary routeName="PaymentSuccess">
+            <PaymentSuccess />
+          </RouteErrorBoundary>
+        } />
+        <Route path="/payment-failed" element={
+          <RouteErrorBoundary routeName="PaymentFailed">
+            <PaymentFailed />
+          </RouteErrorBoundary>
+        } />
+        
+        {/* Development-only error boundary test route */}
+        {process.env.NODE_ENV === 'development' && (
+          <Route path="/error-test" element={
+            <RouteErrorBoundary routeName="ErrorTest">
+              <ErrorBoundaryTest />
+            </RouteErrorBoundary>
+          } />
+        )}
       </Routes>
-      {location.pathname !== '/' && location.pathname !== '/onboarding' && <Footer />}
+      
+      {location.pathname !== '/' && location.pathname !== '/onboarding' && (
+        <RouteErrorBoundary routeName="Footer">
+          <Footer />
+        </RouteErrorBoundary>
+      )}
+      
       <CookieConsent
         location="bottom"
         buttonText="I Agree"
@@ -142,7 +333,21 @@ function App() {
         Roamio uses location and cookies to personalize quests. By using this app, you agree to our{' '}
         <a href="/privacy" style={{ color: '#4e974e', textDecoration: 'underline' }}>Privacy Policy</a>.
       </CookieConsent>
+      
+      {/* Global error toast notifications */}
+      <ErrorToast />
     </>
+  );
+}
+
+// Main App component with error providers and boundaries
+function App() {
+  return (
+    <ErrorProvider>
+      <ErrorBoundary name="App" level="app">
+        <AppContent />
+      </ErrorBoundary>
+    </ErrorProvider>
   );
 }
 
