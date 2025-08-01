@@ -8,6 +8,7 @@ import requests
 import json
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
 import os
 import sys
 import traceback
@@ -41,19 +42,32 @@ except ImportError:
 
 app = FastAPI(title="Roamio Backend API", version="1.0.0")
 
-# Add CORS middleware
+# Add CORS middleware with enhanced configuration
 allowed_origins = [
     os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"),
     "http://localhost:5174",  # Additional port for development
     "http://localhost:3000",  # Common React dev port
+    "http://localhost:4173",  # Vite preview port
+    "*",  # Allow all origins for development (remove in production)
 ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],  # Temporarily allow all origins for debugging
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming requests for debugging."""
+    logger = logging.getLogger(__name__)
+    logger.info(f"🌐 {request.method} {request.url} - Headers: {dict(request.headers)}")
+    response = await call_next(request)
+    logger.info(f"📤 Response: {response.status_code}")
+    return response
 
 # Configure structured logging for startup diagnostics
 logging.basicConfig(
@@ -927,6 +941,20 @@ CITY_FALLBACK_MAP = {
     "poconos": "Philadelphia",
 }
 
+
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Handle preflight OPTIONS requests for CORS."""
+    return JSONResponse(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        },
+        content={"message": "CORS preflight OK"}
+    )
 
 @app.get("/")
 def read_root():
