@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium, getUserXP } from "../lib/api.js";
+import { wrapAPICall } from "../utils/apiWrapper";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
@@ -11,6 +12,14 @@ import { logError, logUserActionError } from "../lib/errorLogger";
 import googleMapsLoader from "../services/googleMapsLoader";
 import { trackRender } from "../utils/reactErrorDetector";
 import { 
+  trackComponentRender,
+  trackStateUpdate as trackError185StateUpdate,
+  trackAsyncOp,
+  trackComponentMount as trackError185Mount,
+  trackComponentUnmount as trackError185Unmount,
+  isComponentMounted as isError185ComponentMounted
+} from "../utils/reactError185Detector";
+import { 
   startQuestGeneration, 
   logQuestStep, 
   logStateUpdate, 
@@ -20,6 +29,20 @@ import {
   logQuestError,
   finishQuestGeneration
 } from "../utils/questDebugger";
+import {
+  startQuestDebugSession,
+  logQuestDebugStep,
+  logQuestStateUpdate,
+  logQuestAsyncOp,
+  logQuestDebugError,
+  logQuestDebugWarning,
+  finishQuestDebugSession
+} from "../utils/questGenerationDebugger";
+import {
+  trackNavComponentMount as trackNavMount,
+  trackNavComponentUnmount as trackNavUnmount,
+  trackNavComponentRender as trackNavRender
+} from "../utils/navigationTracker";
 
 const _toQuestObj = (doc) => {
   if (!doc || !doc.fields) return doc;
@@ -148,9 +171,12 @@ const moodOptions = [
 ];
 
 const QuestHome = () => {
-  // Development-only render tracking
+  // Development-only render tracking for all systems
   if (process.env.NODE_ENV === 'development') {
     trackRender('QuestHome');
+    trackComponentRender('QuestHome', { timestamp: Date.now() });
+    trackError185Mount('QuestHome');
+    trackNavRender('QuestHome', { timestamp: Date.now(), location: window.location.pathname });
   }
   
   // CRITICAL FIX: Component mounted state to prevent updates after unmount
@@ -180,6 +206,8 @@ const QuestHome = () => {
       if (process.env.NODE_ENV === 'development') {
         const oldValue = state;
         logStateUpdate('QuestHome', stateName, oldValue, newValue);
+        trackError185StateUpdate('QuestHome', stateName, oldValue, newValue);
+        logQuestStateUpdate('QuestHome', stateName, oldValue, newValue);
       }
       setState(newValue);
     };
@@ -236,6 +264,7 @@ const QuestHome = () => {
     
     if (process.env.NODE_ENV === 'development') {
       logComponentMount('QuestHome');
+      trackNavMount('QuestHome', window.location.pathname);
     }
     
     return () => {
@@ -249,6 +278,8 @@ const QuestHome = () => {
       
       if (process.env.NODE_ENV === 'development') {
         logComponentUnmount('QuestHome');
+        trackError185Unmount('QuestHome');
+        trackNavUnmount('QuestHome');
       }
     };
   }, []);
@@ -259,13 +290,15 @@ const QuestHome = () => {
       setUser(firebaseUser);
       if (firebaseUser) {
         try {
-          const res = await validatePremium();
+          const wrappedValidatePremium = wrapAPICall(validatePremium, 'validatePremium', 'QuestHome');
+          const res = await wrappedValidatePremium();
           setPremium(!!res.isPremium);
         } catch (err) {
           console.error('premium check failed', err);
         }
         try {
-          const xpData = await getUserXP(firebaseUser.uid);
+          const wrappedGetUserXP = wrapAPICall(getUserXP, 'getUserXP', 'QuestHome');
+          const xpData = await wrappedGetUserXP(firebaseUser.uid);
           setLevel(xpData.level || 1);
         } catch (err) {
           console.error('xp fetch failed', err);
@@ -288,9 +321,11 @@ const QuestHome = () => {
         // Double-check user still exists (prevent auth state race conditions)
         if (!user || !user.uid || abortController.signal.aborted) return;
         
-        const data = await getActiveQuest(user.uid);
+        const wrappedGetActiveQuest = wrapAPICall(getActiveQuest, 'getActiveQuest', 'QuestHome');
+        const data = await wrappedGetActiveQuest(user.uid);
         if (data && data.questId && data.status !== 'completed') {
-          const questDoc = await getQuest(data.questId).catch(() => null);
+          const wrappedGetQuest = wrapAPICall(getQuest, 'getQuest', 'QuestHome');
+          const questDoc = await wrappedGetQuest(data.questId).catch(() => null);
           let groupOk = true;
           if (data.groupId) {
             const snap = await getDoc(doc(db, 'groups', data.groupId));
@@ -414,21 +449,36 @@ const QuestHome = () => {
 
   // Auto-select suggested moods when location is detected
   useEffect(() => {
+    // CRITICAL FIX: Enhanced to prevent infinite loops with better condition checking
     if (suggestedMoods.length > 0 && mood.length === 0 && !hasAutoSelectedMood.current) {
       // Auto-select the top suggested mood if none are selected
       const topSuggestion = suggestedMoods[0];
-      if (topSuggestion) {
+      if (topSuggestion && isMountedRef.current) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('🎯 Auto-selecting mood:', topSuggestion.value);
+          trackError185StateUpdate('QuestHome', 'mood_auto_select', [], [topSuggestion.value]);
+        }
         setMood([topSuggestion.value]);
         hasAutoSelectedMood.current = true;
       }
     }
-  }, [suggestedMoods]); // Fixed: removed mood.length dependency to prevent infinite loop
+  }, [suggestedMoods, mood.length]); // Include mood.length but with proper guard conditions
 
   const handleGenerate = async () => {
-    // Start quest generation debugging
+    // Start comprehensive quest generation debugging
     if (process.env.NODE_ENV === 'development') {
       startQuestGeneration();
       logQuestStep('handleGenerate_start', { userId: user?.uid, city, mood, timeLimit, difficulty });
+      
+      // Start comprehensive debugging session
+      startQuestDebugSession(user?.uid, { city, mood, timeLimit, difficulty });
+      logQuestDebugStep('quest_generation_initiated', { 
+        hasUser: !!user,
+        hasCity: !!city,
+        hasMood: mood?.length > 0,
+        timeLimit,
+        difficulty
+      });
     }
     
     setError("");
@@ -438,7 +488,9 @@ const QuestHome = () => {
       setError("You must be signed in to generate a quest.");
       if (process.env.NODE_ENV === 'development') {
         logQuestError('noUser', new Error('User not signed in'), { step: 'initial_validation' });
+        logQuestDebugError('validation_error', new Error('User not signed in'), { step: 'user_validation' });
         finishQuestGeneration(false, 'No user');
+        finishQuestDebugSession(false, 'No user');
       }
       return;
     }
@@ -449,6 +501,12 @@ const QuestHome = () => {
     
     if (process.env.NODE_ENV === 'development') {
       logQuestStep('validation_location', { hasManualLocation, hasDetectedLocation, city, startLocation });
+      logQuestDebugStep('location_validation', { 
+        hasManualLocation, 
+        hasDetectedLocation, 
+        cityLength: city?.length || 0,
+        hasStartLocation: !!startLocation 
+      });
     }
     
     if (!hasManualLocation && !hasDetectedLocation) {
@@ -568,7 +626,9 @@ const QuestHome = () => {
         });
       }
       
-      const generateQuestPromise = generateQuest(
+      // Wrap generateQuest with enhanced error tracking
+      const wrappedGenerateQuest = wrapAPICall(generateQuest, 'generateQuest', 'QuestHome');
+      const generateQuestPromise = wrappedGenerateQuest(
         questCity,
         mood,
         Number(timeLimit),
@@ -578,9 +638,17 @@ const QuestHome = () => {
         difficulty
       );
       
-      // Track the async operation
+      // Track the async operation for all systems
       if (process.env.NODE_ENV === 'development') {
         logAsyncOperation('generateQuest', 'QuestHome', generateQuestPromise);
+        trackAsyncOp('generateQuest', 'QuestHome', generateQuestPromise);
+        logQuestAsyncOp('generateQuest', generateQuestPromise, {
+          questCity,
+          moodCount: mood.length,
+          timeLimit,
+          difficulty,
+          hasLocationData: !!locationData
+        });
       }
       
       const result = await generateQuestPromise;
@@ -632,7 +700,14 @@ const QuestHome = () => {
       
       if (process.env.NODE_ENV === 'development') {
         logQuestStep('quest_result_set', { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
+        logQuestDebugStep('quest_generation_success', { 
+          questId: result?.quest?.id, 
+          placesCount: result?.quest?.places?.length,
+          hasPostcard: !!result?.quest?.postcard,
+          hasFallbackCity: !!result.fallbackCity
+        });
         finishQuestGeneration(true, { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
+        finishQuestDebugSession(true, { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
       }
     } catch (err) {
       console.error('❌ Quest generation failed:', err);
@@ -670,6 +745,17 @@ const QuestHome = () => {
         isAuthError,
         stayOnPage: true // Flag to indicate we should stay on current page
       });
+      
+      if (process.env.NODE_ENV === 'development') {
+        logQuestDebugError('quest_generation_exception', err, {
+          errorMessage,
+          isAuthError,
+          hasDetectedLocation,
+          hasManualLocation,
+          questParams: { city, mood, timeLimit, difficulty }
+        });
+        finishQuestDebugSession(false, { error: errorMessage, originalError: err.message });
+      }
     } finally {
       setLoading(false);
     }
