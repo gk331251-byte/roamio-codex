@@ -1,6 +1,7 @@
 import React from "react";
 import GoogleMapReact from "google-map-react";
 import { decode } from "@googlemaps/polyline-codec";
+import { logPostGenerationEvent, logPostGenerationRender } from "../utils/postGenerationDebugger";
 
 const typeIcons = {
   museum: "🏛️",
@@ -32,6 +33,43 @@ const Pin = ({ type, name }) => {
 
 const RouteMap = ({ places = [], route = null }) => {
   const [mapError, setMapError] = React.useState(false);
+  const isMountedRef = React.useRef(true);
+  
+  // Track renders for post-generation debugging
+  if (process.env.NODE_ENV === 'development') {
+    logPostGenerationRender('RouteMap', { 
+      placesCount: places?.length,
+      hasRoute: !!route,
+      mapError
+    });
+  }
+  
+  React.useEffect(() => {
+    isMountedRef.current = true;
+    
+    if (process.env.NODE_ENV === 'development') {
+      logPostGenerationEvent('route_map_mount', { 
+        placesCount: places?.length,
+        hasRoute: !!route 
+      });
+    }
+    
+    return () => {
+      isMountedRef.current = false;
+      
+      if (process.env.NODE_ENV === 'development') {
+        logPostGenerationEvent('route_map_unmount', { 
+          placesCount: places?.length 
+        });
+      }
+    };
+  }, []);
+  
+  const safeSetMapError = (value) => {
+    if (isMountedRef.current) {
+      setMapError(value);
+    }
+  };
   const parseLatLng = (val) => {
     const num = parseFloat(val);
     return isNaN(num) ? null : num;
@@ -49,12 +87,15 @@ const RouteMap = ({ places = [], route = null }) => {
   };
 
   const drawRoute = (map, maps) => {
-    if (!route || !route.polyline) return;
+    if (!route || !route.polyline || !isMountedRef.current) return;
 
     try {
       const decodedPath = decode(route.polyline).map(
         ([lat, lng]) => new maps.LatLng(lat, lng)
       );
+      
+      if (!isMountedRef.current) return; // Check again after async decode
+      
       const polyline = new maps.Polyline({
         path: decodedPath,
         geodesic: true,
@@ -63,10 +104,12 @@ const RouteMap = ({ places = [], route = null }) => {
         strokeWeight: 5,
       });
 
-      polyline.setMap(map);
+      if (isMountedRef.current) {
+        polyline.setMap(map);
+      }
     } catch (err) {
       console.error("Failed to render polyline:", err);
-      setMapError(true);
+      safeSetMapError(true);
     }
   };
 
@@ -91,7 +134,7 @@ const RouteMap = ({ places = [], route = null }) => {
             defaultZoom={13}
             yesIWantToUseGoogleMapApiInternals
             onGoogleApiLoaded={({ map, maps }) => drawRoute(map, maps)}
-            onError={() => setMapError(true)}
+            onError={() => safeSetMapError(true)}
           >
             {orderedPlaces.map((place, index) => (
               <Pin

@@ -10,7 +10,7 @@ import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from 
  * @param {number} timeLimit - Time limit in minutes
  * @param {string} token - Firebase user token for auth
  */
-export async function generateQuest(city, mood, timeLimit, token, userId, startLocation, difficulty = 'Easy') {
+export async function generateQuest(city, mood, timeLimit, token, userId, startLocation, difficulty = 'Easy', isDevelopmentMode = false) {
   if (!city || !Array.isArray(mood) || mood.length === 0 || typeof timeLimit !== 'number') {
     throw new Error("Invalid input: city, mood[], and numeric timeLimit are required.");
   }
@@ -25,6 +25,7 @@ export async function generateQuest(city, mood, timeLimit, token, userId, startL
     token,
     user_id: userId,
     difficulty,
+    is_development_mode: isDevelopmentMode,
   };
 
   // Add lat/lng if startLocation is provided

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium, getUserXP } from "../lib/api.js";
 import { wrapAPICall } from "../utils/apiWrapper";
@@ -13,11 +13,11 @@ import googleMapsLoader from "../services/googleMapsLoader";
 import { trackRender } from "../utils/reactErrorDetector";
 import { 
   trackComponentRender,
-  trackStateUpdate as trackError185StateUpdate,
+  trackStateUpdate,
   trackAsyncOp,
-  trackComponentMount as trackError185Mount,
-  trackComponentUnmount as trackError185Unmount,
-  isComponentMounted as isError185ComponentMounted
+  trackComponentMount,
+  trackComponentUnmount,
+  getError185Report
 } from "../utils/reactError185Detector";
 import { 
   startQuestGeneration, 
@@ -35,7 +35,6 @@ import {
   logQuestStateUpdate,
   logQuestAsyncOp,
   logQuestDebugError,
-  logQuestDebugWarning,
   finishQuestDebugSession
 } from "../utils/questGenerationDebugger";
 import {
@@ -43,6 +42,22 @@ import {
   trackNavComponentUnmount as trackNavUnmount,
   trackNavComponentRender as trackNavRender
 } from "../utils/navigationTracker";
+import {
+  markQuestGenerationComplete,
+  logPostGenerationEvent,
+  logPostGenerationStateUpdate
+} from "../utils/postGenerationDebugger";
+import { 
+  QuestFormValidator, 
+  ValidationRules, 
+  SecurityUtils,
+  InputSanitizer
+} from "../utils/formValidation";
+import ValidatedInput from "./FormValidation/ValidatedInput";
+import ValidatedMoodSelector from "./FormValidation/ValidatedMoodSelector";
+import ValidatedTimeInput from "./FormValidation/ValidatedTimeInput";
+import FormValidationSummary, { ValidationStatus } from "./FormValidation/FormValidationSummary";
+import ValidationErrorBoundary from "./FormValidation/ValidationErrorBoundary";
 
 const _toQuestObj = (doc) => {
   if (!doc || !doc.fields) return doc;
@@ -175,7 +190,7 @@ const QuestHome = () => {
   if (process.env.NODE_ENV === 'development') {
     trackRender('QuestHome');
     trackComponentRender('QuestHome', { timestamp: Date.now() });
-    trackError185Mount('QuestHome');
+    trackComponentMount('QuestHome');
     trackNavRender('QuestHome', { timestamp: Date.now(), location: window.location.pathname });
   }
   
@@ -208,6 +223,7 @@ const QuestHome = () => {
         logStateUpdate('QuestHome', stateName, oldValue, newValue);
         trackError185StateUpdate('QuestHome', stateName, oldValue, newValue);
         logQuestStateUpdate('QuestHome', stateName, oldValue, newValue);
+        logPostGenerationStateUpdate('QuestHome', stateName, oldValue, newValue);
       }
       setState(newValue);
     };
@@ -225,11 +241,73 @@ const QuestHome = () => {
   const [loading, setLoading] = createTrackedState(false, "loading");
   const [error, setError] = createTrackedState("", "error");
   const [questResult, setQuestResult] = createTrackedState(null, "questResult");
+  const [questResultLoading, setQuestResultLoading] = createTrackedState(false, "questResultLoading");
   const [user, setUser] = createTrackedState(null, "user");
   const [premium, setPremium] = createTrackedState(false, "premium");
   const [resumeData, setResumeData] = createTrackedState(null, "resumeData");
   const [level, setLevel] = createTrackedState(1, "level");
+  
+  // Form validation state
+  const [formValidator] = useState(() => new QuestFormValidator());
+  const [validationErrors, setValidationErrors] = createTrackedState({}, "validationErrors");
+  const [validationWarnings, setValidationWarnings] = createTrackedState({}, "validationWarnings");
+  const [showValidationSummary, setShowValidationSummary] = createTrackedState(false, "showValidationSummary");
+  const [isFormValid, setIsFormValid] = createTrackedState(false, "isFormValid");
   const [difficulty, setDifficulty] = createTrackedState('Easy', "difficulty");
+  
+  // Computed validation states with null safety
+  const hasValidationErrors = validationErrors && Object.keys(validationErrors).length > 0;
+  const hasValidationWarnings = validationWarnings && Object.keys(validationWarnings).length > 0;
+  
+  // Enhanced setState wrapper for React Error #185 detection
+  const safeSetState = (stateName, setter, newValue, currentValue = undefined) => {
+    if (process.env.NODE_ENV === 'development') {
+      // Check if component is still mounted before state update
+      if (!isMountedRef.current) {
+        console.error(`🚨 ATTEMPTED setState ON UNMOUNTED COMPONENT: ${stateName}`, {
+          attemptedValue: newValue,
+          currentValue,
+          component: 'QuestHome',
+          stack: new Error().stack
+        });
+        getError185Report(); // Trigger error report
+        return; // Prevent setState on unmounted component
+      }
+      
+      // Track state transitions
+      trackStateUpdate('QuestHome', stateName, currentValue, newValue);
+      
+      // Log state change
+      console.log(`🔄 QuestHome.${stateName}:`, currentValue, '→', newValue);
+    }
+    
+    // Safely call the setter
+    try {
+      setter(newValue);
+    } catch (error) {
+      console.error(`🚨 Error setting ${stateName}:`, error);
+      if (process.env.NODE_ENV === 'development') {
+        getError185Report();
+      }
+    }
+  };
+  
+  // Development mode for unlimited quest generation
+  const isDevelopmentMode = useMemo(() => {
+    // Check various indicators for development mode
+    const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const isDevMode = process.env.NODE_ENV === 'development';
+    const isDevUser = user?.email && (
+      user.email.includes('@roamio.dev') || 
+      user.email.includes('@anthropic.com') ||
+      user.email.includes('@localhost') ||
+      user.email === 'gavin@gvnkelly.com' // Add specific dev emails here
+    );
+    const hasDevFlag = localStorage.getItem('roamio_dev_mode') === 'true';
+    
+    return isLocalDev || isDevMode || isDevUser || hasDevFlag;
+  }, [user?.email]);
+  
   const navigate = useNavigate();
   
   // Ref to prevent infinite mood auto-selection
@@ -265,10 +343,92 @@ const QuestHome = () => {
     if (process.env.NODE_ENV === 'development') {
       logComponentMount('QuestHome');
       trackNavMount('QuestHome', window.location.pathname);
+      trackComponentMount('QuestHome');
+      trackComponentRender('QuestHome', { 
+        location: window.location.pathname,
+        hasUser: !!user,
+        timestamp: Date.now()
+      });
+    }
+    
+    // Development mode keyboard shortcut (Ctrl+Shift+D)
+    const handleKeyDown = (event) => {
+      if (event.ctrlKey && event.shiftKey && event.key === 'D') {
+        event.preventDefault();
+        if (isDevelopmentMode) {
+          localStorage.removeItem('roamio_dev_mode');
+          console.log('🚫 Development mode disabled');
+        } else {
+          localStorage.setItem('roamio_dev_mode', 'true');
+          console.log('🔧 Development mode enabled');
+        }
+        window.location.reload();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Expose dev mode toggle function to console
+    if (typeof window !== 'undefined') {
+      window.toggleDevMode = () => {
+        if (localStorage.getItem('roamio_dev_mode') === 'true') {
+          localStorage.removeItem('roamio_dev_mode');
+          console.log('🚫 Development mode disabled via console');
+        } else {
+          localStorage.setItem('roamio_dev_mode', 'true');
+          console.log('🔧 Development mode enabled via console - allows unlimited quest generation');
+        }
+        window.location.reload();
+      };
+      
+      // Expose React Error #185 debugging utilities
+      window.checkReactError185 = () => {
+        const report = getError185Report();
+        console.group('🔍 React Error #185 Debug Report');
+        console.log('Error occurrences:', report.errorOccurrences.length);
+        console.log('Component states:', report.componentStates);
+        console.log('Recent renders:', report.renderStats);
+        console.log('Recent state updates:', report.stateUpdateStats);
+        console.log('Async operations:', report.asyncOperations);
+        console.log('Promise rejections:', report.promiseRejections);
+        console.groupEnd();
+        return report;
+      };
+      
+      window.simulateError185 = () => {
+        console.warn('🧪 Simulating conditions that could cause React Error #185...');
+        // Simulate rapid state updates that could trigger the error
+        for (let i = 0; i < 10; i++) {
+          setTimeout(() => {
+            trackStateUpdate('QuestHome', 'testState', i, i + 1);
+          }, i * 10);
+        }
+      };
     }
     
     return () => {
       isMountedRef.current = false;
+      window.removeEventListener('keydown', handleKeyDown);
+      if (typeof window !== 'undefined') {
+        delete window.toggleDevMode;
+      }
+      
+      // Track component unmount for React Error #185 detection
+      if (process.env.NODE_ENV === 'development') {
+        trackComponentUnmount('QuestHome');
+        trackNavUnmount('QuestHome');
+        
+        // Log final state before unmount
+        console.log('🔥 QuestHome unmounting with state:', {
+          loading,
+          error,
+          quest,
+          isFormValid,
+          hasValidationErrors,
+          validationErrors: validationErrors || {},
+          activeTimeouts: activeTimeouts.current.size
+        });
+      }
       
       // CRITICAL FIX: Clear all active timeouts on unmount
       activeTimeouts.current.forEach(timeoutId => {
@@ -278,8 +438,14 @@ const QuestHome = () => {
       
       if (process.env.NODE_ENV === 'development') {
         logComponentUnmount('QuestHome');
-        trackError185Unmount('QuestHome');
+        trackComponentUnmount('QuestHome');
         trackNavUnmount('QuestHome');
+        
+        // Generate final React Error #185 report before unmount
+        const finalReport = getError185Report();
+        if (finalReport.errorOccurrences.length > 0) {
+          console.log('🚨 React Error #185 Final Report on unmount:', finalReport);
+        }
       }
     };
   }, []);
@@ -465,24 +631,54 @@ const QuestHome = () => {
   }, [suggestedMoods, mood.length]); // Include mood.length but with proper guard conditions
 
   const handleGenerate = async () => {
+    // Validate form before starting generation
+    const isFormValid = validateCompleteForm();
+    if (!isFormValid) {
+      setError("Please fix the validation errors before generating your quest.");
+      setShowValidationSummary(true);
+      return;
+    }
+    
+    // Security check on inputs
+    const securityChecks = {
+      city: SecurityUtils.detectSuspiciousInput(city),
+      mood: mood.some(m => SecurityUtils.detectSuspiciousInput(m).isSuspicious)
+    };
+    
+    if (securityChecks.city.isSuspicious || securityChecks.mood) {
+      SecurityUtils.logSecurityEvent('suspicious_quest_generation_attempt', {
+        cityCheck: securityChecks.city,
+        moodCheck: securityChecks.mood,
+        userId: user?.uid
+      });
+      setError("Invalid input detected. Please enter valid location and mood information.");
+      return;
+    }
+    
+    // Sanitize all inputs before processing
+    const sanitizedCity = InputSanitizer.sanitizeLocation(city);
+    const sanitizedTimeLimit = InputSanitizer.sanitizeNumericInput(timeLimit, 15, 480);
+    
     // Start comprehensive quest generation debugging
     if (process.env.NODE_ENV === 'development') {
       startQuestGeneration();
-      logQuestStep('handleGenerate_start', { userId: user?.uid, city, mood, timeLimit, difficulty });
+      logQuestStep('handleGenerate_start', { userId: user?.uid, city: sanitizedCity, mood, timeLimit: sanitizedTimeLimit, difficulty });
       
       // Start comprehensive debugging session
-      startQuestDebugSession(user?.uid, { city, mood, timeLimit, difficulty });
+      startQuestDebugSession(user?.uid, { city: sanitizedCity, mood, timeLimit: sanitizedTimeLimit, difficulty });
       logQuestDebugStep('quest_generation_initiated', { 
         hasUser: !!user,
-        hasCity: !!city,
+        hasCity: !!sanitizedCity,
         hasMood: mood?.length > 0,
-        timeLimit,
-        difficulty
+        timeLimit: sanitizedTimeLimit,
+        difficulty,
+        isFormValid
       });
     }
     
     setError("");
     setQuestResult(null);
+    setShowValidationSummary(false);
 
     if (!user) {
       setError("You must be signed in to generate a quest.");
@@ -496,7 +692,7 @@ const QuestHome = () => {
     }
 
     // Validate location - check for either manual input or detected location
-    const hasManualLocation = city && city.trim();
+    const hasManualLocation = sanitizedCity && sanitizedCity.trim();
     const hasDetectedLocation = startLocation && startLocation.address;
     
     if (process.env.NODE_ENV === 'development') {
@@ -536,17 +732,19 @@ const QuestHome = () => {
       return;
     }
 
-    setLoading(true);
+    // Safe state update with React Error #185 protection
+    safeSetState('loading', setLoading, true, loading);
     
     if (process.env.NODE_ENV === 'development') {
       logQuestStep('setLoading_true', { loading: true });
+      trackAsyncOp('questGeneration', 'QuestHome', Promise.resolve());
     }
     
     try {
       // CRITICAL FIX: Add proper auth state validation before token fetch
       if (!user || !user.uid) {
-        setError("Authentication lost. Please refresh the page and try again.");
-        setLoading(false);
+        safeSetState('error', setError, "Authentication lost. Please refresh the page and try again.", error);
+        safeSetState('loading', setLoading, false, loading);
         if (process.env.NODE_ENV === 'development') {
           logQuestError('authLost', new Error('Auth state lost during generation'), { user: !!user, uid: user?.uid });
           finishQuestGeneration(false, 'Auth lost');
@@ -571,8 +769,8 @@ const QuestHome = () => {
         }
       } catch (tokenError) {
         console.error('Failed to get ID token:', tokenError);
-        setError("Authentication error. Please refresh the page and try again.");
-        setLoading(false);
+        safeSetState('error', setError, "Authentication error. Please refresh the page and try again.", error);
+        safeSetState('loading', setLoading, false, loading);
         
         if (process.env.NODE_ENV === 'development') {
           logQuestError('tokenFetch', tokenError, { userId: user.uid });
@@ -592,10 +790,10 @@ const QuestHome = () => {
       let locationData = null;
       
       if (hasDetectedLocation) {
-        questCity = detectedLocation?.city || startLocation.address;
+        questCity = InputSanitizer.sanitizeLocation(detectedLocation?.city || startLocation.address);
         locationData = startLocation;
       } else {
-        questCity = city.trim();
+        questCity = sanitizedCity;
       }
 
       if (process.env.NODE_ENV === 'development') {
@@ -631,11 +829,12 @@ const QuestHome = () => {
       const generateQuestPromise = wrappedGenerateQuest(
         questCity,
         mood,
-        Number(timeLimit),
+        sanitizedTimeLimit,
         token,
         user.uid,
         locationData,
-        difficulty
+        difficulty,
+        isDevelopmentMode
       );
       
       // Track the async operation for all systems
@@ -687,16 +886,51 @@ const QuestHome = () => {
       }
       
       if (result.fallbackCity) {
-        setError(`That location isn't fully supported yet. Showing results near ${result.fallbackCity} instead.`);
+        safeSetState('error', setError, `That location isn't fully supported yet. Showing results near ${result.fallbackCity} instead.`, error);
         // Don't return, continue with the fallback results
-        safeSetTimeout(() => setError(""), 5000); // Clear after 5 seconds with safe timeout
+        safeSetTimeout(() => safeSetState('error', setError, "", error), 5000); // Clear after 5 seconds with safe timeout
         
         if (process.env.NODE_ENV === 'development') {
           logQuestStep('fallback_city_used', { fallbackCity: result.fallbackCity });
         }
       }
       
-      setQuestResult(result);
+      // CRITICAL FIX: Add loading state and delay to prevent rapid renders
+      if (isMountedRef.current) {
+        setQuestResultLoading(true);
+        
+        if (process.env.NODE_ENV === 'development') {
+          logPostGenerationEvent('quest_result_loading_start', { 
+            hasResult: !!result,
+            placesCount: result?.quest?.places?.length 
+          });
+        }
+        
+        // Use setTimeout to ensure this state update happens after current render cycle
+        safeSetTimeout(() => {
+          if (isMountedRef.current) {
+            if (process.env.NODE_ENV === 'development') {
+              logPostGenerationEvent('quest_result_set', { 
+                questId: result?.quest?.id,
+                placesCount: result?.quest?.places?.length 
+              });
+              
+              // Track critical state transition
+              trackStateUpdate('QuestHome', 'questResult', null, result);
+              trackStateUpdate('QuestHome', 'questResultLoading', true, false);
+            }
+            
+            // CRITICAL: Safe state updates for quest result transition
+            safeSetState('questResult', setQuestResult, result, questResult);
+            safeSetState('questResultLoading', setQuestResultLoading, false, questResultLoading);
+          } else {
+            console.warn('🚨 Quest result received after component unmount');
+            if (process.env.NODE_ENV === 'development') {
+              getError185Report();
+            }
+          }
+        }, 100); // Small delay to prevent rapid state updates
+      }
       
       if (process.env.NODE_ENV === 'development') {
         logQuestStep('quest_result_set', { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
@@ -708,6 +942,7 @@ const QuestHome = () => {
         });
         finishQuestGeneration(true, { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
         finishQuestDebugSession(true, { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
+        markQuestGenerationComplete(); // Start post-generation monitoring
       }
     } catch (err) {
       console.error('❌ Quest generation failed:', err);
@@ -757,30 +992,141 @@ const QuestHome = () => {
         finishQuestDebugSession(false, { error: errorMessage, originalError: err.message });
       }
     } finally {
-      setLoading(false);
+      // CRITICAL: Safe state update with mount check
+      safeSetState('loading', setLoading, false, loading);
     }
   };
 
   const handleStartQuest = async () => {
+    // CRITICAL FIX: Add navigation guards to prevent race conditions
+    if (!isMountedRef.current) {
+      console.warn('Attempted to start quest on unmounted component');
+      return;
+    }
+    
     if (!premium) {
-      navigate('/pricing');
+      if (isMountedRef.current) {
+        navigate('/pricing');
+      }
       return;
     }
     if (!questResult) return;
+    
     const questId = `${city}_${mood.join('-')}`;
     try {
-      const { groupId } = await createGroupQuest(
+      const wrappedCreateGroupQuest = wrapAPICall(createGroupQuest, 'createGroupQuest', 'QuestHome');
+      const { groupId } = await wrappedCreateGroupQuest(
         user.uid,
         questId,
         user.displayName
       );
-      navigate('/live', {
-        state: { quest: questResult.quest, questId, groupId, timeLimit },
-      });
+      
+      // CRITICAL FIX: Check mount state before navigation
+      if (isMountedRef.current) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('🚪 Navigating to quest live page', {
+            from: window.location.pathname,
+            to: '/live',
+            hasQuest: !!questResult?.quest,
+            questId,
+            groupId,
+            timeLimit,
+            componentMounted: isMountedRef.current
+          });
+          trackAsyncOp('navigation', 'QuestHome', Promise.resolve());
+        }
+        
+        try {
+          navigate('/live', {
+            state: { quest: questResult.quest, questId, groupId, timeLimit },
+          });
+        } catch (navError) {
+          console.error('🚨 Navigation error:', navError);
+          if (process.env.NODE_ENV === 'development') {
+            getError185Report();
+          }
+        }
+      } else {
+        console.warn('🚨 Attempted navigation on unmounted component');
+        if (process.env.NODE_ENV === 'development') {
+          getError185Report();
+        }
+      }
     } catch (err) {
       console.error('Failed to create group', err);
-      setError('Failed to start group quest');
+      if (isMountedRef.current) {
+        safeSetState('error', setError, 'Failed to start group quest', error);
+      }
     }
+  };
+
+  // Form validation handlers with null safety
+  const handleValidation = (fieldName) => (validationResult) => {
+    try {
+      const newErrors = { ...validationErrors } || {};
+      const newWarnings = { ...validationWarnings } || {};
+      
+      if (validationResult && validationResult.errors && Array.isArray(validationResult.errors) && validationResult.errors.length > 0) {
+        newErrors[fieldName] = validationResult.errors;
+      } else {
+        delete newErrors[fieldName];
+      }
+      
+      if (validationResult && validationResult.warnings && Array.isArray(validationResult.warnings) && validationResult.warnings.length > 0) {
+        newWarnings[fieldName] = validationResult.warnings;
+      } else {
+        delete newWarnings[fieldName];
+      }
+      
+      setValidationErrors(newErrors);
+      setValidationWarnings(newWarnings);
+      
+      // Update form validity
+      const hasErrors = Object.keys(newErrors).length > 0;
+      setIsFormValid(!hasErrors);
+      
+      // Log security events if needed
+      if (validationResult && validationResult.securityWarning) {
+        SecurityUtils.logSecurityEvent('form_validation_security_warning', {
+          field: fieldName,
+          warning: validationResult.securityWarning
+        });
+      }
+    } catch (error) {
+      console.error('Validation handler error:', error);
+      // Fallback to ensure states remain valid
+      if (!validationErrors) setValidationErrors({});
+      if (!validationWarnings) setValidationWarnings({});
+    }
+  };
+  
+  const validateCompleteForm = () => {
+    const formData = {
+      location: city || '',
+      mood: mood || [],
+      timeLimit: timeLimit || 0
+    };
+    
+    const isValid = formValidator.validateQuestForm(formData);
+    const errors = formValidator.getQuestFormErrors();
+    const warnings = formValidator.getQuestFormWarnings();
+    
+    setValidationErrors({
+      location: errors.location ? [errors.location] : [],
+      mood: errors.mood ? [errors.mood] : [],
+      timeLimit: errors.timeLimit ? [errors.timeLimit] : []
+    });
+    
+    setValidationWarnings({
+      location: warnings.location || [],
+      mood: warnings.mood || [],
+      timeLimit: warnings.timeLimit || []
+    });
+    
+    setIsFormValid(isValid);
+    setShowValidationSummary(!isValid);
+    
+    return isValid;
   };
 
   const toggleMood = (selectedMood) => {
@@ -793,8 +1139,8 @@ const QuestHome = () => {
     } else if (mood.length < 3) {
       setMood([...mood, selectedMood]);
     } else {
-      setError("You can select up to 3 moods for the best experience.");
-      safeSetTimeout(() => setError(""), 3000);
+      safeSetState('error', setError, "You can select up to 3 moods for the best experience.", error);
+      safeSetTimeout(() => safeSetState('error', setError, "", error), 3000);
     }
   };
 
@@ -820,15 +1166,38 @@ const QuestHome = () => {
               <p className="text-white/90 text-sm">Continue your adventure where you left off</p>
             </div>
             <button
-              onClick={() =>
-                navigate('/live', { 
-                  state: { 
-                    quest: resumeData.quest, 
-                    questId: resumeData.questId, 
-                    groupId: resumeData.groupId, 
-                    timeLimit: resumeData.usedTimeLimit 
-                  } 
-                })
+              onClick={() => {
+                if (!isMountedRef.current) {
+                  console.warn('🚨 Attempted resume navigation on unmounted component');
+                  return;
+                }
+                
+                if (process.env.NODE_ENV === 'development') {
+                  console.log('🚪 Resuming quest navigation', {
+                    from: window.location.pathname,
+                    to: '/live',
+                    questId: resumeData.questId,
+                    groupId: resumeData.groupId,
+                    componentMounted: isMountedRef.current
+                  });
+                }
+                
+                try {
+                  navigate('/live', { 
+                    state: { 
+                      quest: resumeData.quest, 
+                      questId: resumeData.questId, 
+                      groupId: resumeData.groupId, 
+                      timeLimit: resumeData.usedTimeLimit 
+                    } 
+                  });
+                } catch (navError) {
+                  console.error('🚨 Resume navigation error:', navError);
+                  if (process.env.NODE_ENV === 'development') {
+                    getError185Report();
+                  }
+                }
+              }
               }
               className="bg-white/20 hover:bg-white/30 text-white px-6 py-2 rounded-xl font-semibold transition-all duration-200"
             >
@@ -893,17 +1262,27 @@ const QuestHome = () => {
               </h2>
               
               <div className="space-y-6">
-                {/* Manual Location Input */}
+                {/* Validated Location Input */}
                 <div className="relative">
-                  <input
-                    id="start-address"
-                    type="text"
-                    placeholder="Enter your starting location..."
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    className="w-full px-6 py-4 pl-14 text-lg border-2 border-sage-200 rounded-2xl focus:border-sage-500 focus:outline-none focus:ring-4 focus:ring-sage-500/20 transition-all duration-200"
-                  />
-                  <svg className="absolute left-5 top-5 w-6 h-6 text-sage-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <ValidationErrorBoundary componentName="Location Input">
+                    <ValidatedInput
+                      label=""
+                      type="location"
+                      value={city}
+                      onChange={setCity}
+                      onValidate={handleValidation('location')}
+                      rules={[
+                        (value) => ValidationRules.required(value, 'Location'),
+                        (value) => ValidationRules.validLocation(value)
+                      ]}
+                      placeholder="Enter your starting location..."
+                      className="w-full px-6 py-4 pl-14 text-lg border-2 border-sage-200 rounded-2xl focus:border-sage-500 focus:outline-none focus:ring-4 focus:ring-sage-500/20 transition-all duration-200"
+                      maxLength={200}
+                      autoComplete="address-line1"
+                      sanitizationOptions={{ maxLength: 200 }}
+                    />
+                  </ValidationErrorBoundary>
+                  <svg className="absolute left-5 top-5 w-6 h-6 text-sage-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
                   </svg>
                 </div>
@@ -978,94 +1357,19 @@ const QuestHome = () => {
                 </div>
               )}
               
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-                {moodOptions.map((option) => {
-                  const isSelected = mood.includes(option.value);
-                  return (
-                    <button
-                      key={option.value}
-                      onClick={() => toggleMood(option.value)}
-                      className={`group relative overflow-hidden rounded-2xl border-2 transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg ${
-                        isSelected
-                          ? `border-sage-400 ${option.bgColor} shadow-sage-md ring-2 ring-sage-200`
-                          : `border-neutral-200 bg-white hover:${option.bgColor} hover:${option.borderColor} hover:shadow-md`
-                      }`}
-                    >
-                      {/* Background Pattern */}
-                      <div className={`absolute inset-0 bg-gradient-to-br ${option.gradient} opacity-5 group-hover:opacity-10 transition-opacity duration-300`}></div>
-                      
-                      {/* Content */}
-                      <div className="relative p-6">
-                        {/* Icon */}
-                        <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${option.gradient} flex items-center justify-center mb-4 mx-auto shadow-sm group-hover:shadow-md transition-shadow duration-300 ${
-                          isSelected ? 'ring-2 ring-white' : ''
-                        }`}>
-                          <span className="text-2xl">{option.icon}</span>
-                        </div>
-                        
-                        {/* Title */}
-                        <h3 className={`font-semibold text-base mb-2 transition-colors duration-200 ${
-                          isSelected ? option.textColor : "text-gray-700 group-hover:" + option.textColor
-                        }`}>
-                          {option.label}
-                        </h3>
-                        
-                        {/* Description */}
-                        <p className="text-sm text-gray-600 mb-3 leading-relaxed">
-                          {option.description}
-                        </p>
-                        
-                        {/* Preview Text */}
-                        <p className={`text-xs font-medium transition-colors duration-200 ${
-                          isSelected ? option.textColor : "text-gray-500 group-hover:" + option.textColor
-                        }`}>
-                          {option.preview}
-                        </p>
-                      </div>
-                      
-                      {/* Selection Indicator */}
-                      {isSelected && (
-                        <div className="absolute -top-1 -right-1 w-7 h-7 bg-sage-500 rounded-full flex items-center justify-center shadow-lg">
-                          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/>
-                          </svg>
-                        </div>
-                      )}
-                      
-                      {/* Hover Glow Effect */}
-                      <div className={`absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none bg-gradient-to-br ${option.gradient} opacity-[0.03]`}></div>
-                    </button>
-                  );
-                })}
-              </div>
+              <ValidationErrorBoundary componentName="Mood Selector">
+                <ValidatedMoodSelector
+                  selectedMoods={mood}
+                  onChange={(newMoods) => setMood(newMoods)}
+                  onValidate={handleValidation('mood')}
+                  moodOptions={moodOptions}
+                  maxSelections={3}
+                  required={true}
+                  className="mb-4"
+                />
+              </ValidationErrorBoundary>
               
-              {/* Selected Moods Summary */}
-              {mood.length > 0 && (
-                <div className="mt-6 p-4 bg-sage-50 rounded-xl border border-sage-200">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm font-medium text-sage-700">Selected vibes:</span>
-                      <div className="flex space-x-2">
-                        {mood.map((selectedMood) => {
-                          const option = moodOptions.find(opt => opt.value === selectedMood);
-                          return (
-                            <span
-                              key={selectedMood}
-                              className={`inline-flex items-center space-x-1 px-3 py-1 rounded-full text-xs font-medium ${option.bgColor} ${option.textColor} ${option.borderColor} border`}
-                            >
-                              <span>{option.icon}</span>
-                              <span>{option.label}</span>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <span className="text-xs text-sage-600 font-medium">
-                      {mood.length}/3
-                    </span>
-                  </div>
-                </div>
-              )}
+              {/* Mood summary is now handled within ValidatedMoodSelector */}
             </div>
 
             {/* Time & Difficulty */}
@@ -1081,30 +1385,19 @@ const QuestHome = () => {
               
               <div className="grid md:grid-cols-2 gap-8">
                 {/* Time Limit */}
-                <div>
-                  <label className="block text-lg font-semibold text-gray-700 mb-4">
-                    Time Limit: <span className="text-sage-600">{timeLimit} minutes</span>
-                  </label>
-                  <input
-                    type="range"
-                    min="30"
-                    max="180"
-                    step="15"
+                <ValidationErrorBoundary componentName="Time Input">
+                  <ValidatedTimeInput
                     value={timeLimit}
-                    onChange={(e) => setTimeLimit(Number(e.target.value))}
-                    className="w-full h-3 bg-sage-200 rounded-lg appearance-none cursor-pointer slider"
-                    style={{
-                      background: `linear-gradient(to right, rgb(156, 175, 136) 0%, rgb(156, 175, 136) ${((timeLimit - 30) / 150) * 100}%, rgb(229, 231, 235) ${((timeLimit - 30) / 150) * 100}%, rgb(229, 231, 235) 100%)`
-                    }}
+                    onChange={(newTime) => setTimeLimit(newTime)}
+                    onValidate={handleValidation('timeLimit')}
+                    min={15}
+                    max={480}
+                    step={15}
+                    required={true}
+                    showPresets={true}
+                    showSlider={true}
                   />
-                  <div className="flex justify-between text-sm text-gray-500 mt-2">
-                    <span>30 min</span>
-                    <span>Quick</span>
-                    <span>Moderate</span>
-                    <span>Extended</span>
-                    <span>180 min</span>
-                  </div>
-                </div>
+                </ValidationErrorBoundary>
 
                 {/* Difficulty */}
                 <div>
@@ -1140,11 +1433,21 @@ const QuestHome = () => {
               </div>
             </div>
 
+            {/* Form Validation Summary */}
+            <ValidationErrorBoundary componentName="Validation Summary">
+              <FormValidationSummary
+                errors={validationErrors || {}}
+                warnings={validationWarnings || {}}
+                isVisible={hasValidationErrors || hasValidationWarnings}
+                className="mb-6"
+              />
+            </ValidationErrorBoundary>
+
             {/* Generate Button */}
             <div className="text-center">
               <button
                 onClick={handleGenerate}
-                disabled={loading || !mood.length || (!startLocation && !city.trim())}
+                disabled={loading || !mood.length || (!startLocation && !city.trim()) || hasValidationErrors}
                 className="bg-gradient-to-r from-sage-500 to-sage-600 hover:from-sage-600 hover:to-sage-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed text-white px-12 py-4 rounded-2xl font-bold text-xl shadow-sage-lg hover:shadow-sage-xl transition-all duration-200 transform hover:scale-105 disabled:transform-none"
               >
                 {loading ? (
@@ -1162,12 +1465,13 @@ const QuestHome = () => {
                 )}
               </button>
               
-              {(!mood.length || (!startLocation && !city.trim())) && (
-                <p className="text-gray-500 text-sm mt-3">
-                  {!mood.length && "Select at least one mood"}{!mood.length && (!startLocation && !city.trim()) && " and "}
-                  {(!startLocation && !city.trim()) && "enter a location"} to continue
-                </p>
-              )}
+              {/* Validation Status */}
+              <ValidationStatus
+                isValid={!hasValidationErrors && mood.length > 0 && (startLocation || city.trim())}
+                hasWarnings={hasValidationWarnings}
+                isValidating={false}
+                className="mt-4"
+              />
             </div>
 
             {/* Error Message */}
@@ -1184,8 +1488,18 @@ const QuestHome = () => {
           </div>
         )}
 
+        {/* Quest Results Loading State */}
+        {questResultLoading && (
+          <div className="mt-12 bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl border border-sage-100 p-8">
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sage-600"></div>
+              <span className="ml-3 text-sage-700">Preparing your quest...</span>
+            </div>
+          </div>
+        )}
+
         {/* Quest Results */}
-        {questResult?.quest?.places && (
+        {questResult?.quest?.places && !questResultLoading && (
           <div className="mt-12 bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl border border-sage-100 p-8">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-3xl font-bold text-gray-900 flex items-center">
@@ -1289,8 +1603,34 @@ const QuestHome = () => {
               </button>
             </div>
 
+            {/* Development Mode Notice */}
+            {isDevelopmentMode && (
+              <div className="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4">
+                <div className="flex items-center space-x-3">
+                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-blue-900">Development Mode Active</h4>
+                    <p className="text-blue-700 text-sm">Unlimited quest generation enabled for testing purposes</p>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      localStorage.removeItem('roamio_dev_mode');
+                      window.location.reload();
+                    }}
+                    className="text-blue-600 hover:text-blue-800 text-sm underline"
+                  >
+                    Disable
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Premium Notice */}
-            {!premium && (
+            {!premium && !isDevelopmentMode && (
               <div className="mt-6 bg-gradient-to-r from-earth-clay-50 to-earth-sand-50 border border-earth-clay-200 rounded-2xl p-6">
                 <div className="flex items-center space-x-3">
                   <div className="w-8 h-8 bg-gradient-to-br from-earth-clay-400 to-earth-clay-600 rounded-lg flex items-center justify-center">
