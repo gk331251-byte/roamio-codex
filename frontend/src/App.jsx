@@ -52,6 +52,8 @@ import { ErrorBoundary, RouteErrorBoundary } from "./components/ErrorBoundary";
 import ErrorToast from "./components/ErrorToast/ErrorToast";
 import { logError } from "./lib/errorLogger";
 import { useGoogleMaps } from "./hooks/useGoogleMaps";
+// Temporary global alert/confirm replacement during migration
+import "./utils/toastMigration";
 
 
 function AppContent() {

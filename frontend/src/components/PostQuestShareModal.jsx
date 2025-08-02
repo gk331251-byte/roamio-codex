@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { generateShareCaption, addWatermark } from '../lib/shareHelpers';
 import { getAuth } from 'firebase/auth';
 import { setSkipSharePrompt } from '../lib/firebase';
+import { useToast } from '../hooks/useToast';
 
 export default function PostQuestShareModal({
   open,
@@ -12,6 +13,7 @@ export default function PostQuestShareModal({
   showWatermark = true,
   onClose,
 }) {
+  const { success } = useToast();
   const [caption, setCaption] = useState('');
   const [skip, setSkip] = useState(false);
 
@@ -34,7 +36,7 @@ export default function PostQuestShareModal({
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(caption);
-      alert('Caption copied to clipboard');
+      success('Caption copied to clipboard');
     } catch (err) {
       console.error('copy failed', err);
     }

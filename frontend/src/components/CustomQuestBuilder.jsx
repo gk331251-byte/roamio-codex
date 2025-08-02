@@ -11,6 +11,7 @@ import {
   updateCustomQuest,
 } from '../lib/api';
 import { toast } from '../lib/toast';
+import { useToast } from '../hooks/useToast';
 import PremiumGuard from './PremiumGuard';
 
 const moodOptions = [
@@ -32,6 +33,7 @@ const templates = [
 
 export default function CustomQuestBuilder() {
   const { questId } = useParams();
+  const { authError, validationError, success } = useToast();
   const [user, setUser] = useState(null);
   const [premium, setPremium] = useState(false);
   const [title, setTitle] = useState('');
@@ -127,9 +129,9 @@ export default function CustomQuestBuilder() {
   };
 
   const handleStart = async () => {
-    if (!user) return alert('Login required');
+    if (!user) return authError('Login required');
     if (!premium) return navigate('/pricing');
-    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
+    if (locations.some((l) => !l.placeId)) return validationError('Please select valid locations');
     try {
       const payload = {
         user_id: user.uid,
@@ -164,9 +166,9 @@ export default function CustomQuestBuilder() {
   };
 
   const handleSaveDraft = async () => {
-    if (!user) return alert('Login required');
+    if (!user) return authError('Login required');
     if (!premium) return navigate('/pricing');
-    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
+    if (locations.some((l) => !l.placeId)) return validationError('Please select valid locations');
     try {
       const payload = {
         user_id: user.uid,
@@ -188,7 +190,7 @@ export default function CustomQuestBuilder() {
       } else {
         await createCustomQuest(payload);
       }
-      alert('Draft saved!');
+      success('Draft saved!');
     } catch (err) {
       console.error('❌ API error:', err);
       setError('Failed to save draft');
@@ -196,9 +198,9 @@ export default function CustomQuestBuilder() {
   };
 
   const handlePublish = async () => {
-    if (!user) return alert('Login required');
+    if (!user) return authError('Login required');
     if (!premium) return navigate('/pricing');
-    if (locations.some((l) => !l.placeId)) return alert('Select valid locations');
+    if (locations.some((l) => !l.placeId)) return validationError('Please select valid locations');
     try {
       const payload = {
         user_id: user.uid,

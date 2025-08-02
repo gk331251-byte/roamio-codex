@@ -22,8 +22,10 @@ import {
   setShowOnLeaderboard,
   setNickname,
 } from '../lib/firebase';
+import { useToast } from '../hooks/useToast';
 
 const Profile = () => {
+  const { error, confirm } = useToast();
   const [user, setUser] = useState(null);
   const [premium, setPremium] = useState(false);
   const [stats, setStats] = useState({ total: 0, mostCity: '', longest: 0 });
@@ -100,7 +102,12 @@ const Profile = () => {
   }, []);
 
   const handleDeleteAccount = async () => {
-    if (!window.confirm('Delete account permanently?')) return;
+    const confirmed = await confirm('Delete account permanently?', {
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel'
+    });
+    if (!confirmed) return;
+    
     const userObj = auth.currentUser;
     if (!userObj) return;
     try {
@@ -113,7 +120,7 @@ const Profile = () => {
       window.location.href = '/';
     } catch (err) {
       console.error('account delete failed', err);
-      alert('Failed to delete account');
+      error('Failed to delete account');
     }
   };
 

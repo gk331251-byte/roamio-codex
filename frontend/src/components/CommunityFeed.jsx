@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { getCommunityQuests, reportQuest } from '../lib/api';
 import { getAuth } from 'firebase/auth';
+import { useToast } from '../hooks/useToast';
 
 export default function CommunityFeed() {
+  const { authError, success, error: toastError } = useToast();
   const [quests, setQuests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -26,13 +28,13 @@ export default function CommunityFeed() {
     if (!reason) return;
     const auth = getAuth();
     const user = auth.currentUser;
-    if (!user) return alert('You must be logged in');
+    if (!user) return authError('You must be logged in');
     try {
       await reportQuest(user.uid, quest.questId, reason, quest.city, quest.mood);
-      alert('Report submitted');
+      success('Report submitted');
     } catch (err) {
       console.error('Failed to report quest', err);
-      alert('Failed to report quest');
+      toastError('Failed to report quest');
     }
   };
 

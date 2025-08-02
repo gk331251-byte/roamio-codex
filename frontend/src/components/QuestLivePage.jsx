@@ -14,11 +14,13 @@ import TooltipManager from './TooltipManager';
 import { toast } from '../lib/toast';
 import QuestCompleteSummary from './QuestCompleteSummary';
 import PostQuestShareModal from './PostQuestShareModal';
+import { useToast } from '../hooks/useToast';
 
 
 export default function QuestLivePage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { authError, validationError, warning, success, confirm, reportAlert } = useToast();
   const quest = location.state?.quest;
   const questId = location.state?.questId;
   const groupId = location.state?.groupId || new URLSearchParams(location.search).get('groupId');
@@ -141,7 +143,7 @@ export default function QuestLivePage() {
         }
         if (keep === 0) {
           keep = 1;
-          alert('Time limit too short for full quest; using first stop only.');
+          warning('Time limit too short for full quest; using first stop only.');
         }
         const trimmed = ordered.slice(0, keep);
         setStops(trimmed.map((p) => ({ lat: parseFloat(p.lat), lng: parseFloat(p.lng), name: p.name })));
@@ -306,7 +308,7 @@ export default function QuestLivePage() {
   const handleMarkVisited = async () => {
     const auth = getAuth();
     const user = auth.currentUser;
-    if (!user) return alert("You must be logged in!");
+    if (!user) return authError();
 
     if (!questId || questComplete) return;
     try {
@@ -341,14 +343,14 @@ export default function QuestLivePage() {
   const handleComplete = async () => {
     const auth = getAuth();
     const user = auth.currentUser;
-    if (!user) return alert("You must be logged in!");
+    if (!user) return authError();
     if (!questId) return;
     setSaving(true);
     setCompleteMsg("");
     try {
       let share = publicOptIn;
       if (!publicOptIn) {
-        share = window.confirm('Share this quest publicly?');
+        share = await confirm('Share this quest publicly?');
       }
       const res = await completeQuest(user.uid, questId, {
         title: quest.title,
@@ -386,10 +388,10 @@ export default function QuestLivePage() {
     if (!reason) return;
     const auth = getAuth();
     const user = auth.currentUser;
-    if (!user) return alert('You must be logged in!');
+    if (!user) return authError();
     try {
       await reportQuest(user.uid, questId, reason, quest.city, quest.mood);
-      alert('Report submitted');
+      success('Report submitted');
     } catch (err) {
       console.error('failed to report quest', err);
     }
@@ -401,11 +403,11 @@ export default function QuestLivePage() {
     if (!user || !groupId) return;
     try {
       await leaveGroup(user.uid, groupId);
-      alert("You’ve left the group.");
+      success("You've left the group");
       navigate("/home");
     } catch (err) {
       console.error("Failed to leave group", err);
-      alert("Error leaving group.");
+      warning("Error leaving group");
     }
   };
     
