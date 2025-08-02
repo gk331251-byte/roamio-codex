@@ -454,15 +454,21 @@ class ProfessionalToastManager {
 
   logToastEvent(event, id, message, config) {
     try {
-      logError(new Error(`Toast ${event}`), {
-        type: 'toastEvent',
-        event,
-        toastId: id,
-        category: config.category,
-        errorCategory: config.errorCategory,
-        priority: config.priority,
-        messageLength: message.length
-      });
+      // Only log actual errors, not successful toasts
+      if (event === 'show' && config.category === TOAST_CATEGORIES.ERROR) {
+        logError(new Error(message), {
+          type: 'toastError',
+          event,
+          toastId: id,
+          category: config.category,
+          errorCategory: config.errorCategory,
+          priority: config.priority,
+          messageLength: message.length
+        });
+      } else if (process.env.NODE_ENV === 'development') {
+        // Log all events in development for debugging
+        console.debug(`Toast ${event}:`, { id, message, config });
+      }
     } catch (error) {
       console.warn('Failed to log toast event:', error);
     }

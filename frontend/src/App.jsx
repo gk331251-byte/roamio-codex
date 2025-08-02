@@ -1,4 +1,5 @@
 // src/App.jsx
+import React from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { useEffect } from "react";
 import { onAuthStateChanged, getAuth, signInAnonymously } from "firebase/auth";
@@ -49,11 +50,16 @@ import ErrorBoundaryTest from "./components/ErrorBoundary/ErrorBoundaryTest";
 // Error handling imports
 import { ErrorProvider } from "./contexts/ErrorContext";
 import { ErrorBoundary, RouteErrorBoundary } from "./components/ErrorBoundary";
+import QuestGenerationErrorBoundary from "./components/ErrorBoundary/QuestGenerationErrorBoundary";
 import ErrorToast from "./components/ErrorToast/ErrorToast";
 import { logError } from "./lib/errorLogger";
 import { useGoogleMaps } from "./hooks/useGoogleMaps";
 // Temporary global alert/confirm replacement during migration
 import "./utils/toastMigration";
+// Development-only debug monitoring
+if (process.env.NODE_ENV === 'development') {
+  import('./utils/debugMonitor');
+}
 
 
 function AppContent() {
@@ -68,7 +74,18 @@ function AppContent() {
   
   useEffect(() => {
     const auth = getAuth();
+    let isProcessing = false; // Prevent concurrent auth processing
+    
     const unsub = onAuthStateChanged(auth, async (user) => {
+      // CRITICAL FIX: Prevent concurrent auth state processing
+      if (isProcessing) {
+        console.debug('Auth state change already processing, skipping');
+        return;
+      }
+      
+      isProcessing = true;
+      
+      try {
       console.debug('auth state', user ? user.uid : 'none');
       if (!user) {
         try {
@@ -85,10 +102,27 @@ function AppContent() {
       }
       try {
         const snap = await getDoc(doc(db, 'users', user.uid));
-        const onboarded = snap.exists() && snap.data().onboarding;
-        if (!onboarded && location.pathname !== '/onboarding') {
+        const onboarded = snap.exists() && snap.data()?.onboarding;
+        
+        // CRITICAL FIX: Don't redirect to onboarding during quest generation or when on quest pages
+        const isOnQuestFlow = ['/home', '/live', '/quest-details'].some(path => 
+          location.pathname.startsWith(path)
+        );
+        
+        if (!onboarded && location.pathname !== '/onboarding' && !isOnQuestFlow) {
+          console.debug('Redirecting to onboarding from:', location.pathname);
           navigate('/onboarding');
           return;
+        }
+        
+        // If user is not onboarded but on quest flow, log warning but don't redirect
+        if (!onboarded && isOnQuestFlow) {
+          console.warn('User not fully onboarded but on quest flow - allowing to continue');
+          logError(new Error('User on quest flow without onboarding'), {
+            type: 'onboardingSkipped',
+            pathname: location.pathname,
+            userId: user.uid
+          });
         }
         const data = await getActiveQuest(user.uid);
         if (data && data.questId && data.status !== 'completed') {
@@ -114,6 +148,16 @@ function AppContent() {
           action: 'appInitialization',
           component: 'App'
         });
+      } finally {
+        isProcessing = false;
+      }
+      } catch (authError) {
+        console.error('Auth processing error:', authError);
+        logError(authError, {
+          type: 'authProcessingError',
+          component: 'App'
+        });
+        isProcessing = false;
       }
     });
     return () => unsub();
@@ -140,7 +184,9 @@ function AppContent() {
         } />
         <Route path="/home" element={
           <RouteErrorBoundary routeName="QuestHome">
-            <QuestHome />
+            <QuestGenerationErrorBoundary>
+              <QuestHome />
+            </QuestGenerationErrorBoundary>
           </RouteErrorBoundary>
         } />
         <Route path="/onboarding" element={
@@ -344,13 +390,20 @@ function AppContent() {
 
 // Main App component with error providers and boundaries
 function App() {
-  return (
+  const AppWithProviders = (
     <ErrorProvider>
       <ErrorBoundary name="App" level="app">
         <AppContent />
       </ErrorBoundary>
     </ErrorProvider>
   );
+
+  // Wrap in StrictMode during development to catch side effects
+  if (process.env.NODE_ENV === 'development') {
+    return <React.StrictMode>{AppWithProviders}</React.StrictMode>;
+  }
+
+  return AppWithProviders;
 }
 
 export default App;

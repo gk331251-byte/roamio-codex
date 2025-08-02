@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateQuest, createGroupQuest, getActiveQuest, getQuest, leaveGroup, validatePremium, getUserXP } from "../lib/api.js";
 import { doc, getDoc } from "firebase/firestore";
@@ -9,6 +9,17 @@ import RouteMap from "./RouteMap";
 import LocationDetection from "./LocationDetection/LocationDetection";
 import { logError, logUserActionError } from "../lib/errorLogger";
 import googleMapsLoader from "../services/googleMapsLoader";
+import { trackRender } from "../utils/reactErrorDetector";
+import { 
+  startQuestGeneration, 
+  logQuestStep, 
+  logStateUpdate, 
+  logAsyncOperation,
+  logComponentMount,
+  logComponentUnmount,
+  logQuestError,
+  finishQuestGeneration
+} from "../utils/questDebugger";
 
 const _toQuestObj = (doc) => {
   if (!doc || !doc.fields) return doc;
@@ -137,22 +148,110 @@ const moodOptions = [
 ];
 
 const QuestHome = () => {
-  const [city, setCity] = useState("");
-  const [mood, setMood] = useState([]);
-  const [timeLimit, setTimeLimit] = useState(90);
-  const [startLocation, setStartLocation] = useState(null);
-  const [detectedLocation, setDetectedLocation] = useState(null);
-  const [suggestedMoods, setSuggestedMoods] = useState([]);
-  const [locationError, setLocationError] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [questResult, setQuestResult] = useState(null);
-  const [user, setUser] = useState(null);
-  const [premium, setPremium] = useState(false);
-  const [resumeData, setResumeData] = useState(null);
-  const [level, setLevel] = useState(1);
-  const [difficulty, setDifficulty] = useState('Easy');
+  // Development-only render tracking
+  if (process.env.NODE_ENV === 'development') {
+    trackRender('QuestHome');
+  }
+  
+  // CRITICAL FIX: Component mounted state to prevent updates after unmount
+  const isMountedRef = useRef(true);
+  
+  // State with debugging wrapper
+  const createTrackedState = (initialValue, stateName) => {
+    const [state, setState] = useState(initialValue);
+    
+    const wrappedSetState = (newValue) => {
+      // CRITICAL FIX: Prevent state updates on unmounted components
+      if (!isMountedRef.current) {
+        if (process.env.NODE_ENV === 'development') {
+          console.warn(`Attempted state update on unmounted component: QuestHome.${stateName}`, {
+            newValue,
+            currentValue: state
+          });
+          logQuestError('unmountedStateUpdate', new Error(`State update on unmounted component: ${stateName}`), {
+            stateName,
+            newValue,
+            currentValue: state
+          });
+        }
+        return;
+      }
+      
+      if (process.env.NODE_ENV === 'development') {
+        const oldValue = state;
+        logStateUpdate('QuestHome', stateName, oldValue, newValue);
+      }
+      setState(newValue);
+    };
+    
+    return [state, wrappedSetState];
+  };
+
+  const [city, setCity] = createTrackedState("", "city");
+  const [mood, setMood] = createTrackedState([], "mood");
+  const [timeLimit, setTimeLimit] = createTrackedState(90, "timeLimit");
+  const [startLocation, setStartLocation] = createTrackedState(null, "startLocation");
+  const [detectedLocation, setDetectedLocation] = createTrackedState(null, "detectedLocation");
+  const [suggestedMoods, setSuggestedMoods] = createTrackedState([], "suggestedMoods");
+  const [locationError, setLocationError] = createTrackedState(null, "locationError");
+  const [loading, setLoading] = createTrackedState(false, "loading");
+  const [error, setError] = createTrackedState("", "error");
+  const [questResult, setQuestResult] = createTrackedState(null, "questResult");
+  const [user, setUser] = createTrackedState(null, "user");
+  const [premium, setPremium] = createTrackedState(false, "premium");
+  const [resumeData, setResumeData] = createTrackedState(null, "resumeData");
+  const [level, setLevel] = createTrackedState(1, "level");
+  const [difficulty, setDifficulty] = createTrackedState('Easy', "difficulty");
   const navigate = useNavigate();
+  
+  // Ref to prevent infinite mood auto-selection
+  const hasAutoSelectedMood = useRef(false);
+  
+  // CRITICAL FIX: Flag to prevent navigation during error states
+  const isInErrorState = useRef(false);
+  
+  // CRITICAL FIX: Store active timeouts for cleanup
+  const activeTimeouts = useRef(new Set());
+  
+  // Safe setTimeout that cleans up automatically
+  const safeSetTimeout = (callback, delay) => {
+    const timeoutId = setTimeout(() => {
+      // Only execute if component is still mounted
+      if (isMountedRef.current) {
+        callback();
+      }
+      // Remove from active timeouts
+      activeTimeouts.current.delete(timeoutId);
+    }, delay);
+    
+    // Track active timeout
+    activeTimeouts.current.add(timeoutId);
+    
+    return timeoutId;
+  };
+  
+  // Component lifecycle tracking for debugging
+  useEffect(() => {
+    isMountedRef.current = true;
+    
+    if (process.env.NODE_ENV === 'development') {
+      logComponentMount('QuestHome');
+    }
+    
+    return () => {
+      isMountedRef.current = false;
+      
+      // CRITICAL FIX: Clear all active timeouts on unmount
+      activeTimeouts.current.forEach(timeoutId => {
+        clearTimeout(timeoutId);
+      });
+      activeTimeouts.current.clear();
+      
+      if (process.env.NODE_ENV === 'development') {
+        logComponentUnmount('QuestHome');
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const auth = getAuth();
@@ -179,9 +278,16 @@ const QuestHome = () => {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !user.uid) return;
+    
+    // CRITICAL FIX: Add abort controller to prevent race conditions
+    const abortController = new AbortController();
+    
     (async () => {
       try {
+        // Double-check user still exists (prevent auth state race conditions)
+        if (!user || !user.uid || abortController.signal.aborted) return;
+        
         const data = await getActiveQuest(user.uid);
         if (data && data.questId && data.status !== 'completed') {
           const questDoc = await getQuest(data.questId).catch(() => null);
@@ -210,13 +316,23 @@ const QuestHome = () => {
           setResumeData(null);
         }
       } catch (err) {
-        console.error('Failed to load active quest', err);
+        // Only log error if not aborted
+        if (!abortController.signal.aborted) {
+          console.error('Failed to load active quest', err);
+        }
       }
     })();
-  }, [user]);
+    
+    // Cleanup function to prevent race conditions
+    return () => {
+      abortController.abort();
+    };
+  }, [user?.uid]); // CRITICAL FIX: Use user.uid instead of user object to prevent unnecessary re-renders
 
   // Initialize Google Maps autocomplete
   useEffect(() => {
+    let autocompleteInstance = null;
+    
     const initAutocomplete = async () => {
       try {
         await googleMapsLoader.waitForReady();
@@ -226,14 +342,17 @@ const QuestHome = () => {
         
         const ac = new window.google.maps.places.Autocomplete(input);
         input._ac = ac;
+        autocompleteInstance = ac;
         
-        ac.addListener('place_changed', () => {
+        const handlePlaceChanged = () => {
           const p = ac.getPlace();
           if (!p.geometry) return;
           const { lat, lng } = p.geometry.location.toJSON();
           setStartLocation({ address: p.formatted_address, lat, lng, placeId: p.place_id });
           setCity(p.formatted_address);
-        });
+        };
+        
+        ac.addListener('place_changed', handlePlaceChanged);
       } catch (error) {
         console.error('Failed to initialize Google Maps autocomplete:', error);
         logError(error, {
@@ -244,6 +363,17 @@ const QuestHome = () => {
     };
     
     initAutocomplete();
+    
+    // Cleanup function to prevent memory leaks
+    return () => {
+      if (autocompleteInstance) {
+        window.google.maps.event.clearInstanceListeners(autocompleteInstance);
+      }
+      const input = document.getElementById('start-address');
+      if (input) {
+        input._ac = null;
+      }
+    };
   }, []);
 
   // Handle successful location detection
@@ -258,6 +388,8 @@ const QuestHome = () => {
     setCity(locationData.city);
     setSuggestedMoods(locationData.suggestedMoods || []);
     setLocationError(null);
+    // Reset mood auto-selection for new location
+    hasAutoSelectedMood.current = false;
   };
 
   // Handle location detection errors
@@ -282,21 +414,32 @@ const QuestHome = () => {
 
   // Auto-select suggested moods when location is detected
   useEffect(() => {
-    if (suggestedMoods.length > 0 && mood.length === 0) {
+    if (suggestedMoods.length > 0 && mood.length === 0 && !hasAutoSelectedMood.current) {
       // Auto-select the top suggested mood if none are selected
       const topSuggestion = suggestedMoods[0];
       if (topSuggestion) {
         setMood([topSuggestion.value]);
+        hasAutoSelectedMood.current = true;
       }
     }
-  }, [suggestedMoods, mood.length]);
+  }, [suggestedMoods]); // Fixed: removed mood.length dependency to prevent infinite loop
 
   const handleGenerate = async () => {
+    // Start quest generation debugging
+    if (process.env.NODE_ENV === 'development') {
+      startQuestGeneration();
+      logQuestStep('handleGenerate_start', { userId: user?.uid, city, mood, timeLimit, difficulty });
+    }
+    
     setError("");
     setQuestResult(null);
 
     if (!user) {
       setError("You must be signed in to generate a quest.");
+      if (process.env.NODE_ENV === 'development') {
+        logQuestError('noUser', new Error('User not signed in'), { step: 'initial_validation' });
+        finishQuestGeneration(false, 'No user');
+      }
       return;
     }
 
@@ -304,24 +447,87 @@ const QuestHome = () => {
     const hasManualLocation = city && city.trim();
     const hasDetectedLocation = startLocation && startLocation.address;
     
+    if (process.env.NODE_ENV === 'development') {
+      logQuestStep('validation_location', { hasManualLocation, hasDetectedLocation, city, startLocation });
+    }
+    
     if (!hasManualLocation && !hasDetectedLocation) {
       setError("Please enter a location or use location detection.");
+      if (process.env.NODE_ENV === 'development') {
+        logQuestError('noLocation', new Error('No location provided'), { hasManualLocation, hasDetectedLocation });
+        finishQuestGeneration(false, 'No location');
+      }
       return;
     }
 
     if (!Array.isArray(mood) || mood.length === 0) {
       setError("Please select at least one mood for your quest.");
+      if (process.env.NODE_ENV === 'development') {
+        logQuestError('noMood', new Error('No mood selected'), { mood });
+        finishQuestGeneration(false, 'No mood');
+      }
       return;
     }
 
     if (isNaN(timeLimit) || timeLimit < 30) {
       setError("Please select a valid time limit for your quest.");
+      if (process.env.NODE_ENV === 'development') {
+        logQuestError('invalidTimeLimit', new Error('Invalid time limit'), { timeLimit });
+        finishQuestGeneration(false, 'Invalid time limit');
+      }
       return;
     }
 
     setLoading(true);
+    
+    if (process.env.NODE_ENV === 'development') {
+      logQuestStep('setLoading_true', { loading: true });
+    }
+    
     try {
-      const token = await user.getIdToken();
+      // CRITICAL FIX: Add proper auth state validation before token fetch
+      if (!user || !user.uid) {
+        setError("Authentication lost. Please refresh the page and try again.");
+        setLoading(false);
+        if (process.env.NODE_ENV === 'development') {
+          logQuestError('authLost', new Error('Auth state lost during generation'), { user: !!user, uid: user?.uid });
+          finishQuestGeneration(false, 'Auth lost');
+        }
+        return;
+      }
+      
+      if (process.env.NODE_ENV === 'development') {
+        logQuestStep('auth_validation_passed', { userId: user.uid });
+      }
+      
+      let token;
+      try {
+        if (process.env.NODE_ENV === 'development') {
+          logQuestStep('token_fetch_start', { userId: user.uid });
+        }
+        
+        token = await user.getIdToken(/* forceRefresh */ false);
+        
+        if (process.env.NODE_ENV === 'development') {
+          logQuestStep('token_fetch_success', { tokenLength: token?.length || 0 });
+        }
+      } catch (tokenError) {
+        console.error('Failed to get ID token:', tokenError);
+        setError("Authentication error. Please refresh the page and try again.");
+        setLoading(false);
+        
+        if (process.env.NODE_ENV === 'development') {
+          logQuestError('tokenFetch', tokenError, { userId: user.uid });
+          finishQuestGeneration(false, 'Token fetch failed');
+        }
+        
+        logError(tokenError, {
+          type: 'authTokenError',
+          component: 'QuestHome',
+          userId: user.uid
+        });
+        return;
+      }
       
       // Determine the best city string to use
       let questCity;
@@ -334,6 +540,14 @@ const QuestHome = () => {
         questCity = city.trim();
       }
 
+      if (process.env.NODE_ENV === 'development') {
+        logQuestStep('location_data_prepared', {
+          questCity,
+          hasDetectedLocation,
+          locationData: !!locationData
+        });
+      }
+
       console.log('🚀 Generating quest with:', {
         city: questCity,
         mood,
@@ -343,7 +557,18 @@ const QuestHome = () => {
         locationData
       });
       
-      const result = await generateQuest(
+      if (process.env.NODE_ENV === 'development') {
+        logQuestStep('api_call_start', {
+          questCity,
+          mood,
+          timeLimit: Number(timeLimit),
+          difficulty,
+          hasToken: !!token,
+          userId: user.uid
+        });
+      }
+      
+      const generateQuestPromise = generateQuest(
         questCity,
         mood,
         Number(timeLimit),
@@ -353,9 +578,28 @@ const QuestHome = () => {
         difficulty
       );
       
+      // Track the async operation
+      if (process.env.NODE_ENV === 'development') {
+        logAsyncOperation('generateQuest', 'QuestHome', generateQuestPromise);
+      }
+      
+      const result = await generateQuestPromise;
+      
       if (result.error) {
         console.error('❌ API error:', result);
         setError(result.error || 'Something went wrong generating your quest.');
+        
+        if (process.env.NODE_ENV === 'development') {
+          logQuestError('apiError', new Error(result.error), {
+            city: questCity,
+            mood,
+            timeLimit,
+            difficulty,
+            result
+          });
+          finishQuestGeneration(false, result.error);
+        }
+        
         logError(new Error(result.error), {
           type: 'questGenerationError',
           city: questCity,
@@ -366,19 +610,54 @@ const QuestHome = () => {
         return;
       }
       
+      if (process.env.NODE_ENV === 'development') {
+        logQuestStep('api_call_success', {
+          hasResult: !!result,
+          hasFallbackCity: !!result.fallbackCity,
+          questPlaces: result?.quest?.places?.length || 0
+        });
+      }
+      
       if (result.fallbackCity) {
         setError(`That location isn't fully supported yet. Showing results near ${result.fallbackCity} instead.`);
         // Don't return, continue with the fallback results
-        setTimeout(() => setError(""), 5000); // Clear after 5 seconds
+        safeSetTimeout(() => setError(""), 5000); // Clear after 5 seconds with safe timeout
+        
+        if (process.env.NODE_ENV === 'development') {
+          logQuestStep('fallback_city_used', { fallbackCity: result.fallbackCity });
+        }
       }
       
       setQuestResult(result);
+      
+      if (process.env.NODE_ENV === 'development') {
+        logQuestStep('quest_result_set', { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
+        finishQuestGeneration(true, { questId: result?.quest?.id, placesCount: result?.quest?.places?.length });
+      }
     } catch (err) {
       console.error('❌ Quest generation failed:', err);
-      const errorMessage = err.message.includes('Invalid input') 
-        ? 'Please check your location and mood selections.'
-        : 'Something went wrong generating your quest. Please try again.';
+      
+      // CRITICAL FIX: Ensure we stay on the current page during errors
+      const isAuthError = err.message?.includes('auth') || err.message?.includes('token') || err.code?.includes('auth');
+      
+      let errorMessage;
+      if (isAuthError) {
+        errorMessage = 'Authentication error. Please refresh the page and try again.';
+      } else if (err.message?.includes('Invalid input')) {
+        errorMessage = 'Please check your location and mood selections.';
+      } else if (err.message?.includes('network') || err.code === 'NETWORK_ERROR') {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else {
+        errorMessage = 'Something went wrong generating your quest. Please try again.';
+      }
+      
       setError(errorMessage);
+      isInErrorState.current = true;
+      
+      // Clear error state after some time
+      safeSetTimeout(() => {
+        isInErrorState.current = false;
+      }, 10000);
       
       logError(err, {
         type: 'questGenerationException',
@@ -387,7 +666,9 @@ const QuestHome = () => {
         timeLimit,
         difficulty,
         hasDetectedLocation,
-        hasManualLocation
+        hasManualLocation,
+        isAuthError,
+        stayOnPage: true // Flag to indicate we should stay on current page
       });
     } finally {
       setLoading(false);
@@ -419,11 +700,15 @@ const QuestHome = () => {
   const toggleMood = (selectedMood) => {
     if (mood.includes(selectedMood)) {
       setMood(mood.filter((m) => m !== selectedMood));
+      // Reset auto-selection flag when user manually removes moods
+      if (mood.length === 1) {
+        hasAutoSelectedMood.current = false;
+      }
     } else if (mood.length < 3) {
       setMood([...mood, selectedMood]);
     } else {
       setError("You can select up to 3 moods for the best experience.");
-      setTimeout(() => setError(""), 3000);
+      safeSetTimeout(() => setError(""), 3000);
     }
   };
 
