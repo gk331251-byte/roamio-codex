@@ -7,9 +7,14 @@ import asyncio
 from backend.auth_utils import get_rest_session, PROJECT_ID
 from backend.firestore_utils import _encode_fields, _decode_document
 
-async def create_group_document(user_id: str, quest_id: str, display_name: str) -> Tuple[str, dict]:
+
+async def create_group_document(
+    user_id: str, quest_id: str, display_name: str
+) -> Tuple[str, dict]:
     """Helper to create group quest and return groupId and document body."""
-    group_id = hashlib.sha1(f"{user_id}-{quest_id}-{datetime.utcnow()}".encode()).hexdigest()[:8]
+    group_id = hashlib.sha1(
+        f"{user_id}-{quest_id}-{datetime.utcnow()}".encode()
+    ).hexdigest()[:8]
     member_entry = {"userId": user_id, "displayName": display_name or user_id}
     group_doc = {
         "questId": quest_id,
@@ -27,6 +32,7 @@ async def create_group_document(user_id: str, quest_id: str, display_name: str) 
         print("Firestore REST error", resp.text)
         resp.raise_for_status()
     return group_id, group_doc
+
 
 async def add_user_to_group(user_id: str, group_id: str, display_name: str) -> dict:
     """Add a user to an existing group quest. Returns updated document."""

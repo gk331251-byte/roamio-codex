@@ -8,6 +8,7 @@ from backend.auth_utils import get_rest_session, PROJECT_ID
 
 try:
     from faker import Faker
+
     faker = Faker()
 except Exception:
     faker = None
@@ -19,19 +20,60 @@ rest_session = get_rest_session()
 BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
 
 NAMES = [
-    "Alice","Bob","Charlie","Diana","Eve","Frank","Grace","Heidi","Ivan",
-    "Judy","Karl","Liam","Mia","Nina","Oscar","Peggy","Quinn","Ruth",
-    "Sybil","Trent","Uma","Victor","Wendy","Xander","Yara","Zack"
+    "Alice",
+    "Bob",
+    "Charlie",
+    "Diana",
+    "Eve",
+    "Frank",
+    "Grace",
+    "Heidi",
+    "Ivan",
+    "Judy",
+    "Karl",
+    "Liam",
+    "Mia",
+    "Nina",
+    "Oscar",
+    "Peggy",
+    "Quinn",
+    "Ruth",
+    "Sybil",
+    "Trent",
+    "Uma",
+    "Victor",
+    "Wendy",
+    "Xander",
+    "Yara",
+    "Zack",
 ]
 CITIES = [
-    "New York","Los Angeles","Chicago","Houston","Phoenix","Seattle",
-    "Austin","Denver","Boston","Miami","San Francisco","Portland"
+    "New York",
+    "Los Angeles",
+    "Chicago",
+    "Houston",
+    "Phoenix",
+    "Seattle",
+    "Austin",
+    "Denver",
+    "Boston",
+    "Miami",
+    "San Francisco",
+    "Portland",
 ]
-MOODS = ["romantic","eerie","nostalgic","adventurous","relaxed","mysterious"]
-BADGES = ["first-quest","quest-10","streak-7","hardcore","explorer-5","squad-player"]
-TAGS = ["food","hiking","history","culture","nature","nightlife","family","arts"]
+MOODS = ["romantic", "eerie", "nostalgic", "adventurous", "relaxed", "mysterious"]
+BADGES = [
+    "first-quest",
+    "quest-10",
+    "streak-7",
+    "hardcore",
+    "explorer-5",
+    "squad-player",
+]
+TAGS = ["food", "hiking", "history", "culture", "nature", "nightlife", "family", "arts"]
 
 random.seed()
+
 
 async def write_doc(path: str, data: dict):
     url = f"{BASE_URL}/{path}"
@@ -42,6 +84,7 @@ async def write_doc(path: str, data: dict):
     else:
         print("Wrote", path)
     await asyncio.sleep(0.1)
+
 
 async def seed_users(n=25):
     users = []
@@ -64,6 +107,7 @@ async def seed_users(n=25):
         users.append((uid, name))
     return users
 
+
 async def seed_user_quests(users):
     for uid, _ in users:
         for _ in range(random.randint(2, 3)):
@@ -73,13 +117,14 @@ async def seed_user_quests(users):
                 "title": f"Adventure in {city}",
                 "city": city,
                 "mood": random.choice(MOODS),
-                "difficulty": random.choice(["Easy","Medium","Hard"]),
+                "difficulty": random.choice(["Easy", "Medium", "Hard"]),
                 "questText": f"Explore the sights of {city}.",
                 "completed": True,
                 "completedAt": datetime.utcnow().isoformat(),
                 "xpEarned": random.randint(50, 300),
             }
             await write_doc(f"user_quests/{uid}/quests/{qid}", quest)
+
 
 async def seed_custom_quests(users, count=12):
     quests = []
@@ -101,6 +146,7 @@ async def seed_custom_quests(users, count=12):
         quests.append(qid)
     return quests
 
+
 async def seed_groups(users, quests):
     for _ in range(random.randint(5, 10)):
         gid = uuid4().hex[:8]
@@ -113,6 +159,7 @@ async def seed_groups(users, quests):
             "completed": False,
         }
         await write_doc(f"groups/{gid}", doc)
+
 
 async def seed_communities(users, quests):
     for _ in range(5):
@@ -130,6 +177,7 @@ async def seed_communities(users, quests):
         }
         await write_doc(f"communities/{cid}", doc)
 
+
 async def seed_community_quests(users):
     for _ in range(12):
         doc_id = uuid4().hex[:12]
@@ -143,6 +191,7 @@ async def seed_community_quests(users):
             "isVisible": True,
         }
         await write_doc(f"community_quests/{doc_id}", quest)
+
 
 async def seed_ugc_posts(users, count=8):
     for _ in range(count):
@@ -158,21 +207,29 @@ async def seed_ugc_posts(users, count=8):
         }
         await write_doc(f"ugc_feed/{post_id}", post)
 
+
 async def seed_likes_views(users, quests):
     for qid in random.sample(quests, min(len(quests), 5)):
         like_users = random.sample(users, random.randint(1, 5))
-        view_users = random.sample(users, random.randint(len(like_users), len(like_users)+5))
+        view_users = random.sample(
+            users, random.randint(len(like_users), len(like_users) + 5)
+        )
         for uid, _ in like_users:
             doc_id = f"{qid}_{uid}"
-            await write_doc(f"quest_likes/{doc_id}", {"timestamp": datetime.utcnow().isoformat()})
+            await write_doc(
+                f"quest_likes/{doc_id}", {"timestamp": datetime.utcnow().isoformat()}
+            )
         for uid, _ in view_users:
             doc_id = f"{qid}_{uid}"
-            await write_doc(f"quest_views/{doc_id}", {"timestamp": datetime.utcnow().isoformat()})
+            await write_doc(
+                f"quest_views/{doc_id}", {"timestamp": datetime.utcnow().isoformat()}
+            )
         quest_patch = {
             "likesCount": len(like_users),
             "viewsCount": len(view_users),
         }
         await write_doc(f"custom_quests/{qid}", quest_patch)
+
 
 async def main():
     users = await seed_users()
@@ -183,6 +240,7 @@ async def main():
     await seed_community_quests(users)
     await seed_ugc_posts(users)
     await seed_likes_views(users, quests)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

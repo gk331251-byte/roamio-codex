@@ -1,0 +1,61 @@
+# Pre-commit hooks configuration for code quality and security
+fail_fast: false
+repos:
+  # Python code formatting
+  - repo: https://github.com/psf/black
+    rev: 24.1.1
+    hooks:
+      - id: black
+        language_version: python3
+        args: ["--line-length=88"]
+        exclude: ^(\.?venv/|build/|dist/|__pycache__/|\.git/)
+        files: \.py$
+
+  # Python import sorting
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black", "--line-length=88"]
+        exclude: ^(\.?venv/|build/|dist/|__pycache__/|\.git/)
+        files: \.py$
+
+  # Python linting with flake8
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        exclude: ^(\.?venv/|build/|dist/|__pycache__/|\.git/)
+        files: \.py$
+
+  # Security scanning with bandit
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args:
+          - --exclude=venv,.venv,build,dist,tests
+        exclude: ^(\.?venv/|build/|dist/|test_.*\.py|.*_test\.py|\.git/)
+        files: \.py$
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(\.?venv/|build/|dist/|\.git/)
+      - id: end-of-file-fixer
+        exclude: ^(\.?venv/|build/|dist/|\.git/)
+      - id: check-yaml
+        exclude: ^(\.?venv/|build/|dist/|\.git/)
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+        exclude: ^(\.?venv/|build/|dist/|\.git/)
+      - id: check-merge-conflict
+      # - id: debug-statements
+      #   exclude: ^(\.?venv/|build/|dist/|test_.*\.py|.*_test\.py|\.git/)
+      #   files: \.py$
+      - id: check-toml
+        exclude: ^(\.?venv/|build/|dist/|\.git/)
+      - id: check-json
+        exclude: ^(\.?venv/|build/|dist/|\.git/)

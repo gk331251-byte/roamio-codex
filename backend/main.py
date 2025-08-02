@@ -1,29 +1,75 @@
-print("🔥 booted")
-print("🔥 Starting backend.main")
-
-from fastapi import Query, Body, Request, Depends, APIRouter, HTTPException
-from typing import Any
 import asyncio
-import requests
-import json
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Request
+import hashlib
+import logging
 import os
 import sys
 import traceback
-import hashlib
-import logging
 from datetime import datetime, timedelta
+from typing import Any, List
+
 import certifi
-from google.cloud import firestore_v1, storage
 import firebase_admin
-from firebase_admin import auth as fb_auth
-import uvicorn
-from fastapi import FastAPI
-import openai
 import googlemaps
+import openai
+import requests
+import uvicorn
 from dotenv import load_dotenv
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from firebase_admin import auth as fb_auth
+from google.cloud import firestore_v1, storage
+
+# Boot messages
+print("🔥 booted")
+print("🔥 Starting backend.main")
+
+# Import security validation system with fallback
+try:
+    from security_validator import (
+        InputValidator,
+        SecurityMiddleware,
+        SecurityValidationError,
+        validate_input,
+    )
+    SECURITY_VALIDATOR_AVAILABLE = True
+    print("✅ security_validator imported successfully")
+except ImportError as e:
+    print(f"⚠️ Security validator not available: {e}")
+    # Create dummy classes for compatibility
+    class InputValidator:
+        def __init__(self, strict_mode=True):
+            pass
+        def validate_quest_request(self, data):
+            return data
+        def sanitize_string(self, value, max_length=None):
+            return str(value)[:max_length] if max_length else str(value)
+    
+    class SecurityMiddleware:
+        def __init__(self, validator=None):
+            pass
+    
+    class SecurityValidationError(Exception):
+        pass
+    
+    def validate_input(input_type, value, **kwargs):
+        return value
+    
+    SECURITY_VALIDATOR_AVAILABLE = False
+
+# Import session management system
+from session_manager import (
+    SessionInfo,
+    SessionManager,
+    SessionMiddleware,
+    create_user_session,
+    db_transaction,
+    execute_db_transaction,
+    execute_with_session_management,
+    get_user_session,
+    session_context,
+    session_manager,
+)
 
 # Load environment variables early
 load_dotenv()
@@ -35,18 +81,26 @@ if "/app" not in sys.path:
 
 # Import auth_utils after setting up paths
 try:
-    from backend.auth_utils import get_rest_session, PROJECT_ID, load_api_keys
+    from backend.auth_utils import PROJECT_ID, get_rest_session, load_api_keys
     from backend.emotion_utils import (
-        get_mood_fallbacks, detect_location_type, determine_quest_type,
-        calculate_adaptive_radius, generate_smart_fallback_message,
-        filter_and_score_places, LOCATION_INTELLIGENCE
+        LOCATION_INTELLIGENCE,
+        calculate_adaptive_radius,
+        detect_location_type,
+        determine_quest_type,
+        filter_and_score_places,
+        generate_smart_fallback_message,
+        get_mood_fallbacks,
     )
 except ImportError:
-    from auth_utils import get_rest_session, PROJECT_ID, load_api_keys
+    from auth_utils import PROJECT_ID, get_rest_session, load_api_keys
     from emotion_utils import (
-        get_mood_fallbacks, detect_location_type, determine_quest_type,
-        calculate_adaptive_radius, generate_smart_fallback_message,
-        filter_and_score_places, LOCATION_INTELLIGENCE
+        LOCATION_INTELLIGENCE,
+        calculate_adaptive_radius,
+        detect_location_type,
+        determine_quest_type,
+        filter_and_score_places,
+        generate_smart_fallback_message,
+        get_mood_fallbacks,
     )
 
 
@@ -56,11 +110,11 @@ app = FastAPI(title="Roamio Backend API", version="1.0.0")
 allowed_origins = [
     # Production domains
     "https://real-world-quest-app.web.app",
-    "https://real-world-quest-app.firebaseapp.com", 
+    "https://real-world-quest-app.firebaseapp.com",
     # Development domains
     os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"),
     "http://localhost:5174",
-    "http://localhost:3000", 
+    "http://localhost:3000",
     "http://localhost:4173",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
@@ -79,6 +133,32 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+# Add session management middleware
+app.add_middleware(SessionMiddleware)
+
+
+# Startup and shutdown events for session management
+@app.on_event("startup")
+async def startup_event():
+    """Initialize session management on startup."""
+    try:
+        await session_manager.start()
+        logging.info("🚀 Session management started successfully")
+    except Exception as e:
+        logging.error(f"❌ Failed to start session management: {e}")
+        raise
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup session management on shutdown."""
+    try:
+        await session_manager.shutdown()
+        logging.info("🛑 Session management shutdown completed")
+    except Exception as e:
+        logging.error(f"❌ Error during session management shutdown: {e}")
+
+
 # Add request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -88,6 +168,7 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     logger.info(f"📤 Response: {response.status_code}")
     return response
+
 
 # Configure structured logging for startup diagnostics
 logging.basicConfig(
@@ -370,16 +451,18 @@ async def health_check():
             "startup_time": startup_health.get("startup_time"),
             "services": startup_health.get("services_status", {}),
             "uptime_seconds": (
-                datetime.utcnow()
-                - datetime.fromisoformat(
-                    startup_health.get("startup_time", current_time)
-                )
-            ).total_seconds()
-            if startup_health.get("startup_time")
-            else 0,
-            "environment": "development"
-            if not os.path.exists("/secrets")
-            else "production",
+                (
+                    datetime.utcnow()
+                    - datetime.fromisoformat(
+                        startup_health.get("startup_time", current_time)
+                    )
+                ).total_seconds()
+                if startup_health.get("startup_time")
+                else 0
+            ),
+            "environment": (
+                "development" if not os.path.exists("/secrets") else "production"
+            ),
         }
     else:
         return JSONResponse(
@@ -391,9 +474,9 @@ async def health_check():
                 "services": startup_health.get("services_status", {}),
                 "errors": startup_health.get("startup_errors", []),
                 "warnings": startup_health.get("startup_warnings", []),
-                "environment": "development"
-                if not os.path.exists("/secrets")
-                else "production",
+                "environment": (
+                    "development" if not os.path.exists("/secrets") else "production"
+                ),
             },
         )
 
@@ -419,23 +502,26 @@ async def ping() -> dict[str, Any]:
         upstream = None
     return {"status": "ok", "upstream_status": upstream}
 
+
 @app.get("/openai-status")
 async def openai_status():
     """Get OpenAI usage statistics and safety status."""
     try:
         from openai_safety import openai_safety_manager
+
         stats = openai_safety_manager.get_usage_stats()
         return {
             "status": "operational",
             "usage_stats": stats,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         return {
             "status": "error",
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
+
 
 # Debug path information
 print(f"🔍 Python path: {sys.path}")
@@ -483,12 +569,12 @@ except Exception as e:
 
 try:
     from backend.auth_utils import (
-        is_premium_user,
-        verify_token,
-        require_user,
-        require_admin,
         check_not_banned,
+        is_premium_user,
+        require_admin,
+        require_user,
         sanitize_input,
+        verify_token,
     )
 
     print("✅ auth_utils functions loaded")
@@ -511,35 +597,50 @@ except Exception as e:
     async def check_not_banned(uid):
         return uid
 
+
 def is_age_restricted(name, tags):
     """Check if a place is age-restricted (21+)."""
     if not name or not tags:
         return False
-    
+
     name_lower = name.lower()
-    
+
     # Check for age-restricted tags
     restricted_tags = {"bar", "night-club", "liquor-store", "brewery", "winery"}
     if any(tag in tags for tag in restricted_tags):
         return True
-    
+
     # Check for age-restricted keywords in name
-    restricted_keywords = ["bar", "pub", "brewery", "winery", "club", "lounge", "tavern"]
+    restricted_keywords = [
+        "bar",
+        "pub",
+        "brewery",
+        "winery",
+        "club",
+        "lounge",
+        "tavern",
+    ]
     if any(keyword in name_lower for keyword in restricted_keywords):
         return True
-    
+
     return False
 
 
 def sanitize_input(text):
+    """Legacy sanitize function - use security_validator for new code."""
+    try:
+        validator = InputValidator()
+        return validator.sanitize_string(str(text), max_length=1000)
+    except SecurityValidationError:
+        # Fallback to basic sanitization if security validation fails
         return str(text).strip()
 
 
 try:
+    from backend.firestore_utils import get_custom_quest as fs_get_custom_quest
     from backend.firestore_utils import (
-        write_custom_quest,
-        get_custom_quest as fs_get_custom_quest,
         query_custom_quests_by_creator,
+        write_custom_quest,
     )
 
     print("✅ firestore_utils loaded")
@@ -558,7 +659,7 @@ except Exception as e:
 
 
 try:
-    from backend.group_utils import create_group_document, add_user_to_group
+    from backend.group_utils import add_user_to_group, create_group_document
 
     print("✅ group_utils loaded")
 except Exception as e:
@@ -694,30 +795,66 @@ def calculate_age(dob_str: str) -> int:
 
 def compute_badge_unlocks(stats: dict, level: int, existing: list) -> list:
     """Return list of newly unlocked badge IDs."""
-    unlocked = set(existing or [])
-    new = []
-    for badge in BADGE_CATALOG.values():
-        bid = badge["id"]
-        if bid in unlocked:
-            continue
-        crit = badge.get("criteria", {})
-        btype = crit.get("type")
-        val = crit.get("value", 0)
-        if btype == "questCount" and stats.get("totalQuestsCompleted", 0) >= val:
-            unlocked.add(bid)
-            new.append(bid)
-        elif btype == "level" and level >= val:
-            unlocked.add(bid)
-            new.append(bid)
-        elif btype == "moodCount":
-            key = f"{crit.get('mood','').lower()}Quests"
-            if stats.get(key, 0) >= val:
-                unlocked.add(bid)
-                new.append(bid)
-        elif btype == "stopCount" and stats.get("totalStopsVisited", 0) >= val:
-            unlocked.add(bid)
-            new.append(bid)
-    return new
+    try:
+        logging.info(
+            f"Computing badge unlocks for level {level} with {len(stats)} stats"
+        )
+
+        if not isinstance(stats, dict):
+            logging.warning(f"Invalid stats type: {type(stats)}, using empty dict")
+            stats = {}
+
+        if not isinstance(level, int) or level < 0:
+            logging.warning(f"Invalid level: {level}, using 0")
+            level = 0
+
+        unlocked = set(existing or [])
+        new = []
+
+        for badge in BADGE_CATALOG.values():
+            try:
+                bid = badge.get("id")
+                if not bid:
+                    logging.warning("Badge missing id field, skipping")
+                    continue
+
+                if bid in unlocked:
+                    continue
+
+                crit = badge.get("criteria", {})
+                btype = crit.get("type")
+                val = crit.get("value", 0)
+
+                if (
+                    btype == "questCount"
+                    and stats.get("totalQuestsCompleted", 0) >= val
+                ):
+                    unlocked.add(bid)
+                    new.append(bid)
+                elif btype == "level" and level >= val:
+                    unlocked.add(bid)
+                    new.append(bid)
+                elif btype == "moodCount":
+                    key = f"{crit.get('mood','').lower()}Quests"
+                    if stats.get(key, 0) >= val:
+                        unlocked.add(bid)
+                        new.append(bid)
+                elif btype == "stopCount" and stats.get("totalStopsVisited", 0) >= val:
+                    unlocked.add(bid)
+                    new.append(bid)
+
+            except Exception as e:
+                logging.error(
+                    f"Error processing badge {badge.get('id', 'unknown')}: {e}"
+                )
+                continue
+
+        logging.info(f"Computed {len(new)} new badge unlocks")
+        return new
+
+    except Exception as e:
+        logging.error(f"Error in compute_badge_unlocks: {e}")
+        return []
 
 
 # === Load .env variables (if running locally) ===
@@ -774,13 +911,38 @@ def generate_hash_key(*parts: str) -> str:
 
 
 def get_cached_quest(hash_key):
-    project_id = PROJECT_ID
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
-    rest_session = get_rest_session()
-    resp = rest_session.get(url)
-    if resp.status_code == 200:
-        return _decode_document(resp.json())
-    return None
+    """Retrieve a cached quest from Firestore."""
+    try:
+        logging.info(f"Fetching cached quest with key: {hash_key}")
+
+        if not hash_key:
+            logging.warning("Empty hash key provided")
+            return None
+
+        project_id = PROJECT_ID
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{hash_key}"
+
+        rest_session = get_rest_session()
+        resp = rest_session.get(url)
+
+        if resp.status_code == 200:
+            logging.info(f"Successfully retrieved cached quest: {hash_key}")
+            return _decode_document(resp.json())
+        elif resp.status_code == 404:
+            logging.info(f"Quest not found in cache: {hash_key}")
+            return None
+        else:
+            logging.warning(
+                f"Unexpected status code {resp.status_code} for quest {hash_key}: {resp.text}"
+            )
+            return None
+
+    except requests.RequestException as e:
+        logging.error(f"Network error fetching cached quest {hash_key}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Error fetching cached quest {hash_key}: {e}")
+        return None
 
 
 def save_quest_to_firestore(hash_key, quest_obj):
@@ -796,13 +958,37 @@ def save_quest_to_firestore(hash_key, quest_obj):
 
 def get_cached_place(place_id: str) -> dict | None:
     """Retrieve a cached place with tags."""
-    project_id = PROJECT_ID
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
-    rest_session = get_rest_session()
-    resp = rest_session.get(url)
-    if resp.status_code == 200:
-        return _decode_document(resp.json())
-    return None
+    try:
+        logging.info(f"Fetching cached place: {place_id}")
+
+        if not place_id:
+            logging.warning("Empty place_id provided")
+            return None
+
+        project_id = PROJECT_ID
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/places_cache/{place_id}"
+
+        rest_session = get_rest_session()
+        resp = rest_session.get(url)
+
+        if resp.status_code == 200:
+            logging.info(f"Successfully retrieved cached place: {place_id}")
+            return _decode_document(resp.json())
+        elif resp.status_code == 404:
+            logging.info(f"Place not found in cache: {place_id}")
+            return None
+        else:
+            logging.warning(
+                f"Unexpected status code {resp.status_code} for place {place_id}: {resp.text}"
+            )
+            return None
+
+    except requests.RequestException as e:
+        logging.error(f"Network error fetching cached place {place_id}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Error fetching cached place {place_id}: {e}")
+        return None
 
 
 def save_place_to_cache(place_id: str, data: dict):
@@ -817,15 +1003,49 @@ def save_place_to_cache(place_id: str, data: dict):
 
 
 def get_user_preferred_tags(user_id: str) -> list[str]:
-    project_id = PROJECT_ID
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    rest_session = get_rest_session()
-    resp = rest_session.get(url)
-    if resp.status_code == 200:
-        doc = _decode_document(resp.json())
-        if isinstance(doc.get("preferredTags"), list):
-            return doc.get("preferredTags")
-    return []
+    """Retrieve user's preferred tags from Firestore."""
+    try:
+        logging.info(f"Fetching preferred tags for user: {user_id}")
+
+        if not user_id:
+            logging.warning("Empty user_id provided")
+            return []
+
+        project_id = PROJECT_ID
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+
+        rest_session = get_rest_session()
+        resp = rest_session.get(url)
+
+        if resp.status_code == 200:
+            doc = _decode_document(resp.json())
+            preferred_tags = doc.get("preferredTags", [])
+
+            if isinstance(preferred_tags, list):
+                logging.info(
+                    f"Retrieved {len(preferred_tags)} preferred tags for user {user_id}"
+                )
+                return preferred_tags
+            else:
+                logging.warning(
+                    f"Invalid preferredTags format for user {user_id}: {type(preferred_tags)}"
+                )
+                return []
+        elif resp.status_code == 404:
+            logging.info(f"User not found: {user_id}")
+            return []
+        else:
+            logging.warning(
+                f"Unexpected status code {resp.status_code} for user {user_id}: {resp.text}"
+            )
+            return []
+
+    except requests.RequestException as e:
+        logging.error(f"Network error fetching preferred tags for user {user_id}: {e}")
+        return []
+    except Exception as e:
+        logging.error(f"Error fetching preferred tags for user {user_id}: {e}")
+        return []
 
 
 CHAIN_KEYWORDS = [
@@ -841,26 +1061,72 @@ CHAIN_KEYWORDS = [
 
 def compute_place_tags(place: dict, details: dict | None = None) -> list[str]:
     """Assign tags using simple heuristic rules."""
-    tags = set()
-    for t in place.get("types", []):
-        tags.add(t.replace("_", "-"))
-    name = place.get("name", "").lower()
-    if any(k in name for k in ["brew", "bar", "tap"]):
-        tags.add("bar")
-    if any(k in name for k in ["occult", "witch", "dark"]):
-        tags.update(["occult", "weird"])
-    rating = place.get("rating")
-    if isinstance(rating, (int, float)) and rating >= 4.5:
-        tags.add("local-fave")
-    if details:
-        periods = details.get("result", {}).get("opening_hours", {}).get("periods", [])
-        for p in periods:
-            close = p.get("close", {})
-            time = close.get("time")
-            if time and int(time[:2]) >= 22:
-                tags.add("open-late")
-                break
-    return list(tags)
+    try:
+        logging.info(f"Computing tags for place: {place.get('name', 'unknown')}")
+
+        if not isinstance(place, dict):
+            logging.warning(f"Invalid place type: {type(place)}")
+            return []
+
+        tags = set()
+
+        # Process place types
+        try:
+            for t in place.get("types", []):
+                if isinstance(t, str):
+                    tags.add(t.replace("_", "-"))
+        except Exception as e:
+            logging.warning(f"Error processing place types: {e}")
+
+        # Process place name
+        try:
+            name = place.get("name", "").lower()
+            if isinstance(name, str):
+                if any(k in name for k in ["brew", "bar", "tap"]):
+                    tags.add("bar")
+                if any(k in name for k in ["occult", "witch", "dark"]):
+                    tags.update(["occult", "weird"])
+        except Exception as e:
+            logging.warning(f"Error processing place name: {e}")
+
+        # Process rating
+        try:
+            rating = place.get("rating")
+            if isinstance(rating, (int, float)) and rating >= 4.5:
+                tags.add("local-fave")
+        except Exception as e:
+            logging.warning(f"Error processing place rating: {e}")
+
+        # Process details for opening hours
+        if details:
+            try:
+                periods = (
+                    details.get("result", {})
+                    .get("opening_hours", {})
+                    .get("periods", [])
+                )
+                for p in periods:
+                    if not isinstance(p, dict):
+                        continue
+                    close = p.get("close", {})
+                    time = close.get("time")
+                    if time and isinstance(time, str) and len(time) >= 2:
+                        try:
+                            if int(time[:2]) >= 22:
+                                tags.add("open-late")
+                                break
+                        except ValueError:
+                            continue
+            except Exception as e:
+                logging.warning(f"Error processing opening hours: {e}")
+
+        result = list(tags)
+        logging.info(f"Computed {len(result)} tags for place")
+        return result
+
+    except Exception as e:
+        logging.error(f"Error computing place tags: {e}")
+        return []
 
 
 def is_chain(name: str) -> bool:
@@ -903,18 +1169,6 @@ def fill_template(template: str, city: str, mood: str, places: list[dict]) -> st
     return text
 
 
-def get_user_preferred_tags(user_id: str) -> list[str]:
-    project_id = PROJECT_ID
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    rest_session = get_rest_session()
-    resp = rest_session.get(url)
-    if resp.status_code == 200:
-        doc = _decode_document(resp.json())
-        if isinstance(doc.get("preferredTags"), list):
-            return doc.get("preferredTags")
-    return []
-
-
 CHAIN_KEYWORDS = [
     "starbucks",
     "mcdonald",
@@ -924,35 +1178,6 @@ CHAIN_KEYWORDS = [
     "walmart",
     "target",
 ]
-
-
-def compute_place_tags(place: dict, details: dict | None = None) -> list[str]:
-    """Assign tags using simple heuristic rules."""
-    tags = set()
-    for t in place.get("types", []):
-        tags.add(t.replace("_", "-"))
-    name = place.get("name", "").lower()
-    if any(k in name for k in ["brew", "bar", "tap"]):
-        tags.add("bar")
-    if any(k in name for k in ["occult", "witch", "dark"]):
-        tags.update(["occult", "weird"])
-    rating = place.get("rating")
-    if isinstance(rating, (int, float)) and rating >= 4.5:
-        tags.add("local-fave")
-    if details:
-        periods = details.get("result", {}).get("opening_hours", {}).get("periods", [])
-        for p in periods:
-            close = p.get("close", {})
-            time = close.get("time")
-            if time and int(time[:2]) >= 22:
-                tags.add("open-late")
-                break
-    return list(tags)
-
-
-def is_chain(name: str) -> bool:
-    lower = name.lower()
-    return any(k in lower for k in CHAIN_KEYWORDS)
 
 
 # === Narrative template map for tag-based generation ===
@@ -972,22 +1197,6 @@ TEMPLATE_MAP = {
         "open-late",
     ): "Feast through the night with this budget-friendly adventure across [places] in [city].",
 }
-
-
-def choose_template(tags: list[str]) -> str | None:
-    for key, tmpl in TEMPLATE_MAP.items():
-        if all(t in tags for t in key):
-            return tmpl
-    return None
-
-
-def fill_template(template: str, city: str, mood: str, places: list[dict]) -> str:
-    text = template.replace("[city]", city).replace("[mood]", mood)
-    text = text.replace("[places]", ", ".join(p["name"] for p in places))
-    if places:
-        text = text.replace("[firstStop]", places[0]["name"])
-        text = text.replace("[lastStop]", places[-1]["name"])
-    return text
 
 
 # Set up Secret Manager
@@ -1017,8 +1226,9 @@ async def options_handler(path: str):
             "Access-Control-Allow-Headers": "*",
             "Access-Control-Allow-Credentials": "true",
         },
-        content={"message": "CORS preflight OK"}
+        content={"message": "CORS preflight OK"},
     )
+
 
 @app.get("/")
 def read_root():
@@ -1099,36 +1309,139 @@ async def health_check():
 @app.post("/generate-quest")
 async def generate_quest(request: Request):
     """Generate a quest using tag-based filtering and optional GPT text."""
-    # Validate session availability early
-    rest_session = get_rest_session()
-    if not rest_session:
+    # Initialize security validator and middleware
+    validator = InputValidator()
+    security_middleware = SecurityMiddleware(validator)
+
+    # Get session ID from request headers or create new session
+    session_id = request.headers.get("x-session-id")
+    if not session_id:
+        # Create anonymous session for requests without session ID
+        session_id = session_manager.create_session("anonymous")
+        logger.info(f"Created anonymous session: {session_id}")
+
+    # Validate session and check rate limits
+    session_info = session_manager.get_session(session_id)
+    if not session_info:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=401,
+            content={"error": "Invalid or expired session", "session_id": session_id},
         )
-    
+
+    # Check rate limits
+    if not session_manager.check_rate_limit(session_id):
+        return JSONResponse(
+            status_code=429, content={"error": "Rate limit exceeded", "retry_after": 60}
+        )
+
     try:
-        # Parse request body
-        body = await request.json()
-    except Exception as e:
+        # Security validation: Check request size
+        content_length = int(request.headers.get("content-length", 0))
+        security_middleware.validate_request_size(content_length, max_size=100000)
+
+        # Security validation: Check headers
+        security_middleware.validate_rate_limit_headers(dict(request.headers))
+
+        # Parse and validate request body with security checks
+        body_raw = await request.body()
+        body_str = body_raw.decode("utf-8")
+
+        # Validate JSON input size and structure
+        body = validator.validate_json_input(body_str, max_size=50000)
+
+    except SecurityValidationError as e:
+        logging.error(f"Security validation failed: {e}")
         return JSONResponse(
             status_code=400,
             content={
-                "error": "Invalid JSON in request body",
-                "detail": str(e)
-            }
+                "error": "Invalid request",
+                "detail": "Security validation failed",
+            },
         )
-    
-    # Extract parameters with default values
-    city = body.get("city")
-    moods = body.get("moods")
-    time_limit = body.get("time_limit") or body.get("timeLimit")  # Support both formats
-    token = body.get("token")
-    user_id = body.get("user_id") or body.get("userId")  # Support both formats
-    difficulty = body.get("difficulty", "Easy")
-    lat = body.get("lat")
-    lng = body.get("lng")
-    
+    except Exception as e:
+        logging.error(f"Request parsing failed: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON in request body", "detail": str(e)},
+        )
+
+    try:
+        # Extract and validate parameters with comprehensive security checks
+        city = body.get("city")
+        moods = body.get("moods")
+        time_limit = body.get("time_limit") or body.get(
+            "timeLimit"
+        )  # Support both formats
+        token = body.get("token")
+        user_id = body.get("user_id") or body.get("userId")  # Support both formats
+        difficulty = body.get("difficulty", "Easy")
+        lat = body.get("lat")
+        lng = body.get("lng")
+
+        # Security validation for all inputs
+        validated_data = {}
+
+        # Validate city (required string input)
+        if city:
+            validated_data["city"] = validator.sanitize_string(city, max_length=100)
+
+        # Validate moods (required list with whitelist validation)
+        if moods and isinstance(moods, list):
+            validated_moods = []
+            for mood in moods:
+                try:
+                    validated_mood = validator.validate_mood(str(mood))
+                    validated_moods.append(validated_mood)
+                except SecurityValidationError:
+                    logging.warning(f"Invalid mood skipped: {mood}")
+            validated_data["moods"] = validated_moods
+
+        # Validate time limit (required integer with bounds)
+        if time_limit is not None:
+            validated_data["time_limit"] = validator.validate_time_limit(time_limit)
+
+        # Validate user ID (required for auth)
+        if user_id:
+            validated_data["user_id"] = validator.validate_user_id(user_id)
+
+        # Validate coordinates (optional but must be valid if provided)
+        if lat is not None and lng is not None:
+            validated_data["lat"] = validator.validate_coordinate(lat, "latitude")
+            validated_data["lng"] = validator.validate_coordinate(lng, "longitude")
+
+        # Validate difficulty (optional string with sanitization)
+        if difficulty:
+            validated_data["difficulty"] = validator.sanitize_string(
+                difficulty, max_length=20
+            )
+
+        # Validate token (required for auth)
+        if token:
+            validated_data["token"] = validator.sanitize_string(token, max_length=2000)
+
+    except SecurityValidationError as e:
+        logging.error(f"Input validation failed: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid input data", "detail": str(e)},
+        )
+    except Exception as e:
+        logging.error(f"Validation error: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Validation failed", "detail": "Invalid input format"},
+        )
+
+    # Use validated data for the rest of the processing
+    city = validated_data.get("city")
+    moods = validated_data.get("moods")
+    time_limit = validated_data.get("time_limit")
+    token = validated_data.get("token")
+    user_id = validated_data.get("user_id")
+    difficulty = validated_data.get("difficulty", "Easy")
+    lat = validated_data.get("lat")
+    lng = validated_data.get("lng")
+
     # Configure request logging
     request_id = hashlib.md5(
         f"{user_id or 'anonymous'}-{datetime.utcnow()}".encode()
@@ -1138,54 +1451,86 @@ async def generate_quest(request: Request):
         f"[{request_id}] Quest generation request - city: {city}, moods: {moods}, user: {user_id}"
     )
 
-    # Enhanced validation with detailed error messages
-    validation_errors = []
-    
-    if not city or (isinstance(city, str) and city.strip() == ""):
-        validation_errors.append("city is required and cannot be empty")
-    
-    if not moods or not isinstance(moods, list) or len(moods) == 0:
-        validation_errors.append("moods must be a non-empty array")
-    
-    # Handle time_limit conversion and validation
-    try:
-        if isinstance(time_limit, str):
-            time_limit = int(time_limit)
-        elif not isinstance(time_limit, int):
-            raise ValueError("Invalid type")
-            
-        if time_limit <= 0:
-            validation_errors.append("timeLimit must be a positive number")
-    except (ValueError, TypeError):
-        validation_errors.append("timeLimit must be a valid positive number")
-        time_limit = None
-    
-    if validation_errors:
-        logger.error(
-            f"[{request_id}] Validation failed - city: '{city}', moods: {moods}, time_limit: {time_limit}"
+    # Final validation check for required fields (after security validation)
+    if not city:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "City is required", "request_id": request_id},
         )
+
+    if not moods or len(moods) == 0:
         return JSONResponse(
             status_code=400,
             content={
-                "error": f"Invalid input: {', '.join(validation_errors)}",
+                "error": "At least one mood is required",
                 "request_id": request_id,
-                "received_data": {
-                    "city": city,
-                    "moods": moods,
-                    "time_limit": time_limit,
-                    "city_type": type(city).__name__,
-                    "moods_type": type(moods).__name__,
-                    "time_limit_type": type(time_limit).__name__
-                },
-                "help": {
-                    "expected_format": {
-                        "city": "string (e.g., 'New York')",
-                        "moods": "array of strings (e.g., ['Adventurous', 'Chill'])",
-                        "timeLimit": "positive integer (e.g., 90)"
-                    }
-                }
             },
         )
+
+    if time_limit is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Time limit is required", "request_id": request_id},
+        )
+
+    # Execute quest generation with session management and queuing
+    try:
+
+        async def quest_generation_operation():
+            """Quest generation operation to be executed with session management."""
+            return await _generate_quest_internal(
+                city=city,
+                moods=moods,
+                time_limit=time_limit,
+                user_id=user_id,
+                token=token,
+                difficulty=difficulty,
+                lat=lat,
+                lng=lng,
+                request_id=request_id,
+            )
+
+        # Execute with session management (priority 3 for quest generation)
+        result = await session_manager.execute_with_session(
+            session_id=session_id, operation=quest_generation_operation, priority=3
+        )
+
+        # Add session ID to response headers
+        response = JSONResponse(content=result)
+        response.headers["x-session-id"] = session_id
+        return response
+
+    except RuntimeError as e:
+        if "Rate limit exceeded" in str(e):
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Rate limit exceeded", "retry_after": 60},
+            )
+        else:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Service temporarily unavailable", "detail": str(e)},
+            )
+    except Exception as e:
+        logger.error(f"Quest generation failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Quest generation failed", "request_id": request_id},
+        )
+
+
+async def _generate_quest_internal(
+    city: str,
+    moods: List[str],
+    time_limit: int,
+    user_id: str,
+    token: str,
+    difficulty: str,
+    lat: float,
+    lng: float,
+    request_id: str,
+) -> dict:
+    """Internal quest generation function for session management."""
 
     preferred = get_user_preferred_tags(user_id) if user_id else []
 
@@ -1200,20 +1545,17 @@ async def generate_quest(request: Request):
             f"[{request_id}] Processing authenticated request for user: {user_id}"
         )
 
-        # Check session availability early
-        rest_session = get_rest_session()
-        if not rest_session:
-            logger.error(
-                f"[{request_id}] Firestore session unavailable - cannot process authenticated request"
-            )
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error": "Service temporarily unavailable - database connection failed",
-                    "request_id": request_id,
-                    "retry_after": 30,
-                },
-            )
+        # Check session availability early with session management
+        try:
+            rest_session = get_rest_session()
+            if not rest_session:
+                logger.error(
+                    f"[{request_id}] Firestore session unavailable - cannot process authenticated request"
+                )
+                raise RuntimeError("Database connection failed")
+        except Exception as e:
+            logger.error(f"[{request_id}] Session error: {e}")
+            raise RuntimeError("Service temporarily unavailable")
 
         try:
             usage_count = await get_daily_usage(user_id)
@@ -1224,13 +1566,7 @@ async def generate_quest(request: Request):
 
         except Exception as e:
             logger.error(f"[{request_id}] Failed to fetch user status: {str(e)}")
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error": "Failed to validate user account",
-                    "request_id": request_id,
-                },
-            )
+            raise RuntimeError("Failed to validate user account")
 
         if not user_is_premium:
             try:
@@ -1268,15 +1604,7 @@ async def generate_quest(request: Request):
                 logger.info(
                     f"[{request_id}] Daily limit reached for user: {user_id} ({usage_count}/3)"
                 )
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "error": "Daily quest limit reached",
-                        "request_id": request_id,
-                        "usage_count": usage_count,
-                        "limit": 3,
-                    },
-                )
+                raise RuntimeError("Daily quest limit reached")
 
             # difficulty gating
             req_diff = difficulty.title()
@@ -1287,10 +1615,7 @@ async def generate_quest(request: Request):
                 logger.info(
                     f"[{request_id}] Difficulty locked - user level {user_level} < required {required_level}"
                 )
-                raise HTTPException(
-                    status_code=403,
-                    detail="You haven't unlocked {} quests yet.".format(req_diff),
-                )
+                raise RuntimeError(f"You haven't unlocked {req_diff} quests yet.")
     else:
         logger.info(f"[{request_id}] Processing anonymous request")
 
@@ -1305,28 +1630,13 @@ async def generate_quest(request: Request):
             # Check if gmaps client is available
             if not gmaps:
                 logger.error(f"[{request_id}] Google Maps client not initialized")
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "error": "Location services temporarily unavailable",
-                        "request_id": request_id,
-                        "detail": "Google Maps API not configured",
-                    },
-                )
+                raise RuntimeError("Location services temporarily unavailable")
 
             geocode = gmaps.geocode(city)
 
             if not geocode or len(geocode) == 0:
                 logger.error(f"[{request_id}] No geocoding results for city: {city}")
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": "Location not found",
-                        "request_id": request_id,
-                        "city": city,
-                        "suggestion": "Please check the city name and try again",
-                    },
-                )
+                raise RuntimeError(f"Location not found: {city}")
 
             city_location = geocode[0]["geometry"]["location"]
             logger.info(f"[{request_id}] Geocoded to: {city_location}")
@@ -1365,7 +1675,7 @@ async def generate_quest(request: Request):
 
     # Intelligent quest generation with progressive fallbacks
     logger.info(f"[{request_id}] Starting intelligent quest generation for {city}")
-    
+
     # Validate gmaps client early
     if not gmaps:
         logger.error(f"[{request_id}] Google Maps client not available for Places API")
@@ -1393,15 +1703,17 @@ async def generate_quest(request: Request):
     # Progressive search with radius expansion and mood fallbacks
     while len(selected) < 1 and location_attempts < 4:  # At least 1 place needed
         logger.info(f"[{request_id}] Search attempt {location_attempts + 1}/4")
-        
+
         # Calculate adaptive radius based on attempts and location intelligence
-        final_radius = calculate_adaptive_radius(2000, location_type, location_attempts, time_limit)
-        
+        final_radius = calculate_adaptive_radius(
+            2000, location_type, location_attempts, time_limit
+        )
+
         if location_attempts > 0:
             radius_km = final_radius / 1000
             logger.info(f"[{request_id}] Expanding search area to {radius_km:.0f}km")
             adaptation_messages.append(f"Expanding search area to {radius_km:.0f}km...")
-        
+
         try:
             # Search for places with current radius and settings
             response = gmaps.places_nearby(
@@ -1410,29 +1722,35 @@ async def generate_quest(request: Request):
                 type="tourist_attraction",
             )
             places_results = response.get("results", [])
-            
-            logger.info(f"[{request_id}] Found {len(places_results)} places in {final_radius/1000:.0f}km radius")
-            
+
+            logger.info(
+                f"[{request_id}] Found {len(places_results)} places in {final_radius/1000:.0f}km radius"
+            )
+
             if len(places_results) == 0:
                 location_attempts += 1
                 continue
-                
+
             # Detect location type for intelligent adaptation
             if location_attempts == 0:  # Only detect once
                 location_type = detect_location_type(places_results)
                 logger.info(f"[{request_id}] Detected location type: {location_type}")
-                
+
                 # Suggest location-appropriate moods if needed
                 location_info = LOCATION_INTELLIGENCE.get(location_type, {})
                 preferred_moods = location_info.get("preferred_moods", [])
-                
+
                 # If original moods don't match location type well, suggest adaptation
-                mood_match = any(mood.lower() in preferred_moods for mood in original_moods)
+                mood_match = any(
+                    mood.lower() in preferred_moods for mood in original_moods
+                )
                 if not mood_match and preferred_moods:
                     suggested_mood = preferred_moods[0]
                     if suggested_mood not in [m.lower() for m in current_moods]:
                         current_moods.append(suggested_mood.title())
-                        adaptation_messages.append(f"Added {suggested_mood} mood for better local matches")
+                        adaptation_messages.append(
+                            f"Added {suggested_mood} mood for better local matches"
+                        )
             # Process places with current mood preferences
             mood_tags = set()
             for mood in current_moods:
@@ -1469,38 +1787,42 @@ async def generate_quest(request: Request):
                     if "establishment" in place.get("types", []):
                         tags = compute_place_tags(place)
                         is_restricted = is_age_restricted(name, tags)
-                        
+
                         if is_restricted and user_age < 21:
                             continue
-                            
+
                         # Score based on tag overlap
                         overlap = len(mood_tags.intersection(tags))
                         if len(mood_tags) == 0:
                             overlap = 1
-                            
+
                         if overlap <= 0:
                             continue
-                            
+
                         loc = place["geometry"]["location"]
                         typ = place.get("types", ["Unknown"])[0]
-                        candidates.append({
-                            "name": name,
-                            "type": typ,
-                            "lat": float(loc["lat"]),
-                            "lng": float(loc["lng"]),
-                            "tags": tags,
-                            "isAgeRestricted": is_restricted,
-                            "score": overlap,
-                            "rating": place.get("rating", 0),
-                        })
+                        candidates.append(
+                            {
+                                "name": name,
+                                "type": typ,
+                                "lat": float(loc["lat"]),
+                                "lng": float(loc["lng"]),
+                                "tags": tags,
+                                "isAgeRestricted": is_restricted,
+                                "score": overlap,
+                                "rating": place.get("rating", 0),
+                            }
+                        )
                 except Exception as e:
-                    logger.warning(f"[{request_id}] Skipping place processing error: {str(e)}")
+                    logger.warning(
+                        f"[{request_id}] Skipping place processing error: {str(e)}"
+                    )
 
             # Sort and select diverse places
             candidates.sort(key=lambda x: (x["score"], x["rating"]), reverse=True)
             selected = []
             seen_types = set()
-            
+
             for c in candidates:
                 if c["type"] in seen_types:
                     continue
@@ -1508,20 +1830,26 @@ async def generate_quest(request: Request):
                 seen_types.add(c["type"])
                 if len(selected) >= 5:
                     break
-                    
-            logger.info(f"[{request_id}] Found {len(selected)} suitable places with current moods")
-            
+
+            logger.info(
+                f"[{request_id}] Found {len(selected)} suitable places with current moods"
+            )
+
             # If still not enough places, try mood fallbacks
             if len(selected) < 1 and mood_attempts < 3:
                 mood_fallbacks = get_mood_fallbacks(current_moods)
                 if mood_attempts < len(mood_fallbacks):
                     old_moods = current_moods.copy()
                     current_moods = mood_fallbacks[mood_attempts]
-                    logger.info(f"[{request_id}] Trying mood fallback: {old_moods} → {current_moods}")
-                    adaptation_messages.append(f"Adapting mood from {', '.join(old_moods)} to {', '.join(current_moods)} for better options")
+                    logger.info(
+                        f"[{request_id}] Trying mood fallback: {old_moods} → {current_moods}"
+                    )
+                    adaptation_messages.append(
+                        f"Adapting mood from {', '.join(old_moods)} to {', '.join(current_moods)} for better options"
+                    )
                     mood_attempts += 1
                     continue
-            
+
             # If we have at least one place, break out of the loop
             if len(selected) >= 1:
                 break
@@ -1549,26 +1877,28 @@ async def generate_quest(request: Request):
                 )
         except Exception as e:
             logger.error(f"[{request_id}] Places search error: {str(e)}")
-            
+
         location_attempts += 1
 
     # Determine appropriate quest type based on what we found
     if len(selected) >= 1:
         quest_type_info = determine_quest_type(len(selected), time_limit, current_moods)
-        
+
         # Limit places to what the quest type needs
         places_needed = quest_type_info["places_needed"]
         if len(selected) > places_needed:
             selected = selected[:places_needed]
-            
+
         # Generate user-friendly adaptation message
         adaptation_message = generate_smart_fallback_message(
             original_moods, current_moods, final_radius, quest_type_info["type"]
         )
-        
-        logger.info(f"[{request_id}] Quest generation successful: {quest_type_info['type']} with {len(selected)} places")
+
+        logger.info(
+            f"[{request_id}] Quest generation successful: {quest_type_info['type']} with {len(selected)} places"
+        )
         logger.info(f"[{request_id}] Adaptations: {adaptation_message}")
-        
+
     else:
         # Ultimate fallback - provide discovery suggestions
         logger.warning(f"[{request_id}] No suitable places found after all fallbacks")
@@ -1581,21 +1911,21 @@ async def generate_quest(request: Request):
                     "Try searching in a nearby larger city",
                     "Consider broader moods like 'Chill' or 'Adventurous'",
                     "This might be perfect for a nature-focused quest - try 'Outdoorsy' mood",
-                    f"Extend your time limit beyond {time_limit} minutes for wider exploration"
+                    f"Extend your time limit beyond {time_limit} minutes for wider exploration",
                 ],
                 "fallback_search": {
                     "expanded_radius": f"{final_radius/1000:.0f}km",
                     "tried_moods": current_moods,
-                    "location_type": location_type
+                    "location_type": location_type,
                 },
                 "request_id": request_id,
-                "adaptations": adaptation_messages
+                "adaptations": adaptation_messages,
             },
         )
 
     # At this point, selected places are already available from the intelligent quest generation above
     # Continue with hash key generation and caching logic
-    
+
     loc_hash = f"{city_location['lat']:.2f}_{city_location['lng']:.2f}"
     tag_combo = "-".join(sorted(preferred)) if preferred else "none"
     hash_key = generate_hash_key(loc_hash, "_".join(moods), tag_combo)
@@ -1614,7 +1944,7 @@ async def generate_quest(request: Request):
             logger.info(f"[{request_id}] Using cached quest: {hash_key}")
             result = {"quest": cached, "request_id": request_id}
             # Add adaptation information if available
-            if 'adaptation_message' in locals():
+            if "adaptation_message" in locals():
                 result["adaptations"] = adaptation_message
             return result
         else:
@@ -1736,13 +2066,18 @@ async def generate_quest(request: Request):
         f"Your adventure begins at {ordered[0]['name']}, then heads to {ordered[1]['name']} "
         f"and ends at {ordered[-1]['name']}!"
     )
-    
+
     try:
         from openai_safety import openai_safety_manager
-        quest_text, generation_method = await openai_safety_manager.generate_quest_narrative(
-            place_names, moods, request_id
+
+        quest_text, generation_method = (
+            await openai_safety_manager.generate_quest_narrative(
+                place_names, moods, request_id
+            )
         )
-        logger.info(f"[{request_id}] Quest narrative generated using {generation_method}")
+        logger.info(
+            f"[{request_id}] Quest narrative generated using {generation_method}"
+        )
     except Exception as e:
         logger.error(f"[{request_id}] OpenAI Safety Manager error: {str(e)}")
         quest_text = fallback_text
@@ -1764,7 +2099,11 @@ async def generate_quest(request: Request):
         tag_set.add("age21+")
 
     # Use the generation method returned by the safety manager
-    gen_method = generation_method if 'generation_method' in locals() else ("gpt" if openai.api_key else "template")
+    gen_method = (
+        generation_method
+        if "generation_method" in locals()
+        else ("gpt" if openai.api_key else "template")
+    )
 
     quest_obj = {
         "questText": quest_text,
@@ -1781,18 +2120,42 @@ async def generate_quest(request: Request):
         "tagSource": "auto",
         "tags": list(tag_set),
         "city": city,
-        "mood": ",".join(current_moods if 'current_moods' in locals() else moods),
-        "originalMoods": ",".join(original_moods if 'original_moods' in locals() else moods),
+        "mood": ",".join(current_moods if "current_moods" in locals() else moods),
+        "originalMoods": ",".join(
+            original_moods if "original_moods" in locals() else moods
+        ),
         "flagged": False,
         "intelligence": {
-            "questType": quest_type_info["type"] if 'quest_type_info' in locals() and quest_type_info else "Standard Quest",
-            "questDescription": quest_type_info["description"] if 'quest_type_info' in locals() and quest_type_info else f"A complete {time_limit}-minute adventure",
-            "locationType": location_type if 'location_type' in locals() else "suburban",
-            "searchRadius": f"{final_radius/1000:.0f}km" if 'final_radius' in locals() else "2km",
-            "adaptationMessage": adaptation_message if 'adaptation_message' in locals() else "Perfect matches found for your preferences!",
-            "moodAdaptations": current_moods != original_moods if 'current_moods' in locals() and 'original_moods' in locals() else False,
-            "radiusExpanded": final_radius > 2000 if 'final_radius' in locals() else False
-        }
+            "questType": (
+                quest_type_info["type"]
+                if "quest_type_info" in locals() and quest_type_info
+                else "Standard Quest"
+            ),
+            "questDescription": (
+                quest_type_info["description"]
+                if "quest_type_info" in locals() and quest_type_info
+                else f"A complete {time_limit}-minute adventure"
+            ),
+            "locationType": (
+                location_type if "location_type" in locals() else "suburban"
+            ),
+            "searchRadius": (
+                f"{final_radius/1000:.0f}km" if "final_radius" in locals() else "2km"
+            ),
+            "adaptationMessage": (
+                adaptation_message
+                if "adaptation_message" in locals()
+                else "Perfect matches found for your preferences!"
+            ),
+            "moodAdaptations": (
+                current_moods != original_moods
+                if "current_moods" in locals() and "original_moods" in locals()
+                else False
+            ),
+            "radiusExpanded": (
+                final_radius > 2000 if "final_radius" in locals() else False
+            ),
+        },
     }
 
     # Save quest and update usage with error handling
@@ -1814,14 +2177,14 @@ async def generate_quest(request: Request):
 
     # Prepare final response
     result = {"quest": quest_obj, "request_id": request_id}
-    
+
     # Add adaptation information if available
-    if 'adaptation_message' in locals():
+    if "adaptation_message" in locals():
         result["adaptations"] = adaptation_message
-    if 'current_moods' in locals() and current_moods != original_moods:
+    if "current_moods" in locals() and current_moods != original_moods:
         result["moodAdaptations"] = {
             "original": original_moods,
-            "adapted": current_moods
+            "adapted": current_moods,
         }
 
     logger.info(f"[{request_id}] Quest generation completed successfully")
@@ -1851,24 +2214,55 @@ def _encode_fields(data: dict):
 
 
 def _from_value(val):
-    if "nullValue" in val:
+    """Decode Firestore value format to Python value."""
+    try:
+        if not isinstance(val, dict):
+            logging.warning(f"Invalid value format, expected dict: {type(val)}")
+            return val
+
+        if "nullValue" in val:
+            return None
+        if "booleanValue" in val:
+            return val["booleanValue"]
+        if "integerValue" in val:
+            try:
+                return int(val["integerValue"])
+            except (ValueError, TypeError) as e:
+                logging.warning(
+                    f"Error parsing integer value {val['integerValue']}: {e}"
+                )
+                return 0
+        if "doubleValue" in val:
+            try:
+                return float(val["doubleValue"])
+            except (ValueError, TypeError) as e:
+                logging.warning(f"Error parsing double value {val['doubleValue']}: {e}")
+                return 0.0
+        if "stringValue" in val:
+            return val["stringValue"]
+        if "arrayValue" in val:
+            try:
+                values = val.get("arrayValue", {}).get("values", [])
+                return [_from_value(v) for v in values if v is not None]
+            except Exception as e:
+                logging.error(f"Error parsing array value: {e}")
+                return []
+        if "mapValue" in val:
+            try:
+                fields = val.get("mapValue", {}).get("fields", {})
+                return {
+                    k: _from_value(v) for k, v in fields.items() if k and v is not None
+                }
+            except Exception as e:
+                logging.error(f"Error parsing map value: {e}")
+                return {}
+
+        logging.warning(f"Unknown value format: {val}")
+        return val
+
+    except Exception as e:
+        logging.error(f"Error in _from_value: {e}")
         return None
-    if "booleanValue" in val:
-        return val["booleanValue"]
-    if "integerValue" in val:
-        return int(val["integerValue"])
-    if "doubleValue" in val:
-        return float(val["doubleValue"])
-    if "stringValue" in val:
-        return val["stringValue"]
-    if "arrayValue" in val:
-        return [_from_value(v) for v in val.get("arrayValue", {}).get("values", [])]
-    if "mapValue" in val:
-        return {
-            k: _from_value(v)
-            for k, v in val.get("mapValue", {}).get("fields", {}).items()
-        }
-    return val
 
 
 def _decode_document(doc: dict) -> dict:
@@ -1880,7 +2274,7 @@ async def check_premium(user_id: str) -> bool:
     rest_session = get_rest_session()
     if not rest_session:
         return False
-    
+
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -1913,7 +2307,7 @@ async def get_daily_usage(user_id: str) -> int:
     rest_session = get_rest_session()
     if not rest_session:
         return 0
-    
+
     today = datetime.utcnow().strftime("%Y-%m-%d")
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
@@ -1929,7 +2323,7 @@ async def increment_daily_usage(user_id: str) -> int:
     rest_session = get_rest_session()
     if not rest_session:
         return 0
-    
+
     today = datetime.utcnow().strftime("%Y-%m-%d")
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}/dailyUsage/{today}"
@@ -2204,22 +2598,34 @@ async def complete_quest(payload: dict = Body(...)):
 @app.get("/places")
 def get_places(city: str = Query(...)):
     """Enhanced location analysis with intelligent mood recommendations."""
+    # Security validation for city input
+    try:
+        validator = InputValidator()
+        validated_city = validator.sanitize_string(city, max_length=100)
+        logging.info(f"Places request for city: {validated_city}")
+    except SecurityValidationError as e:
+        logging.error(f"Invalid city in get_places: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid city input", "detail": "City validation failed"},
+        )
+
     if not gmaps:
         return {"error": "Location services temporarily unavailable"}
-    
+
     try:
         # Geocode the city
-        geocode_result = gmaps.geocode(city)
+        geocode_result = gmaps.geocode(validated_city)
         if not geocode_result:
-            return {"error": "City not found", "city": city}
+            return {"error": "City not found", "city": validated_city}
 
         location = geocode_result[0]["geometry"]["location"]
-        formatted_address = geocode_result[0].get("formatted_address", city)
+        formatted_address = geocode_result[0].get("formatted_address", validated_city)
 
         # Search for places with expanding radius for better coverage
         all_places = []
         radii = [2000, 5000, 10000]  # 2km, 5km, 10km
-        
+
         for radius in radii:
             places_result = gmaps.places_nearby(
                 location=(location["lat"], location["lng"]),
@@ -2234,18 +2640,18 @@ def get_places(city: str = Query(...)):
         # Detect location type and get recommendations
         location_type = detect_location_type(all_places)
         location_info = LOCATION_INTELLIGENCE.get(location_type, {})
-        
+
         # Count places by category for better insights
         place_categories = {}
         quality_places = 0
-        
+
         for place in all_places[:20]:  # Analyze top 20 places
             place_types = place.get("types", [])
             rating = place.get("rating", 0)
-            
+
             if rating >= 4.0:
                 quality_places += 1
-                
+
             for place_type in place_types:
                 if place_type in ["establishment", "point_of_interest"]:
                     continue
@@ -2253,17 +2659,23 @@ def get_places(city: str = Query(...)):
 
         # Generate mood recommendations based on available places
         recommended_moods = location_info.get("preferred_moods", [])
-        
+
         # Add specific mood recommendations based on place analysis
         if place_categories.get("restaurant", 0) > 3:
             if "foodie" not in recommended_moods:
                 recommended_moods.append("foodie")
-        
-        if place_categories.get("museum", 0) > 1 or place_categories.get("art_gallery", 0) > 0:
+
+        if (
+            place_categories.get("museum", 0) > 1
+            or place_categories.get("art_gallery", 0) > 0
+        ):
             if "cultural" not in recommended_moods:
                 recommended_moods.append("cultural")
-                
-        if place_categories.get("park", 0) > 2 or place_categories.get("natural_feature", 0) > 0:
+
+        if (
+            place_categories.get("park", 0) > 2
+            or place_categories.get("natural_feature", 0) > 0
+        ):
             if "nature" not in recommended_moods:
                 recommended_moods.append("nature")
 
@@ -2273,31 +2685,34 @@ def get_places(city: str = Query(...)):
         return {
             "city": city,
             "formatted_address": formatted_address,
-            "location": {
-                "lat": location["lat"],
-                "lng": location["lng"]
-            },
+            "location": {"lat": location["lat"], "lng": location["lng"]},
             "analysis": {
                 "total_places": len(all_places),
                 "quality_places": quality_places,
                 "location_type": location_type,
-                "search_radius_km": min(10, (radii[min(len(radii)-1, len(all_places)//5)] / 1000)),
-                "place_categories": dict(sorted(place_categories.items(), key=lambda x: x[1], reverse=True)[:8])
+                "search_radius_km": min(
+                    10, (radii[min(len(radii) - 1, len(all_places) // 5)] / 1000)
+                ),
+                "place_categories": dict(
+                    sorted(place_categories.items(), key=lambda x: x[1], reverse=True)[
+                        :8
+                    ]
+                ),
             },
             "recommendations": {
                 "moods": recommended_moods,
                 "message": f"{len(all_places)} locations found in this {location_type} area",
-                "quest_potential": "excellent" if quality_places > 5 else "good" if quality_places > 2 else "moderate"
+                "quest_potential": (
+                    "excellent"
+                    if quality_places > 5
+                    else "good" if quality_places > 2 else "moderate"
+                ),
             },
-            "sample_places": [place["name"] for place in all_places[:8]]
+            "sample_places": [place["name"] for place in all_places[:8]],
         }
-        
+
     except Exception as e:
-        return {
-            "error": "Failed to analyze location", 
-            "city": city,
-            "detail": str(e)
-        }
+        return {"error": "Failed to analyze location", "city": city, "detail": str(e)}
 
 
 @app.post("/generate-postcard")
@@ -2355,22 +2770,56 @@ async def generate_postcard(request: Request):
 
 @app.get("/test-write")
 def test_write():
-    project_id = PROJECT_ID
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
-    body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
-    rest_session = get_rest_session()
-    resp = rest_session.patch(url, json=body)
-    if resp.status_code == 200:
-        return {"status": "Document written!"}
-    print("Firestore REST error", resp.text)
-    resp.raise_for_status()
+    """Test function to write a document to Firestore."""
+    try:
+        logging.info("Testing Firestore write operation")
+
+        project_id = PROJECT_ID
+        if not project_id:
+            logging.error("PROJECT_ID not configured")
+            return {"error": "Project ID not configured"}
+
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/test/sample"
+        body = {"fields": {"message": {"stringValue": "Hello from FastAPI!"}}}
+
+        rest_session = get_rest_session()
+        resp = rest_session.patch(url, json=body)
+
+        if resp.status_code == 200:
+            logging.info("Successfully wrote test document to Firestore")
+            return {"status": "Document written!"}
+        else:
+            logging.error(
+                f"Firestore write failed with status {resp.status_code}: {resp.text}"
+            )
+            return {"error": f"Write failed: {resp.status_code}"}
+
+    except requests.RequestException as e:
+        logging.error(f"Network error during Firestore test write: {e}")
+        return {"error": f"Network error: {str(e)}"}
+    except Exception as e:
+        logging.error(f"Error in test_write: {e}")
+        return {"error": f"Test write failed: {str(e)}"}
 
 
 @app.get("/get-user-quests")
 async def get_user_quests(userId: str = Query(...)):
     """Return quests for a user sorted by completedAt desc."""
+    # Security validation for user ID
+    try:
+        validator = InputValidator()
+        validated_user_id = validator.validate_user_id(userId)
+    except SecurityValidationError as e:
+        logging.error(f"Invalid user ID in get_user_quests: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Invalid user ID",
+                "detail": "User ID format validation failed",
+            },
+        )
     project_id = PROJECT_ID
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{userId}:runQuery"
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{validated_user_id}:runQuery"
     query = {
         "structuredQuery": {
             "from": [{"collectionId": "quests"}],
@@ -2407,10 +2856,9 @@ async def get_quest(quest_id: str):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/quests/{quest_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2427,19 +2875,50 @@ async def track_visit(payload: dict = Body(...)):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
-    user_id = payload.get("userId")
-    quest_id = payload.get("questId")
-    place_index = payload.get("placeIndex")
 
-    if user_id is None or quest_id is None or place_index is None:
-        return {"error": "userId, questId and placeIndex required"}
+    # Security validation for all inputs
+    try:
+        validator = InputValidator()
+
+        user_id = payload.get("userId")
+        quest_id = payload.get("questId")
+        place_index = payload.get("placeIndex")
+
+        if user_id is None or quest_id is None or place_index is None:
+            return {"error": "userId, questId and placeIndex required"}
+
+        # Validate user ID
+        validated_user_id = validator.validate_user_id(user_id)
+
+        # Validate quest ID (treat as place ID format for now)
+        validated_quest_id = validator.sanitize_string(quest_id, max_length=128)
+
+        # Validate place index (must be non-negative integer)
+        if not isinstance(place_index, int) or place_index < 0:
+            raise SecurityValidationError("Place index must be a non-negative integer")
+        if place_index > 1000:  # Reasonable upper bound
+            raise SecurityValidationError("Place index too large")
+
+        logging.info(
+            f"Track visit validated: user={validated_user_id}, quest={validated_quest_id}, index={place_index}"
+        )
+
+    except SecurityValidationError as e:
+        logging.error(f"Track visit validation failed: {e}")
+        return JSONResponse(
+            status_code=400, content={"error": "Invalid input data", "detail": str(e)}
+        )
+    except Exception as e:
+        logging.error(f"Track visit error: {e}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Validation failed", "detail": "Invalid input format"},
+        )
 
     project_id = PROJECT_ID
-    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{user_id}/{quest_id}"
+    quest_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_quests/{validated_user_id}/{validated_quest_id}"
 
     # Fetch existing quest document
     resp = await asyncio.to_thread(rest_session.get, quest_url)
@@ -2670,8 +3149,7 @@ async def join_group(
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
 
     project_id = PROJECT_ID
@@ -2713,10 +3191,9 @@ async def track_stop_visit(
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     group_id = payload.get("groupId")
     user_id = payload.get("userId")
     place_index = payload.get("placeIndex")
@@ -2830,10 +3307,9 @@ async def complete_group_quest(
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     group_id = payload.get("groupId")
     user_id = payload.get("userId")
     if not group_id or not user_id:
@@ -2878,10 +3354,9 @@ async def get_active_quest(user_id: str):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/user_active_quest/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -2922,10 +3397,9 @@ async def get_user_xp(user_id: str):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -3045,10 +3519,9 @@ async def leave_group(payload: dict = Body(...)):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     user_id = payload.get("userId")
     group_id = payload.get("groupId")
     if not user_id or not group_id:
@@ -3081,10 +3554,9 @@ async def get_group_quest(group_id: str):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/group_quests/{group_id}"
     resp = await asyncio.to_thread(rest_session.get, url)
@@ -3101,10 +3573,9 @@ async def report_quest(payload: dict = Body(...)):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     user_id = payload.get("userId")
     quest_id = payload.get("questId")
     reason = payload.get("reason")
@@ -3399,10 +3870,9 @@ async def validate_premium(user_id: str, session_id: str | None = Query(None)):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     project_id = PROJECT_ID
     user_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     resp = await asyncio.to_thread(rest_session.get, user_url)
@@ -3443,10 +3913,9 @@ async def validate_premium_token(uid: str = Depends(require_user)):
     rest_session = get_rest_session()
     if not rest_session:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Service temporarily unavailable"}
+            status_code=503, content={"error": "Service temporarily unavailable"}
         )
-    
+
     await check_not_banned(uid)
     project_id = PROJECT_ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{uid}"
@@ -5092,6 +5561,125 @@ async def refresh_leaderboards():
 def simple_health_check():
     """Simple health check for basic monitoring."""
     return {"status": "ok"}
+
+
+# Session Management API Endpoints
+@app.get("/admin/sessions/metrics")
+async def get_session_metrics():
+    """Get session management metrics for monitoring."""
+    try:
+        metrics = session_manager.get_metrics()
+        return {
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "metrics": metrics,
+        }
+    except Exception as e:
+        logger.error(f"Error getting session metrics: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to get session metrics", "detail": str(e)},
+        )
+
+
+@app.get("/admin/sessions/{session_id}")
+async def get_session_details(session_id: str):
+    """Get detailed information about a specific session."""
+    try:
+        # Validate session ID format
+        validator = InputValidator()
+        validated_session_id = validator.sanitize_string(session_id, max_length=64)
+
+        session_info = session_manager.get_session_info(validated_session_id)
+        if not session_info:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "Session not found",
+                    "session_id": validated_session_id,
+                },
+            )
+
+        return {"status": "success", "session": session_info}
+    except Exception as e:
+        logger.error(f"Error getting session details: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to get session details", "detail": str(e)},
+        )
+
+
+@app.post("/admin/sessions/{session_id}/invalidate")
+async def invalidate_session(session_id: str):
+    """Invalidate a specific session."""
+    try:
+        # Validate session ID format
+        validator = InputValidator()
+        validated_session_id = validator.sanitize_string(session_id, max_length=64)
+
+        session_manager.remove_session(validated_session_id)
+        return {
+            "status": "success",
+            "message": f"Session {validated_session_id} invalidated",
+        }
+    except Exception as e:
+        logger.error(f"Error invalidating session: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to invalidate session", "detail": str(e)},
+        )
+
+
+@app.post("/admin/sessions/cleanup")
+async def force_session_cleanup():
+    """Force cleanup of expired sessions."""
+    try:
+        initial_count = session_manager.get_metrics()["active_sessions"]
+        session_manager._cleanup_expired_sessions()
+        final_count = session_manager.get_metrics()["active_sessions"]
+
+        return {
+            "status": "success",
+            "message": "Session cleanup completed",
+            "sessions_before": initial_count,
+            "sessions_after": final_count,
+            "sessions_cleaned": initial_count - final_count,
+        }
+    except Exception as e:
+        logger.error(f"Error during session cleanup: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to cleanup sessions", "detail": str(e)},
+        )
+
+
+@app.get("/session/info")
+async def get_current_session_info(request: Request):
+    """Get information about the current session."""
+    try:
+        session_id = request.headers.get("x-session-id")
+        if not session_id:
+            return JSONResponse(
+                status_code=400, content={"error": "No session ID provided in headers"}
+            )
+
+        # Validate session ID format
+        validator = InputValidator()
+        validated_session_id = validator.sanitize_string(session_id, max_length=64)
+
+        session_info = session_manager.get_session_info(validated_session_id)
+        if not session_info:
+            return JSONResponse(
+                status_code=404, content={"error": "Session not found or expired"}
+            )
+
+        return {"status": "success", "session": session_info}
+    except Exception as e:
+        logger.error(f"Error getting current session info: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to get session info", "detail": str(e)},
+        )
 
 
 if __name__ == "__main__":
